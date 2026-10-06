@@ -102,3 +102,11 @@ Official Windows artifacts are built with `scripts/build_windows_release.ps1`.
 ## Author
 
 - [森下Undermori · Bilibili](https://space.bilibili.com/2903441)
+
+## Work catalogue and startup refresh
+
+The default Work catalogue flattens video-bearing works across directories and groups sources with the same Bangumi entry. Series organize directories; folder browsing remains available. In FOLDER mode, explicitly numbered CD1/CD2 or Disc1/Disc2 directories belong to their parent work only when structure and title evidence agree. Conflicting bindings and manual classifications keep independent boundaries. Work details flatten videos from owned subdirectories under “Other resources in this work”, preserving original paths, playback and exact-file reveal.
+
+Bangumi binding, replacement, clearing and automatic-cover retry apply to the entire source group. Classification, display names, hiding, tags and favorites require an explicit source. Hidden entries can be searched and restored from Settings. Startup refresh defaults to on for new databases and off for existing databases without a saved preference; saved choices remain unchanged. The first enabled refresh may enumerate the entire directory tree. Library management shows scan outcomes and the last successful refresh. A failed library retains unread index rows and its previous baseline. Historical alias backfill attempts at most 32 distinct entries per application run, counts failed attempts, and resumes with a rotating cursor on the next launch. Source media remains read-only.
+
+Run `npm run check` for frontend and repository checks. An independent Windows PR workflow also checks Rust formatting, tests and strict Clippy. See [Windows local development](docs/WINDOWS_DEVELOPMENT.md).

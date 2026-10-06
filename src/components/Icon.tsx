@@ -6,11 +6,12 @@ export type IconName =
   | "folder-open" | "grid" | "image" | "info" | "list" | "more"
   | "play" | "plus" | "refresh" | "search" | "settings" | "shield"
   | "stop" | "trash" | "warning" | "work" | "audio" | "subtitle" | "font"
-  | "globe" | "tag" | "bookmark";
+  | "globe" | "tag" | "bookmark" | "eye-off";
 
 interface IconProps extends SVGProps<SVGSVGElement> { name: IconName }
 
 const paths: Record<IconName, ReactNode> = {
+  "eye-off": <><path d="m3 3 18 18M10.5 5.2 12 5c5.5 0 9 7 9 7a19 19 0 0 1-3.2 4M6.2 6.2C4.2 8 3 12 3 12s3.5 7 9 7a9 9 0 0 0 4-1"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/></>,
   archive: <><path d="M4 7.5h16v12H4z"/><path d="M3 4.5h18v3H3zM9 12h6"/></>,
   audio: <><path d="M9 18V6l9-2v12"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="15.5" cy="16" r="2.5"/></>,
   "arrow-left": <path d="m15 18-6-6 6-6M9 12h11"/>,

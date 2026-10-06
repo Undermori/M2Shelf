@@ -20,7 +20,17 @@ export function compareMediaNodes(a: MediaNode, b: MediaNode, sort: CollectionSo
   if (sort === "title-desc") return -byTitle;
   if (sort === "added-desc") return b.createdAt.localeCompare(a.createdAt) || byTitle;
   if (sort === "added-asc") return a.createdAt.localeCompare(b.createdAt) || byTitle;
+  if (sort.startsWith("watched-")) return compareFileModifiedTimes(a.lastWatchedAt, b.lastWatchedAt, sort) || byTitle || a.id - b.id;
+  if (sort === "modified-desc" || sort === "modified-asc") return compareFileModifiedTimes(a.latestFileModifiedAt, b.latestFileModifiedAt, sort) || byTitle || a.id - b.id;
   return byTitle;
+}
+
+export function compareFileModifiedTimes(a: string | null | undefined, b: string | null | undefined, sort: CollectionSort): number {
+  const left = a ? Date.parse(a) : NaN;
+  const right = b ? Date.parse(b) : NaN;
+  if (!Number.isFinite(left)) return Number.isFinite(right) ? 1 : 0;
+  if (!Number.isFinite(right)) return -1;
+  return sort.endsWith("-asc") ? left - right : right - left;
 }
 
 export function formatBytes(bytes: number): string {
@@ -143,4 +153,23 @@ export function errorMessage(error: unknown): string {
     return error.message;
   }
   return translateActive("error.unknown");
+}
+
+export function formatRelativeTime(value: string, now = Date.now(), language: AppLanguage = getActiveLanguage()): string {
+  const seconds = (Date.parse(value) - now) / 1000;
+  if (!Number.isFinite(seconds)) return value;
+  const magnitude = Math.abs(seconds);
+  const units: [Intl.RelativeTimeFormatUnit, number][] = [["year", 31536000], ["month", 2592000], ["day", 86400], ["hour", 3600], ["minute", 60]];
+  const [unit, size] = units.find(([, size]) => magnitude >= size) ?? ["second", 1];
+  return new Intl.RelativeTimeFormat(language, { numeric: "auto" }).format(magnitude < 60 ? 0 : Math.trunc(seconds / size), unit);
+}
+
+export function nodeMatchesQuery(node: MediaNode, query: string, language: AppLanguage): boolean {
+  const normalized = query.trim().normalize("NFKC").toLocaleLowerCase(language);
+  if (!normalized) return true;
+  const b = node.binding;
+  return [nodeDisplayTitle(node, language), node.displayName, node.folderName,
+    b?.providerTitle, b?.providerTitleCn, b?.providerTitleEn, b?.providerTitleJa, b?.providerTitleKo,
+    ...(b?.providerAliases ?? []), ...node.userTags.map(tag => tag.name)]
+    .some(value => value?.normalize("NFKC").toLocaleLowerCase(language).includes(normalized));
 }

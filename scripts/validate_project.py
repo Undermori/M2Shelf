@@ -107,6 +107,10 @@ def check_migrations() -> None:
         "0008_bangumi_subject_type.sql",
         "0009_library_recognition_mode.sql",
         "0010_confirmed_title_aliases.sql",
+        "0011_incremental_scan.sql",
+        "0012_provider_aliases.sql",
+        "0013_alias_sync.sql",
+        "0014_scan_health.sql",
     ]
     if [path.name for path in migration_paths] != expected:
         fail(f"expected exactly migrations {expected}, got {[p.name for p in migration_paths]}")
@@ -134,6 +138,8 @@ def check_migrations() -> None:
                 "favorite_folders",
                 "node_favorite_folders",
                 "confirmed_title_aliases",
+                "library_scan_snapshots",
+                "library_scan_health",
             }
             missing = required_tables - table_names(connection)
             if missing:
@@ -141,6 +147,10 @@ def check_migrations() -> None:
 
             required_columns = {
                 "library_roots": {"recognition_mode"},
+                "library_scan_health": {
+                    "library_root_id", "last_auto_attempt_at", "last_success_at",
+                    "outcome", "error_count", "detail",
+                },
                 "nodes": {
                     "parent_node_id",
                     "node_type",
@@ -540,7 +550,8 @@ def check_migrations() -> None:
         legacy.close()
 
     if len(ERRORS) == error_count_before:
-        passed("SQLite migrations 1-10, library recognition modes, multilingual titles, Bangumi subject types, confirmed aliases, user tags, watch history, favorites, upgrade preservation, and constraints")
+        migration_versions_label = ", ".join(str(int(path.name.split("_")[0])) for path in migration_paths)
+        passed(f"SQLite migrations {migration_versions_label}, incremental snapshots, library recognition modes, multilingual titles, Bangumi subject types, confirmed aliases, user tags, watch history, favorites, upgrade preservation, and constraints")
 
 
 def extract_rust_commands() -> tuple[set[str], set[str]]:
@@ -587,6 +598,9 @@ def check_command_contract() -> None:
 
 
 def strip_rust_tests(source: str) -> str:
+    # An inner cfg(test) makes every item in a standalone fixture module test-only.
+    if re.search(r"(?m)^#!\[cfg\(test\)\]$", source):
+        return ""
     # A few modules expose small test-only helpers before later production functions.
     # Stop only at the actual trailing test module; stopping at the first cfg(test)
     # would silently exclude production updater/scanner code from safety checks.
@@ -598,9 +612,27 @@ def strip_rust_tests(source: str) -> str:
 
 def check_source_safety() -> None:
     rust_dir = ROOT / "src-tauri/src"
+    sources = {
+        path.name: path.read_text(encoding="utf-8") for path in rust_dir.glob("*.rs")
+    }
+    # Rust can gate a file at its declaration in lib.rs instead of duplicating
+    # an inner cfg(test). Only exclude modules whose declarations are all gated.
+    test_declaration = re.compile(r"#\[cfg\(test\)\]\s*mod\s+(\w+)\s*;")
+    test_modules = {
+        name for source in sources.values() for name in test_declaration.findall(source)
+    }
+    remaining_sources = "\n".join(
+        test_declaration.sub("", source) for source in sources.values()
+    )
+    test_only_files = {
+        f"{name}.rs"
+        for name in test_modules
+        if not re.search(rf"\bmod\s+{re.escape(name)}\s*;", remaining_sources)
+    }
     production = {
-        path.name: strip_rust_tests(path.read_text(encoding="utf-8"))
-        for path in rust_dir.glob("*.rs")
+        name: strip_rust_tests(source)
+        for name, source in sources.items()
+        if name not in test_only_files
     }
 
     forbidden_shell = re.compile(
@@ -2558,7 +2590,8 @@ def check_ui_windows_interaction_contract() -> None:
     ]
     bulk_metadata_hydration_ok = all(
         (
-            "hydrate_nodes_metadata_conn(&connection, &mut nodes)" in list_all_resources_region,
+            re.search(r"hydrate_nodes_metadata_conn\(&?connection,\s*&mut nodes\)", list_all_resources_region) is not None,
+            "self.read_snapshot" in list_all_resources_region,
             "get_binding_conn" not in list_all_resources_region,
             "list_node_tags_conn" not in list_all_resources_region,
             "const NODE_METADATA_CHUNK_SIZE: usize = 500" in rust_database,
@@ -2710,6 +2743,9 @@ def check_ui_windows_interaction_contract() -> None:
             "openAuthorLink(bootstrap?.xUrl)" in settings_page,
             't("settings.websiteLabel")' in settings_page,
             't("settings.xLabel")' in settings_page,
+            't("settings.originalAuthor")' in settings_page,
+            't("settings.contributor")' in settings_page,
+            "Juvenile_A" in settings_page,
             bilibili_url not in settings_page,
             x_url not in settings_page,
         )
@@ -2728,6 +2764,8 @@ def check_ui_windows_interaction_contract() -> None:
         (
             about_locale_values == expected_about_locale_values,
             i18n.count('"settings.websiteLabel"') == 4,
+            i18n.count('"settings.originalAuthor"') == 4,
+            i18n.count('"settings.contributor"') == 4,
             i18n.count('"settings.xLabel": "Undermori · X"') == 4,
             "官网" not in i18n,
         )

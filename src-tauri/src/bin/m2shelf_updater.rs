@@ -86,7 +86,7 @@ fn parse_options(
         return Err(usage());
     }
     let mut parsed = BTreeMap::new();
-    for pair in args.chunks_exact(2) {
+    for pair in args.as_chunks::<2>().0 {
         let flag = pair[0].to_str().ok_or_else(usage)?;
         let key = flag.strip_prefix("--").ok_or_else(usage)?;
         if !required.contains(&key) || parsed.contains_key(key) {

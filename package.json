@@ -4,11 +4,12 @@
   "version": "0.5.11",
   "type": "module",
   "scripts": {
+    "test": "vitest run",
     "dev": "vite --host 127.0.0.1",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.node.json",
     "build": "npm run typecheck && vite build",
     "validate": "node scripts/run_validate.mjs",
-    "check": "npm run build && npm run validate",
+    "check": "npm run build && npm test && npm run validate",
     "preview": "vite preview --host 127.0.0.1",
     "tauri": "tauri"
   },
@@ -20,11 +21,14 @@
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.8.4",
+    "@testing-library/react": "^16.3.0",
     "@types/node": "^22.10.0",
     "@types/react": "^19.1.10",
     "@types/react-dom": "^19.1.7",
     "@vitejs/plugin-react": "^4.4.1",
+    "jsdom": "^26.1.0",
     "typescript": "~5.8.3",
-    "vite": "^6.3.5"
+    "vite": "^6.3.5",
+    "vitest": "^3.2.4"
   }
 }

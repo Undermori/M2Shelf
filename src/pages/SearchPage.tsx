@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import type { SearchHit } from "../types/media";
+import type { SearchHit, LibraryRoot } from "../types/media";
 import { EmptyState } from "../components/EmptyState";
 import { Icon } from "../components/Icon";
 import { LoadingState } from "../components/LoadingState";
@@ -11,6 +11,8 @@ import { useCoverDataUrl } from "../hooks/useCoverDataUrl";
 import { usePosterViewportLifecycle } from "../hooks/usePosterViewportLifecycle";
 
 interface SearchPageProps {
+  roots?: LibraryRoot[];
+  onRootChange?: (rootId: number | null) => void;
   initialQuery?: string;
   rootId?: number | null;
   onQueryChange?: (query: string) => void;
@@ -56,7 +58,7 @@ function SearchResult({ hit, index, coverRevision, onOpen }: { hit: SearchHit; i
   );
 }
 
-export function SearchPage({ initialQuery = "", rootId, onQueryChange, onOpen, onError, onResultsReady, coverRevision }: SearchPageProps) {
+export function SearchPage({ initialQuery = "", rootId, roots = [], onRootChange, onQueryChange, onOpen, onError, onResultsReady, coverRevision }: SearchPageProps) {
   const { t } = useI18n();
   const [query, setQuery] = useState(initialQuery);
   const [results, setResults] = useState<SearchHit[]>([]);
@@ -100,7 +102,17 @@ export function SearchPage({ initialQuery = "", rootId, onQueryChange, onOpen, o
 
   return (
     <section className="search-page">
-      <header className="search-hero"><p className="eyebrow">{t("search.eyebrow")}</p><h1>{t("search.title")}</h1><p>{t("search.description")}</p><form onSubmit={(event) => { event.preventDefault(); void search(query); }}><Icon name="search" /><input ref={inputRef} onChange={(event) => { setQuery(event.target.value); onQueryChange?.(event.target.value); }} placeholder={t("search.placeholder")} value={query} /><button className="button primary" disabled={!query.trim() || loading} type="submit">{t("common.search")}</button></form></header>
+      <header className="page-toolbar search-toolbar">
+        <div className="toolbar-topline"><span className="all-resources-location"><Icon name="search" />{t("search.eyebrow")}</span></div>
+        <div className="page-title-row">
+          <div><h1>{t("common.search")}</h1><p>{t("search.description")}</p></div>
+          <form className="browse-controls search-controls" onSubmit={event => { event.preventDefault(); void search(query); }}>
+            <label className="search-field"><Icon name="search" /><input aria-label={t("common.search")} ref={inputRef} onChange={event => { setQuery(event.target.value); onQueryChange?.(event.target.value); }} value={query} /></label>
+            <label className="sort-field"><select aria-label={t("search.scope")} value={rootId ?? "all"} onChange={event => onRootChange?.(event.target.value === "all" ? null : Number(event.target.value))}><option value="all">{t("search.allLibraries")}</option>{roots.map(root => <option key={root.id} value={root.id}>{root.displayName}</option>)}</select></label>
+            <button className="button primary" disabled={!query.trim() || loading} type="submit">{t("common.search")}</button>
+          </form>
+        </div>
+      </header>
       <div className="search-content">
         {loading && <LoadingState label={t("search.loading")} />}
         {!loading && !searched && <EmptyState icon="search" title={t("search.promptTitle")} />}

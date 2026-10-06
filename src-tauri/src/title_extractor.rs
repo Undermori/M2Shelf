@@ -1393,6 +1393,20 @@ fn detect_season(value: &str) -> Option<u16> {
                 }
             }
         }
+        if let Some((season, episode)) = token
+            .strip_prefix('s')
+            .and_then(|token| token.split_once('e'))
+        {
+            if season.chars().all(|c| c.is_ascii_digit())
+                && episode.chars().all(|c| c.is_ascii_digit())
+            {
+                if let Some(number) = parse_small_u16(season).filter(|number| *number > 0) {
+                    if !episode.is_empty() {
+                        return Some(number);
+                    }
+                }
+            }
+        }
         if let Some(number) = token.strip_prefix('s').and_then(parse_small_u16) {
             if number > 0 && !token.contains('e') {
                 return Some(number);

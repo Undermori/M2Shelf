@@ -1,6 +1,7 @@
 import { memo, useEffect, useRef, useState } from "react";
 import type { MediaNode, ViewMode } from "../types/media";
 import { canBindBangumi, formatDate, nodeDisplayTitle } from "../lib/format";
+import { FileModifiedTime } from "./FileModifiedTime";
 import { Icon } from "./Icon";
 import { useCoverDataUrl } from "../hooks/useCoverDataUrl";
 import { usePosterViewportLifecycle } from "../hooks/usePosterViewportLifecycle";
@@ -13,15 +14,16 @@ interface MediaCardProps {
   onOpen: (node: MediaNode) => void;
   onMenu: (event: React.MouseEvent, node: MediaNode) => void;
   onBangumi: (node: MediaNode) => void;
-  onRetryCover: (node: MediaNode) => void;
+  onRetryCover: (node: MediaNode, imageDecodeFailed?: boolean) => void;
   coverRevision: number;
   watchedAt?: string;
+  showModifiedTime?: boolean;
   editMode?: boolean;
   selected?: boolean;
   onSelect?: (node: MediaNode) => void;
 }
 
-function MediaCardComponent({ node, viewMode, onOpen, onMenu, onBangumi, onRetryCover, coverRevision, watchedAt, editMode = false, selected = false, onSelect }: MediaCardProps) {
+function MediaCardComponent({ node, viewMode, onOpen, onMenu, onBangumi, onRetryCover, coverRevision, watchedAt, showModifiedTime = false, editMode = false, selected = false, onSelect }: MediaCardProps) {
   const { t } = useI18n();
   const cardRef = useRef<HTMLElement>(null);
   const hasCachedCover = Boolean(node.coverCachePath ?? node.binding?.coverCachePath);
@@ -48,7 +50,7 @@ function MediaCardComponent({ node, viewMode, onOpen, onMenu, onBangumi, onRetry
   return (
     <article
       ref={cardRef}
-      className={`media-card media-card-${viewMode} ${watchedAt ? "has-watch-time" : ""} ${editMode ? "is-editing" : ""} ${selected ? "is-selected" : ""}`}
+      className={`media-card media-card-${viewMode} ${watchedAt ? "has-watch-time" : ""} ${showModifiedTime ? "has-modified-time" : ""} ${editMode ? "is-editing" : ""} ${selected ? "is-selected" : ""}`}
       onContextMenu={(event) => { event.preventDefault(); onMenu(event, node); }}
     >
       <button aria-pressed={editMode ? selected : undefined} className="media-card-open" onClick={() => editMode ? onSelect?.(node) : onOpen(node)} type="button">
@@ -65,6 +67,7 @@ function MediaCardComponent({ node, viewMode, onOpen, onMenu, onBangumi, onRetry
         <span className="media-card-copy">
           <strong title={title}>{title}</strong>
           {watchedAt && <time className="media-card-watch-time" dateTime={watchedAt}>{t("recent.watchedAt", { time: formatDate(watchedAt) })}</time>}
+          {showModifiedTime && <FileModifiedTime value={node.latestFileModifiedAt} />}
           <small>
             {videos > 0 ? t("card.videoCount", { count: videos }) : container ? t("card.childCount", { count: node.childMediaBranchCount ?? 0 }) : t("card.awaitingScan")}
           </small>
@@ -80,7 +83,7 @@ function MediaCardComponent({ node, viewMode, onOpen, onMenu, onBangumi, onRetry
         <button className="quick-bind" onClick={() => onBangumi(node)} title={t("card.searchCover")} type="button"><Icon name="plus" /><span>{t("provider.bangumi")}</span></button>
       )}
       {!editMode && bindable && node.binding && coverError && (
-        <button className="quick-bind is-retry" onClick={() => onRetryCover(node)} title={t("card.retryCover")} type="button"><Icon name="refresh" /><span>{t("card.retryShort")}</span></button>
+        <button className="quick-bind is-retry" onClick={() => onRetryCover(node, imageFailed)} title={t("card.retryCover")} type="button"><Icon name="refresh" /><span>{t("card.retryShort")}</span></button>
       )}
       {!editMode && <button className="card-menu" aria-label={t("card.moreActions", { title })} onClick={(event) => onMenu(event, node)} type="button"><Icon name="more" /></button>}
     </article>

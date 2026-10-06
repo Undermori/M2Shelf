@@ -1,5 +1,5 @@
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
     sync::{
@@ -9,7 +9,7 @@ use std::{
 };
 
 use chrono::{DateTime, SecondsFormat, Utc};
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use tauri::{AppHandle, Emitter};
 
 use crate::{
@@ -30,6 +30,7 @@ pub struct ScanTarget {
 
 #[derive(Clone)]
 pub struct ScanControl {
+    pub unchanged_directories: Arc<Mutex<HashSet<PathBuf>>>,
     pub scan_id: String,
     pub cancel: Arc<AtomicBool>,
     pub progress: Arc<Mutex<ScanProgress>>,
@@ -101,36 +102,157 @@ pub fn run_scan_with_auto_match(
         Utc::now().to_rfc3339_opts(SecondsFormat::Nanos, true),
         control.scan_id
     );
+    let background = control.progress().background;
+    let mut plan = None;
+    let mut scan_targets = targets.clone();
+    let mut root_results: HashMap<i64, (String, u64, Option<String>)> = HashMap::new();
+    let mut completed_roots = HashSet::new();
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        run_scan_inner(app, database, &targets, control, &extension_set, &token)
+        if !background {
+            // A manual/rebuild scan can repair or partially replace the index. Its next startup
+            // must establish a new baseline, including after interruption.
+            let connection = database.connect()?;
+            for target in &targets {
+                connection
+                    .execute(
+                        "DELETE FROM library_scan_snapshots WHERE library_root_id=?1",
+                        [target.root.id],
+                    )
+                    .map_err(|error| error.to_string())?;
+            }
+        }
+        if background {
+            let next = crate::incremental::prepare(database, &targets, control, &extension_set)?;
+            scan_targets = next.targets.clone();
+            *control
+                .unchanged_directories
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) = next.unchanged.clone();
+            control
+                .progress
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .library_changed = Some(!scan_targets.is_empty());
+            for (id, (partial, error)) in &next.failed_roots {
+                root_results.insert(
+                    *id,
+                    (
+                        if *partial { "PARTIAL" } else { "FAILED" }.into(),
+                        1,
+                        Some(error.clone()),
+                    ),
+                );
+            }
+            plan = Some(next);
+        }
+        let mut root_ids = targets
+            .iter()
+            .map(|target| target.root.id)
+            .collect::<Vec<_>>();
+        root_ids.sort_unstable();
+        root_ids.dedup();
+        for root_id in root_ids {
+            if root_results.contains_key(&root_id) {
+                completed_roots.insert(root_id);
+                continue;
+            }
+            check_cancel(control)?;
+            let scoped = scan_targets
+                .iter()
+                .filter(|target| target.root.id == root_id)
+                .cloned()
+                .collect::<Vec<_>>();
+            let before = control.progress().errors;
+            match run_scan_inner(app, database, &scoped, control, &extension_set, &token) {
+                Ok(()) => {
+                    let progress = control.progress();
+                    let errors = progress.errors - before;
+                    root_results.insert(
+                        root_id,
+                        (
+                            if errors > 0 { "PARTIAL" } else { "SUCCESS" }.into(),
+                            errors,
+                            if errors > 0 { progress.message } else { None },
+                        ),
+                    );
+                }
+                Err(ScanAbort::Cancelled) => return Err(ScanAbort::Cancelled),
+                Err(ScanAbort::Failed(error)) => {
+                    let mut progress = control.progress.lock().unwrap_or_else(|e| e.into_inner());
+                    progress.errors += 1;
+                    progress.message = Some(error.clone());
+                    root_results.insert(
+                        root_id,
+                        ("FAILED".into(), progress.errors - before, Some(error)),
+                    );
+                }
+            }
+            completed_roots.insert(root_id);
+        }
+        scan_targets.retain(|target| {
+            root_results
+                .get(&target.root.id)
+                .is_some_and(|result| result.0 == "SUCCESS")
+        });
+        Ok(())
     }))
     .unwrap_or_else(|_| Err(ScanAbort::Failed("扫描线程发生内部错误。".into())));
 
-    let auto_match_report = if result.is_ok() && !control.cancel.load(Ordering::Relaxed) {
-        auto_match_cache_root.as_ref().map(|cache_root| {
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                auto_match::run_auto_match(
-                    database,
-                    &targets,
-                    cache_root
-                        .as_ref()
-                        .map(PathBuf::as_path)
-                        .map_err(String::as_str),
-                    |current, total, node, report| {
-                        update_auto_match_progress(app, control, current, total, node, report)
-                    },
-                    || control.cancel.load(Ordering::Relaxed),
-                )
-            }))
-            .unwrap_or(auto_match::AutoMatchReport {
-                errors: 1,
-                ..auto_match::AutoMatchReport::default()
+    let auto_match_report =
+        if result.is_ok() && !scan_targets.is_empty() && !control.cancel.load(Ordering::Relaxed) {
+            auto_match_cache_root.as_ref().map(|cache_root| {
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    auto_match::run_auto_match(
+                        database,
+                        &scan_targets,
+                        &control
+                            .unchanged_directories
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner()),
+                        cache_root
+                            .as_ref()
+                            .map(PathBuf::as_path)
+                            .map_err(String::as_str),
+                        |current, total, node, report| {
+                            update_auto_match_progress(app, control, current, total, node, report)
+                        },
+                        || control.cancel.load(Ordering::Relaxed),
+                    )
+                }))
+                .unwrap_or(auto_match::AutoMatchReport {
+                    errors: 1,
+                    ..auto_match::AutoMatchReport::default()
+                })
             })
-        })
-    } else {
-        None
-    };
+        } else {
+            None
+        };
 
+    {
+        if let Some(mut plan) = plan {
+            let failed = targets
+                .iter()
+                .filter_map(|target| {
+                    root_results
+                        .get(&target.root.id)
+                        .is_none_or(|result| result.0 != "SUCCESS")
+                        .then_some(target.root.id)
+                })
+                .collect();
+            plan.discard_failed_snapshots(&failed);
+            if let Err(error) = plan.save(database) {
+                let mut progress = control.progress.lock().unwrap_or_else(|e| e.into_inner());
+                progress.errors += 1;
+                progress.message = Some(error.clone());
+                for result in root_results
+                    .values_mut()
+                    .filter(|result| result.0 == "SUCCESS")
+                {
+                    *result = ("FAILED".into(), 1, Some(error.clone()));
+                }
+            }
+        }
+    }
     let mut progress = control
         .progress
         .lock()
@@ -150,18 +272,31 @@ pub fn run_scan_with_auto_match(
             progress.message = Some("扫描已停止；已完成的索引结果已保留。".into());
         }
         Ok(()) => {
-            progress.status = ScanStatus::Completed;
-            progress.message = Some(match auto_match_report {
-                Some(report) if report.examined > 0 || report.errors > 0 => format!(
-                    "扫描完成；自动匹配 {} 项，未匹配 {} 项，{} 项稍后重试。",
-                    report.matched, report.unmatched, report.errors
-                ),
-                _ => "扫描完成。".into(),
-            });
+            progress.status = if !root_results.is_empty()
+                && root_results.values().all(|result| result.0 == "FAILED")
+            {
+                ScanStatus::Failed
+            } else {
+                ScanStatus::Completed
+            };
+            progress.message = if matches!(progress.status, ScanStatus::Failed) {
+                root_results.values().find_map(|result| result.2.clone())
+            } else {
+                Some(match auto_match_report {
+                    Some(report) if report.examined > 0 || report.errors > 0 => format!(
+                        "扫描完成；自动匹配 {} 项，未匹配 {} 项，{} 项稍后重试。",
+                        report.matched, report.unmatched, report.errors
+                    ),
+                    _ => "扫描完成。".into(),
+                })
+            };
         }
         Err(ScanAbort::Cancelled) => {
             progress.status = ScanStatus::Cancelled;
             progress.message = Some("扫描已停止；已完成的索引结果已保留。".into());
+        }
+        Err(ScanAbort::Failed(_)) if control.cancel.load(Ordering::Relaxed) => {
+            progress.status = ScanStatus::Cancelled;
         }
         Err(ScanAbort::Failed(message)) => {
             progress.status = ScanStatus::Failed;
@@ -174,7 +309,33 @@ pub fn run_scan_with_auto_match(
     for target in &targets {
         let mut root_progress = final_progress.clone();
         root_progress.root_id = target.root.id;
+        let result = root_results.get(&target.root.id);
+        root_progress.errors = result.map_or(0, |result| result.1);
+        if !completed_roots.contains(&target.root.id) {
+            root_progress.status = final_progress.status;
+        } else if result.is_some_and(|result| result.0 == "FAILED") {
+            root_progress.status = ScanStatus::Failed;
+        }
         let _ = database.finish_scan_run(&root_progress);
+        if background
+            || (target.parent_node_id.is_none() && target.path == Path::new(&target.root.path))
+        {
+            let cancelled = matches!(final_progress.status, ScanStatus::Cancelled)
+                && !completed_roots.contains(&target.root.id);
+            let outcome = if cancelled {
+                "CANCELLED"
+            } else {
+                result.map_or("FAILED", |result| result.0.as_str())
+            };
+            let detail = result.and_then(|result| result.2.as_deref());
+            let _ = database.record_scan_health(
+                target.root.id,
+                outcome,
+                root_progress.errors,
+                detail,
+                background,
+            );
+        }
     }
     if let Some(app) = app {
         let _ = app.emit("scan-progress", &final_progress);
@@ -266,7 +427,7 @@ fn update_auto_match_progress(
         progress.message = Some(format!("正在自动匹配封面与标题（{current}/{total}）…"));
         progress.clone()
     };
-    if let Some(app) = app {
+    if let Some(app) = app.filter(|_| !snapshot.background) {
         let _ = app.emit("scan-progress", snapshot);
     }
 }
@@ -368,6 +529,7 @@ fn run_scan_inner(
                 &mut visited,
             )?;
         }
+        crate::logical_works::LogicalWorkIndex::reclassify(&connection, Some(target.root.id))?;
         if target.parent_node_id.is_some()
             && matches!(target.root.recognition_mode, LibraryRecognitionMode::Folder)
         {
@@ -379,6 +541,7 @@ fn run_scan_inner(
                 )
                 .map_err(|error| error.to_string())?;
             refresh_ancestors(&connection, Some(scanned_node_id), &canonical_root)?;
+            crate::logical_works::LogicalWorkIndex::reclassify(&connection, Some(target.root.id))?;
         }
     }
     Ok(())
@@ -419,6 +582,69 @@ fn scan_video_file_library(
     let mut visited = HashSet::new();
     let mut work_count = 0_i64;
     let mut video_count = 0_i64;
+    let unchanged = control
+        .unchanged_directories
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
+    if !unchanged.is_empty() {
+        // Flat Nodes share a parent instead of mirroring source directories. Mark the preserved
+        // rows before root-scoped cleanup, without rereading their files or altering curation.
+        let mut statement = connection
+            .prepare("SELECT id,absolute_path,total_video_count FROM nodes WHERE parent_node_id=?1")
+            .map_err(|e| e.to_string())?;
+        let nodes = statement
+            .query_map([hidden_root_id], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            })
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        for (id, path, count) in nodes {
+            check_cancel(control)?;
+            if Path::new(&path)
+                .ancestors()
+                .any(|directory| unchanged.contains(directory))
+            {
+                connection
+                    .execute(
+                        "UPDATE nodes SET last_seen_at=?1 WHERE id=?2",
+                        params![token, id],
+                    )
+                    .map_err(|e| e.to_string())?;
+                work_count += 1;
+                video_count += count;
+            }
+        }
+        let mut statement = connection
+            .prepare("SELECT id,absolute_path FROM resource_files WHERE node_id=?1")
+            .map_err(|e| e.to_string())?;
+        let resources = statement
+            .query_map([hidden_root_id], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        for (id, path) in resources {
+            check_cancel(control)?;
+            if Path::new(&path)
+                .ancestors()
+                .any(|directory| unchanged.contains(directory))
+            {
+                connection
+                    .execute(
+                        "UPDATE resource_files SET last_seen_at=?1 WHERE id=?2",
+                        params![token, id],
+                    )
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+    }
 
     while let Some(directory) = pending.pop() {
         check_cancel(control)?;
@@ -444,6 +670,9 @@ fn scan_video_file_library(
                 }
             };
         if !visited.insert(canonical_directory.clone()) {
+            continue;
+        }
+        if unchanged.contains(&directory.logical) {
             continue;
         }
         update_progress(app, control, &directory.logical, |progress| {
@@ -564,6 +793,9 @@ fn scan_video_file_library(
         }
 
         if let Some(bdmv) = bdmv {
+            if unchanged.contains(&bdmv.logical) {
+                continue;
+            }
             match index_flat_bdmv_work(
                 app,
                 connection,
@@ -815,6 +1047,30 @@ fn scan_directory(
     };
     if !visited.insert(canonical.clone()) {
         return Ok(0);
+    }
+
+    if control
+        .unchanged_directories
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .contains(path)
+    {
+        let existing = connection.query_row(
+            "SELECT id,node_type,total_video_count FROM nodes WHERE library_root_id=?1 AND absolute_path=?2",
+            params![root_id, path.to_string_lossy()],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?, row.get::<_, i64>(2)?)),
+        ).optional().map_err(|e| e.to_string())?;
+        if let Some((id, node_type, count)) = existing {
+            // Retain only this branch marker for the parent's stale-row cleanup. Its children,
+            // files, classification, timestamps and metadata are not reindexed.
+            connection
+                .execute(
+                    "UPDATE nodes SET last_seen_at=?1 WHERE id=?2",
+                    params![token, id],
+                )
+                .map_err(|e| e.to_string())?;
+            return Ok(if node_type == "IGNORED" { 0 } else { count });
+        }
     }
 
     update_progress(app, control, path, |progress| progress.folders_scanned += 1);
@@ -1467,7 +1723,7 @@ fn update_progress(
     update(&mut progress);
     let snapshot = progress.clone();
     drop(progress);
-    if let Some(app) = app {
+    if let Some(app) = app.filter(|_| !snapshot.background) {
         let _ = app.emit("scan-progress", snapshot);
     }
 }
@@ -1686,6 +1942,7 @@ pub fn is_supplementary_directory_name(folder_name: &str) -> bool {
 /// parent work that already stores its main episodes directly. Matching candidate selection uses
 /// this scanner-owned name rule so SP/OVA/Extras allow-lists cannot drift between scanning and
 /// Bangumi matching. An explicit child classification always wins.
+#[cfg(test)]
 pub(crate) fn is_automatic_supplementary_child(
     folder_name: &str,
     manually_classified: bool,
@@ -1727,9 +1984,12 @@ mod tests {
     #[test]
     fn auto_match_progress_snapshot_includes_live_outcome_counts() {
         let control = ScanControl {
+            unchanged_directories: Default::default(),
             scan_id: "progress".into(),
             cancel: Arc::new(AtomicBool::new(false)),
             progress: Arc::new(Mutex::new(ScanProgress {
+                background: false,
+                library_changed: None,
                 scan_id: "progress".into(),
                 root_id: 1,
                 current_path: String::new(),
@@ -1748,6 +2008,8 @@ mod tests {
             })),
         };
         let node = crate::models::MediaNode {
+            latest_file_modified_at: None,
+            last_watched_at: None,
             id: 13,
             library_root_id: 1,
             parent_node_id: Some(1),
@@ -1892,9 +2154,12 @@ mod tests {
         let run = |scan_id: &str| {
             database.start_scan_run(scan_id, root.id).unwrap();
             let control = ScanControl {
+                unchanged_directories: Default::default(),
                 scan_id: scan_id.to_string(),
                 cancel: Arc::new(AtomicBool::new(false)),
                 progress: Arc::new(Mutex::new(ScanProgress {
+                    background: false,
+                    library_changed: None,
                     scan_id: scan_id.to_string(),
                     root_id: root.id,
                     current_path: root.path.clone(),
@@ -2107,9 +2372,12 @@ mod tests {
 
     fn scan_control(scan_id: &str, root: &LibraryRoot) -> ScanControl {
         ScanControl {
+            unchanged_directories: Default::default(),
             scan_id: scan_id.to_string(),
             cancel: Arc::new(AtomicBool::new(false)),
             progress: Arc::new(Mutex::new(ScanProgress {
+                background: false,
+                library_changed: None,
                 scan_id: scan_id.to_string(),
                 root_id: root.id,
                 current_path: root.path.clone(),
@@ -2129,9 +2397,520 @@ mod tests {
         }
     }
 
+    fn incremental_scan(
+        database: &Database,
+        root: &LibraryRoot,
+        id: &str,
+        cancel: bool,
+    ) -> ScanProgress {
+        database.start_scan_run(id, root.id).unwrap();
+        let control = scan_control(id, root);
+        control.progress.lock().unwrap().background = true;
+        control.progress.lock().unwrap().library_changed = Some(false);
+        control.cancel.store(cancel, Ordering::Relaxed);
+        run_scan(
+            None,
+            database,
+            vec![ScanTarget {
+                root: root.clone(),
+                path: PathBuf::from(&root.path),
+                parent_node_id: None,
+            }],
+            &control,
+            &crate::db::default_video_extensions(),
+        );
+        control.progress()
+    }
+
+    #[test]
+    fn incremental_scan_reuses_unchanged_subtrees_and_updates_deep_changes() {
+        let temp = crate::db::test_temp_dir();
+        let root_path = temp.path().join("媒体库");
+        let show = root_path.join("2026").join("连载");
+        let stable = root_path.join("归档").join("旧作品");
+        fs::create_dir_all(&show).unwrap();
+        fs::create_dir_all(&stable).unwrap();
+        fs::write(show.join("01.mkv"), b"episode one").unwrap();
+        fs::write(stable.join("01.mkv"), b"stable source").unwrap();
+        let database = Database::new(temp.path().join("test.db"));
+        database.migrate().unwrap();
+        let root = database.add_root(&root_path, None).unwrap();
+        let baseline = incremental_scan(&database, &root, "baseline", false);
+        assert_eq!(baseline.status, ScanStatus::Completed);
+        assert_eq!(baseline.library_changed, Some(true));
+        let connection = database.connect().unwrap();
+        let id: i64 = connection
+            .query_row(
+                "SELECT id FROM nodes WHERE absolute_path=?1",
+                [show.to_string_lossy()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        database.create_or_assign_user_tag(id, "追番").unwrap();
+        database.set_node_type(id, NodeType::Work).unwrap();
+        let stable_before: String = connection
+            .query_row(
+                "SELECT last_seen_at FROM nodes WHERE absolute_path=?1",
+                [stable.to_string_lossy()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let unchanged = incremental_scan(&database, &root, "unchanged", false);
+        assert_eq!(unchanged.library_changed, Some(false));
+        assert_eq!(unchanged.folders_scanned, 0);
+        assert_eq!(unchanged.videos_found, 0);
+        assert_eq!(unchanged.auto_match_total, 0);
+        fs::write(show.join("02.mkv"), b"episode two").unwrap();
+        let changed = incremental_scan(&database, &root, "episode", false);
+        assert_eq!(changed.errors, 0);
+        assert_eq!(changed.library_changed, Some(true));
+        assert_eq!(
+            changed.folders_scanned, 1,
+            "only the changed deep directory is indexed"
+        );
+        let node = database.get_node(id).unwrap();
+        assert_eq!(node.total_video_count, 2);
+        assert_eq!(node.node_type, NodeType::Work);
+        assert!(node.manual_type_override);
+        assert_eq!(node.user_tags[0].name, "追番");
+        let root_count: i64 = connection
+            .query_row(
+                "SELECT total_video_count FROM nodes WHERE absolute_path=?1",
+                [root_path.to_string_lossy()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(root_count, 3, "partial updates refresh ancestor counts");
+        let new_show = root_path.join("新作品");
+        fs::create_dir(&new_show).unwrap();
+        fs::write(new_show.join("01.mkv"), b"new work").unwrap();
+        let added = incremental_scan(&database, &root, "new-show", false);
+        assert_eq!(
+            added.folders_scanned, 2,
+            "scan root and new work, reuse existing branches"
+        );
+        let stable_after: String = connection
+            .query_row(
+                "SELECT last_seen_at FROM nodes WHERE absolute_path=?1",
+                [stable.to_string_lossy()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(stable_before, stable_after);
+        fs::remove_file(show.join("02.mkv")).unwrap();
+        incremental_scan(&database, &root, "deleted-episode", false);
+        assert_eq!(database.get_node(id).unwrap().total_video_count, 1);
+        fs::remove_file(new_show.join("01.mkv")).unwrap();
+        fs::remove_dir(&new_show).unwrap();
+        let deleted = incremental_scan(&database, &root, "deleted-show", false);
+        assert_eq!(deleted.errors, 0);
+        let count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM nodes WHERE absolute_path=?1",
+                [new_show.to_string_lossy()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 0);
+        assert_eq!(
+            incremental_scan(&database, &root, "unchanged-again", false).library_changed,
+            Some(false)
+        );
+        assert_eq!(fs::read(stable.join("01.mkv")).unwrap(), b"stable source");
+    }
+
+    #[test]
+    fn incremental_scan_preserves_baseline_when_cancelled_or_offline_and_restores_hidden() {
+        let temp = crate::db::test_temp_dir();
+        let root_path = temp.path().join("library");
+        let show = root_path.join("show");
+        fs::create_dir_all(&show).unwrap();
+        fs::write(show.join("01.mkv"), b"one").unwrap();
+        let database = Database::new(temp.path().join("test.db"));
+        database.migrate().unwrap();
+        let root = database.add_root(&root_path, None).unwrap();
+        let cancelled = incremental_scan(&database, &root, "cancel-baseline", true);
+        assert_eq!(cancelled.status, ScanStatus::Cancelled);
+        let connection = database.connect().unwrap();
+        let baseline_json = || {
+            connection
+                .query_row(
+                    "SELECT snapshot_json FROM library_scan_snapshots WHERE library_root_id=?1",
+                    [root.id],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()
+                .unwrap()
+        };
+        assert!(baseline_json().is_none());
+        incremental_scan(&database, &root, "baseline", false);
+        let baseline = baseline_json();
+        fs::write(show.join("02.mkv"), b"two").unwrap();
+        incremental_scan(&database, &root, "cancel-change", true);
+        assert_eq!(baseline_json(), baseline);
+        let offline = temp.path().join("offline");
+        fs::rename(&root_path, &offline).unwrap();
+        let failed = incremental_scan(&database, &root, "offline", false);
+        assert!(failed.errors > 0);
+        assert_eq!(failed.library_changed, Some(false));
+        assert_eq!(baseline_json(), baseline);
+        fs::rename(&offline, &root_path).unwrap();
+        assert_eq!(
+            incremental_scan(&database, &root, "online", false).library_changed,
+            Some(true)
+        );
+        let id: i64 = connection
+            .query_row(
+                "SELECT id FROM nodes WHERE absolute_path=?1",
+                [show.to_string_lossy()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        database.set_node_type(id, NodeType::Ignored).unwrap();
+        incremental_scan(&database, &root, "hide", false);
+        fs::write(show.join("03.mkv"), b"three").unwrap();
+        assert_eq!(
+            incremental_scan(&database, &root, "hidden-change", false).library_changed,
+            Some(false)
+        );
+        database.reset_node_type(id).unwrap();
+        incremental_scan(&database, &root, "restore", false);
+        assert_eq!(database.get_node(id).unwrap().total_video_count, 3);
+    }
+
+    #[test]
+    fn incremental_file_mode_detects_modified_files_and_manual_scan_invalidates_baseline() {
+        let temp = crate::db::test_temp_dir();
+        let root_path = temp.path().join("library");
+        fs::create_dir_all(&root_path).unwrap();
+        let file = root_path.join("Show - 01.mkv");
+        fs::write(&file, b"one").unwrap();
+        let stable = root_path.join("stable");
+        fs::create_dir(&stable).unwrap();
+        fs::write(stable.join("02.mkv"), b"stable video").unwrap();
+        fs::write(stable.join("notes.txt"), b"stable notes").unwrap();
+        let stream = root_path.join("Disc").join("BDMV").join("STREAM");
+        fs::create_dir_all(&stream).unwrap();
+        fs::write(stream.join("00001.m2ts"), b"disc one").unwrap();
+        let database = Database::new(temp.path().join("test.db"));
+        database.migrate().unwrap();
+        let root = database
+            .add_root_with_mode(&root_path, None, LibraryRecognitionMode::VideoFile)
+            .unwrap();
+        incremental_scan(&database, &root, "baseline", false);
+        let connection = database.connect().unwrap();
+        let stable_marker = || {
+            connection
+                .query_row(
+                    "SELECT last_seen_at FROM media_files WHERE absolute_path=?1",
+                    [stable.join("02.mkv").to_string_lossy()],
+                    |row| row.get::<_, String>(0),
+                )
+                .unwrap()
+        };
+        let before = stable_marker();
+        assert_eq!(
+            incremental_scan(&database, &root, "unchanged", false).library_changed,
+            Some(false)
+        );
+        fs::write(&file, b"changed size").unwrap();
+        let modified = incremental_scan(&database, &root, "modified", false);
+        assert_eq!(modified.library_changed, Some(true));
+        assert_eq!(modified.folders_scanned, 1);
+        assert_eq!(modified.videos_found, 1);
+        assert_eq!(stable_marker(), before);
+        let resources: i64 = connection
+            .query_row("SELECT COUNT(*) FROM resource_files", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(
+            resources, 1,
+            "unchanged root-owned attachments survive cleanup"
+        );
+        let root_count: i64 = connection
+            .query_row(
+                "SELECT total_video_count FROM nodes WHERE absolute_path=?1",
+                [root_path.to_string_lossy()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            root_count, 3,
+            "flat root counts include reused videos and discs"
+        );
+        fs::write(stream.join("00002.m2ts"), b"disc two").unwrap();
+        assert_eq!(
+            incremental_scan(&database, &root, "disc-change", false).library_changed,
+            Some(true)
+        );
+        let discs: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM media_files WHERE extension='m2ts'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(discs, 2);
+        let size: i64 = connection
+            .query_row(
+                "SELECT file_size FROM media_files WHERE absolute_path=?1",
+                [file.to_string_lossy()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(size, 12);
+        let control = scan_control("manual", &root);
+        run_scan(
+            None,
+            &database,
+            vec![ScanTarget {
+                root: root.clone(),
+                path: root_path,
+                parent_node_id: None,
+            }],
+            &control,
+            &crate::db::default_video_extensions(),
+        );
+        let count: i64 = connection
+            .query_row("SELECT COUNT(*) FROM library_scan_snapshots", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(count, 0);
+        assert_eq!(
+            incremental_scan(&database, &root, "new-baseline", false).library_changed,
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn incremental_scan_handles_bdmv_and_extension_configuration_changes() {
+        let temp = crate::db::test_temp_dir();
+        let root_path = temp.path().join("library");
+        let stream = root_path.join("Disc").join("BDMV").join("STREAM");
+        fs::create_dir_all(&stream).unwrap();
+        fs::write(stream.join("00001.m2ts"), b"one").unwrap();
+        fs::write(root_path.join("extra.custom"), b"custom extension").unwrap();
+        let database = Database::new(temp.path().join("test.db"));
+        database.migrate().unwrap();
+        let root = database.add_root(&root_path, None).unwrap();
+        incremental_scan(&database, &root, "baseline", false);
+        fs::write(stream.join("00002.m2ts"), b"two").unwrap();
+        let changed = incremental_scan(&database, &root, "disc-change", false);
+        assert_eq!(changed.errors, 0);
+        assert_eq!(changed.library_changed, Some(true));
+        let connection = database.connect().unwrap();
+        let count: i64 = connection
+            .query_row("SELECT COUNT(*) FROM media_files", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 2);
+        let control = scan_control("extensions", &root);
+        control.progress.lock().unwrap().background = true;
+        let mut extensions = crate::db::default_video_extensions();
+        extensions.push(".custom".into());
+        run_scan(
+            None,
+            &database,
+            vec![ScanTarget {
+                root: root.clone(),
+                path: root_path,
+                parent_node_id: None,
+            }],
+            &control,
+            &extensions,
+        );
+        assert_eq!(control.progress().library_changed, Some(true));
+        let count: i64 = connection
+            .query_row("SELECT COUNT(*) FROM media_files", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 3);
+    }
+
+    #[test]
+    fn incremental_scan_saves_accessible_baselines_when_another_root_is_offline() {
+        let temp = TempDir::new().unwrap();
+        let database = Database::new(temp.path().join("test.db"));
+        database.migrate().unwrap();
+        let root_path = temp.path().join("online");
+        let offline_path = temp.path().join("offline");
+        fs::create_dir(&root_path).unwrap();
+        fs::create_dir(&offline_path).unwrap();
+        fs::write(root_path.join("01.mkv"), b"one").unwrap();
+        let root = database.add_root(&root_path, None).unwrap();
+        let offline = database.add_root(&offline_path, None).unwrap();
+        fs::remove_dir(&offline_path).unwrap();
+        let control = scan_control("mixed-roots", &root);
+        control.progress.lock().unwrap().background = true;
+        run_scan(
+            None,
+            &database,
+            vec![
+                ScanTarget {
+                    root: offline.clone(),
+                    path: offline_path,
+                    parent_node_id: None,
+                },
+                ScanTarget {
+                    root: root.clone(),
+                    path: root_path,
+                    parent_node_id: None,
+                },
+            ],
+            &control,
+            &crate::db::default_video_extensions(),
+        );
+        let online_health = database.get_root(root.id).unwrap().scan_health.unwrap();
+        let offline_health = database.get_root(offline.id).unwrap().scan_health.unwrap();
+        assert_eq!(online_health.outcome, "SUCCESS");
+        assert!(online_health.last_success_at.is_some());
+        assert_eq!(offline_health.outcome, "FAILED");
+        assert!(offline_health.last_success_at.is_none());
+        assert_eq!(control.progress().errors, 1);
+        assert_eq!(control.progress().library_changed, Some(true));
+        let unchanged = incremental_scan(&database, &root, "online-unchanged", false);
+        assert_eq!(unchanged.library_changed, Some(false));
+        assert_eq!(unchanged.folders_scanned, 0);
+    }
+
+    #[test]
+    fn work_catalogue_refreshes_episodes_and_preserves_source_metadata() {
+        let temp = TempDir::new().unwrap();
+        let root_path = temp.path().join("媒体库");
+        let nested = root_path.join("2026").join("连载");
+        fs::create_dir_all(&nested).unwrap();
+        let first = nested.join("Steins;Gate - 01.mkv");
+        fs::write(&first, b"read-only episode one").unwrap();
+        let database = Database::new(temp.path().join("test.db"));
+        database.migrate().unwrap();
+        let root = database
+            .add_root_with_mode(&root_path, None, LibraryRecognitionMode::VideoFile)
+            .unwrap();
+        let scan = |id: &str| {
+            database.start_scan_run(id, root.id).unwrap();
+            let control = scan_control(id, &root);
+            run_scan(
+                None,
+                &database,
+                vec![ScanTarget {
+                    root: root.clone(),
+                    path: root_path.clone(),
+                    parent_node_id: None,
+                }],
+                &control,
+                &crate::db::default_video_extensions(),
+            );
+            assert_eq!(control.progress().status, ScanStatus::Completed);
+        };
+        scan("initial-work");
+        let initial = database.list_all_resources().unwrap();
+        assert_eq!(initial.works.len(), 1);
+        let node_id = initial.works[0].node.id;
+        database
+            .create_or_assign_user_tag(node_id, "追番中")
+            .unwrap();
+        let favorite = database.create_favorite_folder("本季").unwrap();
+        database
+            .batch_add_nodes_to_favorite(favorite.id, &[node_id])
+            .unwrap();
+        fs::write(nested.join("Steins;Gate - 02.mkv"), b"episode two").unwrap();
+        fs::write(nested.join("Another Show - 01.mkv"), b"another work").unwrap();
+        fs::write(nested.join("Steins;Gate S02E01.mkv"), b"different season").unwrap();
+        fs::write(
+            nested.join("Steins;Gate S02E02.mkv"),
+            b"season two episode two",
+        )
+        .unwrap();
+        scan("new-episodes");
+        let refreshed = database.list_all_resources().unwrap();
+        assert_eq!(
+            refreshed.works.len(),
+            3,
+            "same-season episodes merge, other works/seasons do not"
+        );
+        let detail = crate::works::work_detail(&database, node_id).unwrap();
+        assert_eq!(detail.media_files.len(), 2);
+        assert_eq!(detail.work_sources.as_ref().unwrap().len(), 2);
+        assert_eq!(detail.node.user_tags[0].name, "追番中");
+        assert_eq!(
+            database.list_favorite_folder_nodes(favorite.id).unwrap()[0].id,
+            node_id
+        );
+        assert_eq!(fs::read(&first).unwrap(), b"read-only episode one");
+    }
+
+    #[test]
+    fn work_catalogue_flattens_folders_and_regroups_after_binding_changes() {
+        let temp = TempDir::new().unwrap();
+        let root_path = temp.path().join("library");
+        for folder in ["archive/release-a", "current/release-b"] {
+            let directory = root_path.join(folder);
+            fs::create_dir_all(&directory).unwrap();
+            fs::write(directory.join("01.mkv"), b"video").unwrap();
+        }
+        let database = Database::new(temp.path().join("test.db"));
+        database.migrate().unwrap();
+        let root = database.add_root(&root_path, None).unwrap();
+        database.start_scan_run("folders", root.id).unwrap();
+        let control = scan_control("folders", &root);
+        run_scan(
+            None,
+            &database,
+            vec![ScanTarget {
+                root: root.clone(),
+                path: root_path,
+                parent_node_id: None,
+            }],
+            &control,
+            &crate::db::default_video_extensions(),
+        );
+        assert_eq!(control.progress().status, ScanStatus::Completed);
+        let nodes = database.list_work_sources().unwrap();
+        assert_eq!(
+            nodes.len(),
+            2,
+            "grouping folders must not become work cards"
+        );
+        let mut subject = crate::models::BangumiSubject {
+            subject_id: 42,
+            title: "Example Work".into(),
+            title_cn: None,
+            title_en: None,
+            title_ja: None,
+            title_ko: None,
+            match_aliases: vec![],
+            date: None,
+            image_url: None,
+            summary: None,
+            subject_type: 2,
+        };
+        for node in &nodes {
+            database.save_confirmed_binding(node.id, &subject).unwrap();
+        }
+        assert_eq!(database.list_all_resources().unwrap().works.len(), 1);
+        assert_eq!(
+            crate::works::work_detail(&database, nodes[0].id)
+                .unwrap()
+                .media_files
+                .len(),
+            2
+        );
+        subject.subject_id = 43;
+        database
+            .save_confirmed_binding(nodes[1].id, &subject)
+            .unwrap();
+        assert_eq!(database.list_all_resources().unwrap().works.len(), 2);
+        database
+            .set_node_type(nodes[0].parent_node_id.unwrap(), NodeType::Ignored)
+            .unwrap();
+        assert_eq!(
+            database.list_all_resources().unwrap().works.len(),
+            1,
+            "ignored subtrees stay hidden"
+        );
+    }
+
     #[test]
     fn video_file_mode_flattens_each_video_into_an_independent_work() {
-        let temp = TempDir::new().unwrap();
+        let temp = crate::db::test_temp_dir();
         let root_path = temp.path().join("逐文件媒体库");
         let nested = root_path.join("子目录 [字幕组]");
         let bdmv_stream = root_path.join("蓝光电影").join("BDMV").join("STREAM");
@@ -2396,9 +3175,12 @@ mod tests {
         let scan_id = "test-scan".to_string();
         database.start_scan_run(&scan_id, root.id).unwrap();
         let control = ScanControl {
+            unchanged_directories: Default::default(),
             scan_id: scan_id.clone(),
             cancel: Arc::new(AtomicBool::new(false)),
             progress: Arc::new(Mutex::new(ScanProgress {
+                background: false,
+                library_changed: None,
                 scan_id,
                 root_id: root.id,
                 current_path: root.path.clone(),
@@ -2594,9 +3376,12 @@ mod tests {
         let run_once = |id: &str| {
             database.start_scan_run(id, root.id).unwrap();
             let control = ScanControl {
+                unchanged_directories: Default::default(),
                 scan_id: id.to_string(),
                 cancel: Arc::new(AtomicBool::new(false)),
                 progress: Arc::new(Mutex::new(ScanProgress {
+                    background: false,
+                    library_changed: None,
                     scan_id: id.to_string(),
                     root_id: root.id,
                     current_path: root.path.clone(),

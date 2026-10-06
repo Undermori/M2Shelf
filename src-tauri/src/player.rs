@@ -7,15 +7,19 @@ use std::{
 };
 
 #[cfg(target_os = "windows")]
-use std::{os::windows::ffi::OsStrExt, ptr};
+use std::{marker::PhantomData, os::windows::ffi::OsStrExt, ptr, rc::Rc};
 
 #[cfg(target_os = "windows")]
-use windows_sys::Win32::UI::{
-    Shell::{
-        Common::ITEMIDLIST, ILClone, ILCreateFromPathW, ILFindLastID, ILFree, ILRemoveLastID,
-        SHOpenFolderAndSelectItems, ShellExecuteW,
+use windows_sys::Win32::{
+    Foundation::RPC_E_CHANGED_MODE,
+    System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED},
+    UI::{
+        Shell::{
+            Common::ITEMIDLIST, ILClone, ILCreateFromPathW, ILFindLastID, ILFree, ILRemoveLastID,
+            SHOpenFolderAndSelectItems, ShellExecuteW,
+        },
+        WindowsAndMessaging::SW_SHOWNORMAL,
     },
-    WindowsAndMessaging::SW_SHOWNORMAL,
 };
 
 use crate::{db::AppResult, models::PlayerTestResult};
@@ -151,6 +155,41 @@ pub fn reveal(path: &Path) -> AppResult<()> {
 }
 
 #[cfg(target_os = "windows")]
+struct ShellComApartment {
+    initialized: bool,
+    // COM initialization and its matching release must stay on the same thread.
+    _thread_bound: PhantomData<Rc<()>>,
+}
+
+#[cfg(target_os = "windows")]
+impl ShellComApartment {
+    fn new() -> AppResult<Self> {
+        let result = unsafe { CoInitializeEx(ptr::null(), COINIT_APARTMENTTHREADED as u32) };
+        if result < 0 && result != RPC_E_CHANGED_MODE {
+            return Err(format!(
+                "Windows Shell 初始化失败（HRESULT 0x{:08X}）。",
+                result as u32
+            ));
+        }
+        Ok(Self {
+            // S_OK and S_FALSE both acquire a reference. An existing different apartment
+            // remains usable, but RPC_E_CHANGED_MODE does not acquire a reference.
+            initialized: result >= 0,
+            _thread_bound: PhantomData,
+        })
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl Drop for ShellComApartment {
+    fn drop(&mut self) {
+        if self.initialized {
+            unsafe { CoUninitialize() };
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
 struct OwnedItemIdList(*mut ITEMIDLIST);
 
 #[cfg(target_os = "windows")]
@@ -194,6 +233,7 @@ fn path_to_wide(path: &Path) -> Vec<u16> {
 
 #[cfg(target_os = "windows")]
 fn reveal_file_in_explorer(path: &Path) -> AppResult<()> {
+    let _apartment = ShellComApartment::new()?;
     let item = OwnedItemIdList::from_path(path)?;
     let parent = item.clone_list()?;
     let child = unsafe { ILFindLastID(item.0) };
@@ -287,6 +327,44 @@ fn validate_executable(path: &Path) -> AppResult<()> {
 mod tests {
     use super::*;
     use std::{ffi::OsString, os::windows::ffi::OsStringExt};
+    use windows_sys::Win32::System::Com::COINIT_MULTITHREADED;
+
+    #[test]
+    fn shell_com_apartment_balances_nested_initialization() {
+        thread::spawn(|| {
+            let outer = ShellComApartment::new().unwrap();
+            let inner = ShellComApartment::new().unwrap();
+            assert!(outer.initialized && inner.initialized);
+            drop(inner);
+            drop(outer);
+
+            let result = unsafe { CoInitializeEx(ptr::null(), COINIT_MULTITHREADED as u32) };
+            assert_eq!(result, 0, "both STA references should have been released");
+            unsafe { CoUninitialize() };
+        })
+        .join()
+        .unwrap();
+    }
+
+    #[test]
+    fn shell_com_apartment_preserves_an_existing_different_apartment() {
+        thread::spawn(|| {
+            let result = unsafe { CoInitializeEx(ptr::null(), COINIT_MULTITHREADED as u32) };
+            assert_eq!(result, 0);
+            let shell = ShellComApartment::new().unwrap();
+            assert!(!shell.initialized);
+            drop(shell);
+
+            let result = unsafe { CoInitializeEx(ptr::null(), COINIT_MULTITHREADED as u32) };
+            assert_eq!(result, 1, "the caller's MTA must remain initialized");
+            unsafe {
+                CoUninitialize();
+                CoUninitialize();
+            }
+        })
+        .join()
+        .unwrap();
+    }
 
     #[test]
     fn player_receives_only_the_literal_media_path() {
@@ -326,6 +404,7 @@ mod tests {
 
     #[test]
     fn shell_item_id_lists_accept_a_unicode_special_character_file() {
+        let _apartment = ShellComApartment::new().unwrap();
         let directory = tempfile::tempdir().unwrap();
         let nested = directory.path().join("媒体 日本語 [A&B]");
         std::fs::create_dir(&nested).unwrap();

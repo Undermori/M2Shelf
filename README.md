@@ -12,6 +12,8 @@
 
 M²Shelf 把本地硬盘、移动硬盘或 NAS 映射目录中的动画、电影及相关资源建立为独立索引，提供海报墙浏览、Bangumi 元数据、标签、收藏夹、观看记录和外部播放器入口。
 
+想了解软件怎样扫描、分类、匹配动画和同步信息，可以阅读面向使用者的[运行机制说明](docs/RUNTIME_GUIDE_zh-CN.md)，其中包含目录示例和常见问题的处理方法。
+
 简单来说，可以让你在资源管理器中由于语言、编码、字幕组等差异以及文件名过长而难以区分的动漫合集，一键转换为易于阅读的海报视图，如下所示：
 
 <img width="1445" height="1226" alt="ff3acd6cec8b9a3b76d2e1d4b7737b29" src="https://github.com/user-attachments/assets/4e1a235c-ea75-4996-b7a7-5c890e0b0803" />
@@ -71,6 +73,7 @@ M²Shelf 当前不提供内置播放器、在线视频、转码、媒体服务�
 
 ## 开发
 
+
 技术栈：Tauri 2、Rust、React 19、TypeScript、Vite 和 SQLite。
 
 ```powershell
@@ -102,3 +105,11 @@ cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --locked -- -D w
 ## 作者
 
 - [森下Undermori · Bilibili](https://space.bilibili.com/2903441)
+
+## 作品库与启动更新
+
+默认作品库跨目录平铺具有视频的作品，并按相同 Bangumi 条目聚合来源；系列负责目录组织，可切回文件夹浏览。FOLDER 模式下，明确的 CD1/CD2、Disc1/Disc2 等分卷按结构和标题证据归属外层作品；冲突绑定和人工分类保持独立。作品详情默认在“作品中的其他资源”中递归平铺所属子目录的视频，保留真实路径和播放、定位入口。
+
+聚合作品的 Bangumi 绑定、改绑、清除和自动封面重试作用于整组来源；分类、改名、隐藏、标签和收藏需选择明确来源。设置中的“已隐藏条目”支持搜索与恢复。启动自动更新的新库默认开启，旧库缺少保存设置时默认关闭，已有选择保留；首次开启可能需要完整枚举目录。扫描结果和最后成功时间可在资源库管理中查看，失败不清理未读到的索引，也不推进该库基线。历史别称补全每次应用运行最多尝试 32 个不同条目，失败消耗预算，下次启动轮换续跑。源媒体始终只读。
+
+前端与项目检查使用 `npm run check`，Rust 格式、测试和严格 Clippy 由独立 Windows PR workflow 验证。开发配置见 [Windows 本地开发](docs/WINDOWS_DEVELOPMENT.md)。

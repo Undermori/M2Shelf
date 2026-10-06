@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { BangumiSearchPrefill, BangumiSubject, MediaNode, MetadataBinding } from "../types/media";
-import { api } from "../lib/api";
+import { api, isStaleWorkError } from "../lib/api";
 import { cleanBangumiKeyword, errorMessage, nodeDisplayTitle } from "../lib/format";
 import { Icon } from "./Icon";
 import { LoadingState } from "./LoadingState";
@@ -9,10 +9,11 @@ import { useI18n } from "../lib/i18n";
 interface BangumiModalProps {
   node: MediaNode | null;
   onClose: () => void;
+  onStale: () => Promise<void>;
   onBound: (binding: MetadataBinding) => void | Promise<void>;
 }
 
-export function BangumiModal({ node, onClose, onBound }: BangumiModalProps) {
+export function BangumiModal({ node, onClose, onBound, onStale }: BangumiModalProps) {
   const { language, t } = useI18n();
   const [keyword, setKeyword] = useState("");
   const [results, setResults] = useState<BangumiSubject[]>([]);
@@ -114,13 +115,14 @@ export function BangumiModal({ node, onClose, onBound }: BangumiModalProps) {
     setError(null);
     setErrorKind("bind");
     try {
-      const binding = await api.bindBangumi(nodeId, subject);
+      const binding = node.workTarget ? await api.bindWorkBangumi(node.workTarget, subject) : await api.bindBangumi(nodeId, subject);
       if (!requestIsCurrent(generation, nodeId)) return;
       await onBound(binding);
       if (!requestIsCurrent(generation, nodeId)) return;
       close();
     } catch (caught) {
       if (!requestIsCurrent(generation, nodeId)) return;
+      if (isStaleWorkError(caught)) { await onStale(); close(); return; }
       setError(errorMessage(caught));
     } finally {
       if (requestIsCurrent(generation, nodeId)) setBindingId(null);
@@ -132,7 +134,7 @@ export function BangumiModal({ node, onClose, onBound }: BangumiModalProps) {
       <section className="bangumi-modal" role="dialog" aria-modal="true" aria-labelledby="bangumi-title">
         <header className="modal-header">
           <span className="modal-heading-icon"><Icon name="bangumi" /></span>
-          <div><p className="eyebrow">{t("bangumi.manualMatch")}</p><h2 id="bangumi-title">{t("bangumi.modalTitle")}</h2><p>{t("bangumi.modalDescription", { name: nodeDisplayTitle(node) })}</p></div>
+          <div><p className="eyebrow">{t("bangumi.manualMatch")}</p><h2 id="bangumi-title">{t("bangumi.modalTitle")}</h2><p>{t("bangumi.modalDescription", { name: nodeDisplayTitle(node) })}</p>{node.workTarget && <p>{t("works.wholeGroup", { count: node.workTarget.sourceNodeIds.length })}</p>}</div>
           <button className="modal-close" aria-label={t("common.close")} onClick={close} type="button"><Icon name="close" /></button>
         </header>
 

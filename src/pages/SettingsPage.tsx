@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { AppBootstrap, AppLanguage, AppSettings, AppTheme, CacheStats, LibraryRoot, UpdateDownloadStatus } from "../types/media";
+import { LibraryScanHealth } from "../components/LibraryScanHealth";
 import { EmptyState } from "../components/EmptyState";
 import { Icon } from "../components/Icon";
 import { LoadingState } from "../components/LoadingState";
@@ -11,6 +12,7 @@ interface SettingsPageProps {
   roots: LibraryRoot[];
   bootstrap: AppBootstrap | null;
   onAddRoot: () => void;
+  onHiddenNodes: () => void;
   onRemoveRoot: (root: LibraryRoot) => void;
   onScanRoot: (root: LibraryRoot) => void;
   onAppearanceChange: (settings: AppSettings) => number;
@@ -21,7 +23,7 @@ interface SettingsPageProps {
   onSuccess: (message: string) => void;
 }
 
-export function SettingsPage({ roots, bootstrap, onAddRoot, onRemoveRoot, onScanRoot, onAppearanceChange, onPersistenceFailure, updateDownloadStatus, onCheckForUpdate, onError, onSuccess }: SettingsPageProps) {
+export function SettingsPage({ roots, bootstrap, onAddRoot, onHiddenNodes, onRemoveRoot, onScanRoot, onAppearanceChange, onPersistenceFailure, updateDownloadStatus, onCheckForUpdate, onError, onSuccess }: SettingsPageProps) {
   const { t } = useI18n();
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [cache, setCache] = useState<CacheStats | null>(null);
@@ -190,8 +192,9 @@ export function SettingsPage({ roots, bootstrap, onAddRoot, onRemoveRoot, onScan
         <section className="settings-section">
           <div className="settings-section-heading"><span className="settings-symbol coral"><Icon name="folder" /></span><div><h2>{t("settings.rootsTitle")}</h2><p>{t("settings.rootsDescription")}</p></div><button className="button secondary" disabled={!desktopAvailable} onClick={onAddRoot} type="button"><Icon name="plus" />{t("settings.addDirectory")}</button></div>
           {roots.length === 0 ? <EmptyState compact icon="folder" title={t("settings.noDirectory")} description={t("settings.noDirectoryDescription")} /> : <div className="settings-root-list">{roots.map((root) => (
-            <article className="settings-root" key={root.id}><span><Icon name="folder-open" /></span><div><strong>{root.displayName}</strong><p title={root.path}>{compactPath(root.path, 74)}</p><small>{t("settings.lastScan", { date: formatDate(root.lastScanAt) })}</small></div><button aria-label={t("settings.scanNamed", { name: root.displayName })} onClick={() => onScanRoot(root)} title={t("settings.scanLibrary")} type="button"><Icon name="refresh" /></button><button className="danger-icon" aria-label={t("settings.removeNamed", { name: root.displayName })} onClick={() => onRemoveRoot(root)} title={t("settings.removeIndexOnly")} type="button"><Icon name="trash" /></button></article>
+            <article className="settings-root" key={root.id}><span><Icon name="folder-open" /></span><div><strong>{root.displayName}</strong><p title={root.path}>{compactPath(root.path, 74)}</p><small>{t("settings.lastScan", { date: formatDate(root.lastScanAt) })}</small><LibraryScanHealth health={root.scanHealth} /></div><button aria-label={t("settings.scanNamed", { name: root.displayName })} onClick={() => onScanRoot(root)} title={t("settings.scanLibrary")} type="button"><Icon name="refresh" /></button><button className="danger-icon" aria-label={t("settings.removeNamed", { name: root.displayName })} onClick={() => onRemoveRoot(root)} title={t("settings.removeIndexOnly")} type="button"><Icon name="trash" /></button></article>
           ))}</div>}
+          <div className="settings-hidden-entry"><div><strong>{t("hidden.title")}</strong><p>{t("settings.hiddenDescription")}</p></div><button className="button secondary" disabled={!desktopAvailable} onClick={onHiddenNodes} type="button" aria-haspopup="dialog"><Icon name="eye-off" />{t("hidden.title")}</button></div>
           <p className="safety-copy"><Icon name="shield" />{t("settings.removeSafety")}</p>
         </section>
 
@@ -203,6 +206,7 @@ export function SettingsPage({ roots, bootstrap, onAddRoot, onRemoveRoot, onScan
         <section className="settings-section">
           <div className="settings-section-heading"><span className="settings-symbol gold"><Icon name="settings" /></span><div><h2>{t("settings.browseScanTitle")}</h2><p>{t("settings.browseScanDescription")}</p></div></div>
           <div className="settings-columns"><label className="field-label"><span>{t("settings.defaultView")}</span><select disabled={!settings} onChange={(event) => changeSettings((current) => ({ ...current, defaultViewMode: event.target.value as "GRID" | "LIST" }))} value={settings?.defaultViewMode ?? "GRID"}><option value="GRID">{t("settings.posterGrid")}</option><option value="LIST">{t("settings.compactList")}</option></select></label><label className="switch-field settings-switch-row"><span><strong>{t("settings.enableBangumi")}</strong><small>{t("settings.bangumiNetwork")}</small></span><input aria-label={t("settings.enableBangumi")} checked={settings?.bangumiSearchEnabled ?? false} disabled={!settings} onChange={(event) => changeSettings((current) => ({ ...current, bangumiSearchEnabled: event.target.checked }))} type="checkbox" /><i /></label></div>
+          <label className="switch-field settings-switch-row"><span><strong>{t("settings.autoScanOnStartup")}</strong><small>{t("settings.autoScanOnStartupDescription")}</small></span><input aria-label={t("settings.autoScanOnStartup")} checked={settings?.autoScanOnStartup ?? true} disabled={!settings} onChange={(event) => changeSettings((current) => ({ ...current, autoScanOnStartup: event.target.checked }))} type="checkbox" /><i /></label>
           <div className="extension-editor"><span>{t("settings.videoExtensions")}</span><div className="extension-chips">{settings?.videoExtensions.map((extension) => <button disabled={settings.videoExtensions.length <= 1} key={extension} onClick={() => changeSettings((current) => ({ ...current, videoExtensions: current.videoExtensions.filter((item) => item !== extension) }))} title={t("settings.removeExtension")} type="button">{extension}<Icon name="close" /></button>)}</div><div className="extension-add"><input onChange={(event) => setExtensionDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); addExtension(); } }} placeholder={t("settings.extensionPlaceholder")} value={extensionDraft} /><button onClick={addExtension} type="button">{t("common.add")}</button></div></div>
         </section>
 
@@ -229,8 +233,10 @@ export function SettingsPage({ roots, bootstrap, onAddRoot, onRemoveRoot, onScan
           </div>
           <dl className="about-grid">
             <div><dt>{t("settings.currentVersion")}</dt><dd>{bootstrap?.version ?? t("common.notAvailable")}</dd></div>
-            <div><dt>{t("settings.updateDate")}</dt><dd>{bootstrap?.buildDate ?? t("common.notAvailable")}</dd></div>
+            <div><dt>{t("settings.updateDate")}</dt><dd>{bootstrap?.buildDate && bootstrap.buildDate !== "unknown" ? bootstrap.buildDate : t("common.notAvailable")}</dd></div>
             <div><dt>{t("settings.architecture")}</dt><dd>{bootstrap?.architecture ?? t("common.notAvailable")}</dd></div>
+            <div><dt>{t("settings.originalAuthor")}</dt><dd>{t("brand.author")}</dd></div>
+            <div><dt>{t("settings.contributor")}</dt><dd>Juvenile_A</dd></div>
             <div><dt>{t("settings.website")}</dt><dd className="about-author-links"><button disabled={!bootstrap?.websiteUrl || !desktopAvailable} onClick={() => void openAuthorLink(bootstrap?.websiteUrl)} type="button">{t("settings.websiteLabel")} <Icon name="external" /></button><button disabled={!bootstrap?.xUrl || !desktopAvailable} onClick={() => void openAuthorLink(bootstrap?.xUrl)} type="button">{t("settings.xLabel")} <Icon name="external" /></button></dd></div>
           </dl>
           <p className="created-by">{t("settings.createdBy")} <button disabled={!bootstrap?.websiteUrl || !desktopAvailable} onClick={() => void openAuthorLink(bootstrap?.websiteUrl)} type="button">{t("brand.author")}</button></p>

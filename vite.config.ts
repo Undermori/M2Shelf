@@ -18,7 +18,9 @@ export default defineConfig({
         }
       : undefined,
     watch: {
-      ignored: ["**/src-tauri/**"],
+      // Packaging creates/removes executable files which Windows may temporarily lock.
+      // These generated files never contribute to frontend hot reload.
+      ignored: ["**/src-tauri/**", "**/bundle/**", "**/.tmp/**", "**/.tools/**", "**/output/playwright/**"],
     },
   },
 });

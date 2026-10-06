@@ -55,7 +55,7 @@ export function Sidebar({ page, roots, selectedRootId, loading, onNavigate, onSe
             </button>
           )}
           {roots.map((root) => (
-            <button
+            <div className="root-entry" key={root.id}><button
               className={`root-item ${page === "library" && selectedRootId === root.id ? "is-active" : ""}`}
               key={root.id}
               onClick={() => onSelectRoot(root.id)}
@@ -65,7 +65,7 @@ export function Sidebar({ page, roots, selectedRootId, loading, onNavigate, onSe
             >
               <Icon name="folder" />
               <span><strong>{root.displayName}</strong><small>{compactPath(root.path, 28)}</small></span>
-            </button>
+            </button>{root.scanHealth && ["PARTIAL", "FAILED"].includes(root.scanHealth.outcome) && <button className="root-scan-warning" onClick={() => onNavigate("settings")} title={`${root.displayName}: ${t("health.showDetails")}`} aria-label={`${root.displayName}: ${t("health.showDetails")}`} type="button"><Icon name="warning" /></button>}</div>
           ))}
         </div>
       </nav>

@@ -659,6 +659,17 @@ pub fn cover_data_url(
     _cache_operation: &CoverCacheOperationGuard,
     path: &Path,
 ) -> AppResult<String> {
+    let bytes = read_cover_payload(path)?;
+    let mime = image_mime(&bytes)
+        .ok_or_else(|| "封面缓存不是支持的 JPG、PNG 或 WEBP 图片。".to_string())?;
+    Ok(format!("data:{mime};base64,{}", STANDARD.encode(bytes)))
+}
+
+pub(crate) fn cached_cover_is_valid(path: &Path) -> bool {
+    read_cover_payload(path).is_ok()
+}
+
+fn read_cover_payload(path: &Path) -> AppResult<Vec<u8>> {
     if !path.is_absolute() || !path.is_file() {
         return Err("封面缓存文件不存在。".into());
     }
@@ -678,9 +689,7 @@ pub fn cover_data_url(
         return Err("封面缓存超过 15 MiB 安全限制。".into());
     }
     validate_cover_payload(&bytes)?;
-    let mime = image_mime(&bytes)
-        .ok_or_else(|| "封面缓存不是支持的 JPG、PNG 或 WEBP 图片。".to_string())?;
-    Ok(format!("data:{mime};base64,{}", STANDARD.encode(bytes)))
+    Ok(bytes)
 }
 
 fn image_mime(bytes: &[u8]) -> Option<&'static str> {

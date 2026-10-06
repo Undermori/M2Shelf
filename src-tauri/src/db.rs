@@ -70,6 +70,19 @@ impl Database {
         Ok(connection)
     }
 
+    pub(crate) fn read_snapshot<T>(
+        &self,
+        read: impl FnOnce(&Connection) -> AppResult<T>,
+    ) -> AppResult<T> {
+        let mut connection = self.connect()?;
+        let tx = connection
+            .transaction_with_behavior(TransactionBehavior::Deferred)
+            .map_err(db_error)?;
+        let result = read(&tx)?;
+        tx.commit().map_err(db_error)?;
+        Ok(result)
+    }
+
     pub fn path(&self) -> &Path {
         &self.path
     }
@@ -115,6 +128,7 @@ impl Database {
 
     pub fn migrate(&self) -> AppResult<()> {
         let connection = self.connect()?;
+        let existing: bool = connection.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='mediashelf_schema_migrations')", [], |row| row.get(0)).map_err(db_error)?;
         connection
             .execute_batch(
                 "CREATE TABLE IF NOT EXISTS mediashelf_schema_migrations (
@@ -153,6 +167,16 @@ impl Database {
                 10_i64,
                 include_str!("../migrations/0010_confirmed_title_aliases.sql"),
             ),
+            (
+                11_i64,
+                include_str!("../migrations/0011_incremental_scan.sql"),
+            ),
+            (
+                12_i64,
+                include_str!("../migrations/0012_provider_aliases.sql"),
+            ),
+            (13_i64, include_str!("../migrations/0013_alias_sync.sql")),
+            (14_i64, include_str!("../migrations/0014_scan_health.sql")),
         ];
         for (version, sql) in migrations {
             let applied = connection
@@ -166,19 +190,31 @@ impl Database {
                 connection
                     .execute_batch("BEGIN IMMEDIATE;")
                     .map_err(db_error)?;
-                let result = connection.execute_batch(sql).and_then(|_| {
-                    connection.execute(
-                        "INSERT INTO mediashelf_schema_migrations(version) VALUES (?1)",
-                        [version],
-                    )?;
-                    connection.execute_batch("COMMIT;")
-                });
+                let result: AppResult<()> = (|| {
+                    connection.execute_batch(sql).map_err(db_error)?;
+                    if version == 14 {
+                        crate::logical_works::LogicalWorkIndex::reclassify(&connection, None)?;
+                    }
+                    connection
+                        .execute(
+                            "INSERT INTO mediashelf_schema_migrations(version) VALUES (?1)",
+                            [version],
+                        )
+                        .map_err(db_error)?;
+                    connection.execute_batch("COMMIT;").map_err(db_error)
+                })();
                 if let Err(error) = result {
                     let _ = connection.execute_batch("ROLLBACK;");
                     return Err(format!("数据库迁移 {version} 失败：{error}"));
                 }
             }
         }
+        connection
+            .execute(
+                "INSERT OR IGNORE INTO settings(key,value) VALUES('auto_scan_on_startup',?1)",
+                [if existing { "false" } else { "true" }],
+            )
+            .map_err(db_error)?;
         Ok(())
     }
 
@@ -203,6 +239,7 @@ impl Database {
         let rows = statement
             .query_map([], |row| {
                 Ok(LibraryRoot {
+                    scan_health: None,
                     id: row.get(0)?,
                     path: row.get(1)?,
                     display_name: row.get(2)?,
@@ -214,12 +251,18 @@ impl Database {
                 })
             })
             .map_err(db_error)?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
+        let mut roots = rows.collect::<Result<Vec<_>, _>>().map_err(db_error)?;
+        for root in &mut roots {
+            root.scan_health = read_scan_health_conn(&connection, root.id)?;
+        }
+        Ok(roots)
     }
 
     pub fn get_root(&self, root_id: i64) -> AppResult<LibraryRoot> {
         let connection = self.connect()?;
-        get_root_conn(&connection, root_id)
+        let mut root = get_root_conn(&connection, root_id)?;
+        root.scan_health = read_scan_health_conn(&connection, root.id)?;
+        Ok(root)
     }
 
     pub fn update_root_display_name(
@@ -353,16 +396,30 @@ impl Database {
         get_node_conn(&connection, node_id)
     }
 
+    /// Explicitly ignored entries at every depth, including independently ignored children.
+    /// Read the index even when the source drive is disconnected.
+    pub fn list_hidden_nodes(&self) -> AppResult<Vec<MediaNode>> {
+        let connection = self.connect()?;
+        let mut statement = connection
+            .prepare(&format!("{} WHERE n.node_type = 'IGNORED'", node_select()))
+            .map_err(db_error)?;
+        let mut nodes = statement
+            .query_map([], node_from_row)
+            .map_err(db_error)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(db_error)?;
+        hydrate_nodes_metadata_conn(&connection, &mut nodes)?;
+        nodes.sort_by(|left, right| {
+            natural_cmp(&left.display_name, &right.display_name)
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        Ok(nodes)
+    }
+
+    #[cfg(test)]
     pub fn list_children(&self, parent_id: i64) -> AppResult<Vec<MediaNode>> {
         let connection = self.connect()?;
-        list_nodes_conn(
-            &connection,
-            &format!(
-                "{} WHERE n.parent_node_id=?1 AND n.node_type <> 'IGNORED'",
-                node_select()
-            ),
-            parent_id,
-        )
+        list_children_conn(&connection, parent_id)
     }
 
     pub fn list_media(&self, node_id: i64) -> AppResult<Vec<MediaFile>> {
@@ -370,6 +427,7 @@ impl Database {
         list_media_conn(&connection, node_id)
     }
 
+    #[cfg(test)]
     pub fn list_resources(&self, node_id: i64) -> AppResult<Vec<ResourceFile>> {
         let connection = self.connect()?;
         list_resources_conn(&connection, node_id)
@@ -407,31 +465,48 @@ impl Database {
     /// Returns the union of every library's visible top-level cards. Descendants remain
     /// reachable through their parent and are deliberately not flattened into this collection.
     pub fn list_all_resources(&self) -> AppResult<AllResourcesResult> {
-        let connection = self.connect()?;
-        let mut statement = connection
-            .prepare(&format!(
-                "{} WHERE n.node_type <> 'IGNORED' AND n.total_video_count > 0
+        self.read_snapshot(|connection| {
+            let mut statement = connection
+                .prepare(&format!(
+                    "{} WHERE n.node_type <> 'IGNORED' AND n.total_video_count > 0
                  AND n.parent_node_id IN (
                      SELECT hidden.id FROM nodes hidden
                      WHERE hidden.parent_node_id IS NULL
                  )",
-                node_select()
-            ))
-            .map_err(db_error)?;
-        let mut nodes = statement
-            .query_map([], node_from_row)
-            .map_err(db_error)?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(db_error)?;
-        hydrate_nodes_metadata_conn(&connection, &mut nodes)?;
-        nodes.sort_by(|left, right| {
-            natural_cmp(&left.display_name, &right.display_name)
-                .then_with(|| left.library_root_id.cmp(&right.library_root_id))
-                .then_with(|| left.id.cmp(&right.id))
-        });
-        Ok(AllResourcesResult {
-            total_count: nodes.len() as i64,
-            nodes,
+                    node_select()
+                ))
+                .map_err(db_error)?;
+            let mut nodes = statement
+                .query_map([], node_from_row)
+                .map_err(db_error)?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(db_error)?;
+            hydrate_nodes_metadata_conn(connection, &mut nodes)?;
+            nodes.sort_by(|left, right| {
+                natural_cmp(&left.display_name, &right.display_name)
+                    .then_with(|| left.library_root_id.cmp(&right.library_root_id))
+                    .then_with(|| left.id.cmp(&right.id))
+            });
+            let index = crate::logical_works::LogicalWorkIndex::load(connection)?;
+            Ok(AllResourcesResult {
+                recognition_warnings: index
+                    .warnings
+                    .iter()
+                    .filter_map(|id| index.nodes.get(id))
+                    .cloned()
+                    .collect(),
+                total_count: nodes.len() as i64,
+                nodes,
+                works: crate::works::groups_from_index(connection, &index)?,
+            })
+        })
+    }
+
+    #[cfg(test)]
+    pub fn list_work_sources(&self) -> AppResult<Vec<MediaNode>> {
+        self.read_snapshot(|connection| {
+            let index = crate::logical_works::LogicalWorkIndex::load(connection)?;
+            index.sources(connection)
         })
     }
 
@@ -487,44 +562,6 @@ impl Database {
             .collect()
     }
 
-    pub fn breadcrumbs(&self, node_id: i64, include_self: bool) -> AppResult<Vec<BreadcrumbItem>> {
-        let connection = self.connect()?;
-        let mut items = Vec::new();
-        let mut current = if include_self {
-            Some(node_id)
-        } else {
-            connection
-                .query_row(
-                    "SELECT parent_node_id FROM nodes WHERE id=?1",
-                    [node_id],
-                    |row| row.get(0),
-                )
-                .optional()
-                .map_err(db_error)?
-                .flatten()
-        };
-        while let Some(id) = current {
-            let value = connection
-                .query_row(
-                    "SELECT parent_node_id, display_name FROM nodes WHERE id=?1",
-                    [id],
-                    |row| Ok((row.get::<_, Option<i64>>(0)?, row.get::<_, String>(1)?)),
-                )
-                .optional()
-                .map_err(db_error)?;
-            let Some((parent_id, display_name)) = value else {
-                break;
-            };
-            // The node with no parent mirrors LibraryRoot and is intentionally hidden.
-            if parent_id.is_some() {
-                items.push(BreadcrumbItem { id, display_name });
-            }
-            current = parent_id;
-        }
-        items.reverse();
-        Ok(items)
-    }
-
     pub fn search(&self, query: &str, root_id: Option<i64>) -> AppResult<Vec<SearchHit>> {
         let query = query.trim();
         if query.is_empty() {
@@ -563,7 +600,8 @@ impl Database {
                                      OR b.provider_title_cn LIKE ?1 ESCAPE '\\'
                                      OR b.provider_title_en LIKE ?1 ESCAPE '\\'
                                      OR b.provider_title_ja LIKE ?1 ESCAPE '\\'
-                                     OR b.provider_title_ko LIKE ?1 ESCAPE '\\')
+                                     OR b.provider_title_ko LIKE ?1 ESCAPE '\\'
+                                     OR EXISTS (SELECT 1 FROM json_each(b.provider_aliases_json) alias WHERE alias.value LIKE ?1 ESCAPE '\\'))
                           ))
                      LIMIT 200",
                     node_select()
@@ -665,7 +703,7 @@ impl Database {
         let connection = self.connect()?;
         let mut statement = connection
             .prepare(&format!(
-                "{} WHERE n.library_root_id=?1 AND n.parent_node_id IS NOT NULL
+                "{} WHERE n.library_root_id=?1
                  AND (
                      NOT EXISTS (
                          SELECT 1 FROM metadata_bindings b
@@ -693,7 +731,6 @@ impl Database {
                  )
                  AND (
                      n.node_type IN ('AUTO_WORK','WORK')
-                     OR (n.node_type='CONTAINER' AND n.total_video_count > 0)
                  )
                  ORDER BY n.id",
                 node_select()
@@ -744,10 +781,8 @@ impl Database {
               )"
         };
         let sql = format!(
-            "{} WHERE n.parent_node_id IS NOT NULL
-             AND (
+            "{} WHERE (
                  n.node_type IN ('AUTO_WORK','WORK')
-                 OR (n.node_type='CONTAINER' AND n.total_video_count > 0)
              )
              AND NOT EXISTS (
                  WITH RECURSIVE ancestors(id,parent_node_id,node_type) AS (
@@ -800,7 +835,10 @@ impl Database {
         ) {
             return Err("人工类型只能设置为作品、系列、其他资源或忽略。".into());
         }
-        let connection = self.connect()?;
+        let mut writer = self.connect()?;
+        let connection = writer
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(db_error)?;
         let changed = connection
             .execute(
                 "UPDATE nodes SET node_type=?1, manual_type_override=1, updated_at=CURRENT_TIMESTAMP WHERE id=?2",
@@ -810,8 +848,10 @@ impl Database {
         if changed == 0 {
             return Err("目录节点不存在。".into());
         }
-        drop(connection);
-        self.get_node(node_id)
+        crate::logical_works::LogicalWorkIndex::reclassify_related(&connection, &[node_id], true)?;
+        let result = get_node_conn(&connection, node_id)?;
+        connection.commit().map_err(db_error)?;
+        Ok(result)
     }
 
     pub fn batch_set_node_type(
@@ -844,6 +884,7 @@ impl Database {
                 .map_err(db_error)?;
         }
         drop(statement);
+        crate::logical_works::LogicalWorkIndex::reclassify_related(&transaction, &node_ids, true)?;
         transaction.commit().map_err(db_error)?;
         Ok(BatchMutationResult {
             requested: node_ids.len() as u64,
@@ -853,11 +894,14 @@ impl Database {
     }
 
     pub fn reset_node_type(&self, node_id: i64) -> AppResult<MediaNode> {
-        let node = self.get_node(node_id)?;
-        let root = self.get_root(node.library_root_id)?;
+        let mut writer = self.connect()?;
+        let connection = writer
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(db_error)?;
+        let node = get_node_conn(&connection, node_id)?;
+        let root = get_root_conn(&connection, node.library_root_id)?;
         let has_bdmv =
             crate::scanner::has_typical_bdmv(Path::new(&node.absolute_path), Path::new(&root.path));
-        let connection = self.connect()?;
         let direct_video_count = connection
             .query_row(
                 "SELECT COUNT(*) FROM media_files WHERE node_id=?1",
@@ -888,8 +932,10 @@ impl Database {
                 ],
             )
             .map_err(db_error)?;
-        drop(connection);
-        self.get_node(node_id)
+        crate::logical_works::LogicalWorkIndex::reclassify_related(&connection, &[node_id], true)?;
+        let result = get_node_conn(&connection, node_id)?;
+        connection.commit().map_err(db_error)?;
+        Ok(result)
     }
 
     pub fn batch_reset_node_type(&self, node_ids: &[i64]) -> AppResult<BatchMutationResult> {
@@ -946,6 +992,7 @@ impl Database {
                 )
                 .map_err(db_error)?;
         }
+        crate::logical_works::LogicalWorkIndex::reclassify_related(&transaction, &node_ids, true)?;
         transaction.commit().map_err(db_error)?;
         Ok(BatchMutationResult {
             requested: node_ids.len() as u64,
@@ -1331,9 +1378,57 @@ impl Database {
         get_binding_conn(&connection, node_id)
     }
 
-    /// Refreshes metadata only while the Node still has the same Subject binding. This is used
-    /// after optional detail requests so a late retry response cannot overwrite a newer user
-    /// choice or recreate a cleared binding.
+    pub fn pending_alias_subjects(&self) -> AppResult<Vec<crate::models::BangumiSubject>> {
+        let connection = self.connect()?;
+        let mut statement = connection.prepare("SELECT MIN(b.node_id) FROM metadata_bindings b
+            WHERE b.provider='BANGUMI' AND b.provider_subject_type IN (2,6)
+            AND NOT EXISTS(SELECT 1 FROM provider_alias_sync s WHERE s.subject_id=b.provider_subject_id AND s.subject_type=b.provider_subject_type)
+            GROUP BY b.provider_subject_id,b.provider_subject_type ORDER BY MIN(b.node_id)").map_err(db_error)?;
+        let ids = statement
+            .query_map([], |row| row.get::<_, i64>(0))
+            .map_err(db_error)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(db_error)?;
+        ids.into_iter()
+            .filter_map(|id| get_binding_conn(&connection, id).transpose())
+            .map(|binding| {
+                let b = binding?;
+                Ok(crate::models::BangumiSubject {
+                    subject_id: b.provider_subject_id,
+                    subject_type: b.provider_subject_type,
+                    title: b.provider_title,
+                    title_cn: b.provider_title_cn,
+                    title_en: b.provider_title_en,
+                    title_ja: b.provider_title_ja,
+                    title_ko: b.provider_title_ko,
+                    match_aliases: Vec::new(),
+                    date: b.provider_date,
+                    image_url: b.provider_image_url,
+                    summary: None,
+                })
+            })
+            .collect()
+    }
+
+    /// Persist completion with the aliases so empty results are not repeatedly fetched.
+    pub fn complete_provider_alias_sync(
+        &self,
+        subject: &crate::models::BangumiSubject,
+    ) -> AppResult<bool> {
+        let mut connection = self.connect()?;
+        let tx = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(db_error)?;
+        let changed = tx.execute(
+            "UPDATE metadata_bindings SET provider_aliases_json=?1 WHERE provider='BANGUMI' AND provider_subject_id=?2 AND provider_subject_type=?3 AND provider_aliases_json<>?1",
+            params![provider_aliases_json(subject),subject.subject_id,subject.subject_type],
+        ).map_err(db_error)?;
+        tx.execute("INSERT INTO provider_alias_sync(subject_id,subject_type,aliases_json) VALUES(?1,?2,?3) ON CONFLICT(subject_id,subject_type) DO UPDATE SET aliases_json=excluded.aliases_json", params![subject.subject_id,subject.subject_type,provider_aliases_json(subject)]).map_err(db_error)?;
+        tx.commit().map_err(db_error)?;
+        Ok(changed > 0)
+    }
+
+    /// A late detail response cannot overwrite a newer Subject choice or recreate a cleared binding.
     pub fn update_binding_if_subject(
         &self,
         node_id: i64,
@@ -1351,6 +1446,7 @@ impl Database {
                     provider_date=?6,
                     provider_image_url=?7,
                     provider_subject_type=?8,
+                    provider_aliases_json=?11,
                     updated_at=CURRENT_TIMESTAMP
                  WHERE node_id=?9 AND provider='BANGUMI' AND provider_subject_id=?10",
                 params![
@@ -1364,6 +1460,7 @@ impl Database {
                     subject.subject_type,
                     node_id,
                     subject.subject_id,
+                    provider_aliases_json(subject),
                 ],
             )
             .map_err(db_error)?;
@@ -1390,9 +1487,9 @@ impl Database {
                     node_id, provider, provider_subject_id, provider_subject_type,
                     provider_title, provider_title_cn,
                     provider_title_en, provider_title_ja, provider_title_ko, provider_date,
-                    provider_image_url, bound_at, updated_at, cover_download_error
+                    provider_image_url, bound_at, updated_at, cover_download_error, provider_aliases_json
                  ) VALUES (?1, 'BANGUMI', ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
-                    CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, NULL)
+                    CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, NULL, COALESCE((SELECT aliases_json FROM provider_alias_sync WHERE subject_id=?2 AND subject_type=?3),?11))
                  ON CONFLICT(node_id, provider) DO NOTHING",
                 params![
                     node_id,
@@ -1404,7 +1501,8 @@ impl Database {
                     subject.title_ja,
                     subject.title_ko,
                     subject.date,
-                    subject.image_url
+                    subject.image_url,
+                    provider_aliases_json(subject)
                 ],
             )
             .map_err(db_error)?;
@@ -1512,118 +1610,22 @@ impl Database {
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(db_error)?;
-        let (node_type, total_video_count, cover_source, cover_path): (
-            String,
-            i64,
-            String,
-            Option<String>,
-        ) = transaction
-            .query_row(
-                "SELECT node_type,total_video_count,cover_source,cover_cache_path
-                 FROM nodes WHERE id=?1",
-                [node_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-            )
-            .optional()
-            .map_err(db_error)?
-            .ok_or_else(|| "目录节点不存在。".to_string())?;
-        let node_type = NodeType::from_db(&node_type);
-        if !(node_type.is_work() || (node_type == NodeType::Container && total_video_count > 0)) {
-            return Err("只有作品或包含视频的系列可以绑定 Bangumi。".into());
-        }
-        let previous_subject = transaction
-            .query_row(
-                "SELECT provider_subject_id FROM metadata_bindings
-                 WHERE node_id=?1 AND provider='BANGUMI'",
-                [node_id],
-                |row| row.get::<_, i64>(0),
-            )
-            .optional()
-            .map_err(db_error)?;
-        if expected_subject.is_some_and(|expected| previous_subject != expected) {
-            return Ok(ConditionalBindingSave::Stale);
-        }
-        let cleared_path = if previous_subject != Some(subject.subject_id)
-            && CoverSource::from_db(&cover_source) == CoverSource::Bangumi
-        {
-            transaction
-                .execute(
-                    "UPDATE nodes SET cover_source='PLACEHOLDER',cover_cache_path=NULL,
-                     updated_at=CURRENT_TIMESTAMP WHERE id=?1",
-                    [node_id],
-                )
-                .map_err(db_error)?;
-            cover_path.map(PathBuf::from)
-        } else {
-            None
-        };
-        transaction
-            .execute(
-                "INSERT INTO metadata_bindings(
-                    node_id, provider, provider_subject_id, provider_subject_type,
-                    provider_title, provider_title_cn,
-                    provider_title_en, provider_title_ja, provider_title_ko, provider_date,
-                    provider_image_url, bound_at, updated_at, cover_download_error
-                 ) VALUES (?1, 'BANGUMI', ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
-                    CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, NULL)
-                 ON CONFLICT(node_id, provider) DO UPDATE SET
-                    provider_subject_id=excluded.provider_subject_id,
-                    provider_subject_type=excluded.provider_subject_type,
-                    provider_title=excluded.provider_title,
-                    provider_title_cn=excluded.provider_title_cn,
-                    provider_title_en=excluded.provider_title_en,
-                    provider_title_ja=excluded.provider_title_ja,
-                    provider_title_ko=excluded.provider_title_ko,
-                    provider_date=excluded.provider_date,
-                    provider_image_url=excluded.provider_image_url,
-                    cover_download_error=NULL,
-                    updated_at=CURRENT_TIMESTAMP",
-                params![
-                    node_id,
-                    subject.subject_id,
-                    subject.subject_type,
-                    subject.title,
-                    subject.title_cn,
-                    subject.title_en,
-                    subject.title_ja,
-                    subject.title_ko,
-                    subject.date,
-                    subject.image_url
-                ],
-            )
-            .map_err(db_error)?;
-        if previous_subject != Some(subject.subject_id) || replacement_aliases.is_some() {
-            transaction
-                .execute(
-                    "DELETE FROM confirmed_title_aliases WHERE source_node_id=?1",
-                    [node_id],
-                )
-                .map_err(db_error)?;
-        }
-        if let Some(aliases) = replacement_aliases {
-            {
-                let mut statement = transaction
-                    .prepare(
-                        "INSERT INTO confirmed_title_aliases(
-                            normalized_alias,original_alias,subject_id,subject_type,source_node_id
-                         ) VALUES(?1,?2,?3,?4,?5)",
-                    )
-                    .map_err(db_error)?;
-                for (original_alias, normalized_alias) in aliases {
-                    statement
-                        .execute(params![
-                            normalized_alias,
-                            original_alias,
-                            subject.subject_id,
-                            subject.subject_type,
-                            node_id,
-                        ])
-                        .map_err(db_error)?;
-                }
-            }
+        let result = save_binding_conn(
+            &transaction,
+            node_id,
+            subject,
+            expected_subject,
+            replacement_aliases,
+        )?;
+        if matches!(result, ConditionalBindingSave::Applied(_)) {
+            crate::logical_works::LogicalWorkIndex::reclassify_related(
+                &transaction,
+                &[node_id],
+                false,
+            )?;
         }
         transaction.commit().map_err(db_error)?;
-        Ok(ConditionalBindingSave::Applied(cleared_path))
+        Ok(result)
     }
 
     /// Updates cover status only if the binding still points at the automatic Subject and the
@@ -1707,40 +1709,162 @@ impl Database {
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(db_error)?;
-        let (cover_source, cover_path): (String, Option<String>) = transaction
-            .query_row(
-                "SELECT cover_source,cover_cache_path FROM nodes WHERE id=?1",
-                [node_id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .optional()
-            .map_err(db_error)?
-            .ok_or_else(|| "目录节点不存在。".to_string())?;
-        transaction
-            .execute(
-                "DELETE FROM metadata_bindings WHERE node_id=?1 AND provider='BANGUMI'",
-                [node_id],
-            )
-            .map_err(db_error)?;
-        transaction
-            .execute(
-                "DELETE FROM confirmed_title_aliases WHERE source_node_id=?1",
-                [node_id],
-            )
-            .map_err(db_error)?;
-        let path = if CoverSource::from_db(&cover_source) == CoverSource::Bangumi {
-            transaction
-                .execute(
-                    "UPDATE nodes SET cover_source='PLACEHOLDER', cover_cache_path=NULL, updated_at=CURRENT_TIMESTAMP WHERE id=?1",
-                    [node_id],
-                )
-                .map_err(db_error)?;
-            cover_path.map(PathBuf::from)
-        } else {
-            None
-        };
+        let path = clear_binding_conn(&transaction, node_id)?;
+        crate::logical_works::LogicalWorkIndex::reclassify_related(
+            &transaction,
+            &[node_id],
+            false,
+        )?;
         transaction.commit().map_err(db_error)?;
         Ok(path)
+    }
+
+    pub fn validate_work_target(
+        &self,
+        target: &crate::models::WorkTarget,
+    ) -> AppResult<Vec<MediaNode>> {
+        self.read_snapshot(|connection| validate_work_target_conn(connection, target))
+    }
+
+    pub fn change_work_binding(
+        &self,
+        target: &crate::models::WorkTarget,
+        subject: Option<&crate::models::BangumiSubject>,
+    ) -> AppResult<WorkBindingChange> {
+        let mut connection = self.connect()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(db_error)?;
+        let sources = validate_work_target_conn(&transaction, target)?;
+        let mut paths = Vec::new();
+        let index = crate::logical_works::LogicalWorkIndex::load(&transaction)?;
+        for node in sources {
+            let path = if let Some(subject) = subject {
+                let names = index
+                    .owned_nodes(node.id)
+                    .into_iter()
+                    .flat_map(|id| {
+                        index
+                            .videos
+                            .get(&id)
+                            .into_iter()
+                            .flatten()
+                            .map(|file| file.file_name.clone())
+                    })
+                    .collect::<Vec<_>>();
+                let evidence = crate::title_extractor::build_match_evidence(
+                    &node.folder_name,
+                    &node.display_name,
+                    None,
+                    &names,
+                );
+                let aliases = sanitize_confirmed_title_aliases(
+                    &crate::title_extractor::confirmed_alias_candidates(&evidence),
+                );
+                match save_binding_conn(&transaction, node.id, subject, None, Some(&aliases))? {
+                    ConditionalBindingSave::Applied(path) => path,
+                    ConditionalBindingSave::Stale => return Err("WORK_TARGET_STALE".into()),
+                }
+            } else {
+                clear_binding_conn(&transaction, node.id)?
+            };
+            if let Some(path) = path {
+                paths.push(path);
+            }
+        }
+        crate::logical_works::LogicalWorkIndex::reclassify_related(
+            &transaction,
+            &target.source_node_ids,
+            false,
+        )?;
+        let cover_target = capture_work_sources_conn(&transaction, &target.source_node_ids)?;
+        transaction.commit().map_err(db_error)?;
+        Ok(WorkBindingChange {
+            previous_paths: paths,
+            cover_target,
+        })
+    }
+
+    #[cfg(test)]
+    pub fn capture_work_sources(&self, ids: &[i64]) -> AppResult<crate::models::WorkTarget> {
+        self.read_snapshot(|connection| capture_work_sources_conn(connection, ids))
+    }
+
+    #[cfg(test)]
+    pub fn apply_work_cover(
+        &self,
+        target: &crate::models::WorkTarget,
+        subject: &crate::models::BangumiSubject,
+        path: Option<&Path>,
+        error: Option<&str>,
+        retry_only: bool,
+    ) -> AppResult<Vec<PathBuf>> {
+        self.apply_work_cover_with_failures(target, subject, path, error, retry_only, &[])
+    }
+
+    pub fn apply_work_cover_with_failures(
+        &self,
+        target: &crate::models::WorkTarget,
+        subject: &crate::models::BangumiSubject,
+        path: Option<&Path>,
+        error: Option<&str>,
+        retry_only: bool,
+        failed_source_ids: &[i64],
+    ) -> AppResult<Vec<PathBuf>> {
+        let mut connection = self.connect()?;
+        let tx = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(db_error)?;
+        // Binding may itself merge ownership boundaries. Cover writes still use exactly the
+        // original selected Nodes; retries must validate the complete current logical group.
+        let sources = if retry_only {
+            validate_work_target_conn(&tx, target)?
+        } else {
+            normalize_work_source_ids(&target.source_node_ids)?
+                .into_iter()
+                .map(|id| get_node_conn(&tx, id).map_err(|_| "WORK_TARGET_STALE".to_string()))
+                .collect::<AppResult<Vec<_>>>()?
+        };
+        let index = crate::logical_works::LogicalWorkIndex::load(&tx)?;
+        if crate::works::target_for_index(&sources, &index) != *target
+            || failed_source_ids
+                .iter()
+                .any(|id| !target.source_node_ids.contains(id))
+            || sources.iter().any(|node| {
+                node.binding.as_ref().is_none_or(|binding| {
+                    (binding.provider_subject_type, binding.provider_subject_id)
+                        != (subject.subject_type, subject.subject_id)
+                })
+            })
+        {
+            return Err("WORK_TARGET_STALE".into());
+        }
+        let mut old_paths = Vec::new();
+        for node in sources.into_iter().filter(|node| {
+            node.cover_source != CoverSource::Manual
+                && (!retry_only
+                    || failed_source_ids.contains(&node.id)
+                    || node
+                        .cover_cache_path
+                        .as_ref()
+                        .is_none_or(|path| !crate::cache::cached_cover_is_valid(Path::new(path)))
+                    || node
+                        .binding
+                        .as_ref()
+                        .is_some_and(|binding| binding.cover_download_error.is_some()))
+        }) {
+            if let Some(path) = path {
+                tx.execute("UPDATE nodes SET cover_source='BANGUMI',cover_cache_path=?1,updated_at=CURRENT_TIMESTAMP WHERE id=?2",params![path.to_string_lossy(),node.id]).map_err(db_error)?;
+                if let Some(old) = node.cover_cache_path {
+                    if Path::new(&old) != path {
+                        old_paths.push(PathBuf::from(old));
+                    }
+                }
+            }
+            tx.execute("UPDATE metadata_bindings SET cover_download_error=?1,updated_at=CURRENT_TIMESTAMP WHERE node_id=?2 AND provider='BANGUMI'",params![error,node.id]).map_err(db_error)?;
+        }
+        tx.commit().map_err(db_error)?;
+        Ok(old_paths)
     }
 
     pub fn list_cover_records(&self) -> AppResult<Vec<(i64, CoverSource, PathBuf)>> {
@@ -1869,6 +1993,10 @@ impl Database {
             },
             auto_check_updates: values
                 .get("auto_check_updates")
+                .map(|value| value != "false")
+                .unwrap_or(true),
+            auto_scan_on_startup: values
+                .get("auto_scan_on_startup")
                 .map(|value| value != "false")
                 .unwrap_or(true),
         })
@@ -2011,6 +2139,10 @@ impl Database {
                 "auto_check_updates",
                 settings.auto_check_updates.to_string(),
             ),
+            (
+                "auto_scan_on_startup",
+                settings.auto_scan_on_startup.to_string(),
+            ),
         ];
         for (key, value) in values {
             transaction
@@ -2023,6 +2155,30 @@ impl Database {
         }
         transaction.commit().map_err(db_error)?;
         self.get_settings(default_cache_directory)
+    }
+
+    #[cfg(test)]
+    pub fn record_auto_scan_health(
+        &self,
+        root_id: i64,
+        outcome: &str,
+        errors: u64,
+        detail: Option<&str>,
+    ) -> AppResult<()> {
+        self.record_scan_health(root_id, outcome, errors, detail, true)
+    }
+
+    pub fn record_scan_health(
+        &self,
+        root_id: i64,
+        outcome: &str,
+        errors: u64,
+        detail: Option<&str>,
+        automatic: bool,
+    ) -> AppResult<()> {
+        let connection = self.connect()?;
+        connection.execute("INSERT INTO library_scan_health(library_root_id,last_auto_attempt_at,last_success_at,outcome,error_count,detail) VALUES(?1,CASE WHEN ?5 THEN strftime('%Y-%m-%dT%H:%M:%fZ','now') ELSE NULL END,CASE WHEN ?2='SUCCESS' THEN strftime('%Y-%m-%dT%H:%M:%fZ','now') ELSE NULL END,?2,?3,?4) ON CONFLICT(library_root_id) DO UPDATE SET last_auto_attempt_at=COALESCE(excluded.last_auto_attempt_at,library_scan_health.last_auto_attempt_at),last_success_at=COALESCE(excluded.last_success_at,library_scan_health.last_success_at),outcome=excluded.outcome,error_count=excluded.error_count,detail=excluded.detail",params![root_id,outcome,errors,detail,automatic]).map_err(db_error)?;
+        Ok(())
     }
 
     pub fn start_scan_run(&self, scan_id: &str, root_id: i64) -> AppResult<()> {
@@ -2053,7 +2209,7 @@ impl Database {
                 ],
             )
             .map_err(db_error)?;
-        if matches!(progress.status, crate::models::ScanStatus::Completed) {
+        if matches!(progress.status, crate::models::ScanStatus::Completed) && progress.errors == 0 {
             connection
                 .execute(
                     "UPDATE library_roots SET last_scan_at=CURRENT_TIMESTAMP WHERE id=?1",
@@ -2080,6 +2236,227 @@ pub fn default_video_extensions() -> Vec<String> {
         .collect()
 }
 
+fn save_binding_conn(
+    transaction: &Connection,
+    node_id: i64,
+    subject: &crate::models::BangumiSubject,
+    expected_subject: Option<Option<i64>>,
+    replacement_aliases: Option<&[(String, String)]>,
+) -> AppResult<ConditionalBindingSave> {
+    let (node_type, total_video_count, cover_source, cover_path): (
+        String,
+        i64,
+        String,
+        Option<String>,
+    ) = transaction
+        .query_row(
+            "SELECT node_type,total_video_count,cover_source,cover_cache_path
+                 FROM nodes WHERE id=?1",
+            [node_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .optional()
+        .map_err(db_error)?
+        .ok_or_else(|| "目录节点不存在。".to_string())?;
+    let node_type = NodeType::from_db(&node_type);
+    if !(node_type.is_work() || (node_type == NodeType::Container && total_video_count > 0)) {
+        return Err("只有作品或包含视频的系列可以绑定 Bangumi。".into());
+    }
+    let previous_subject = transaction
+        .query_row(
+            "SELECT provider_subject_id FROM metadata_bindings
+                 WHERE node_id=?1 AND provider='BANGUMI'",
+            [node_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()
+        .map_err(db_error)?;
+    if expected_subject.is_some_and(|expected| previous_subject != expected) {
+        return Ok(ConditionalBindingSave::Stale);
+    }
+    let cleared_path = if previous_subject != Some(subject.subject_id)
+        && CoverSource::from_db(&cover_source) == CoverSource::Bangumi
+    {
+        transaction
+            .execute(
+                "UPDATE nodes SET cover_source='PLACEHOLDER',cover_cache_path=NULL,
+                     updated_at=CURRENT_TIMESTAMP WHERE id=?1",
+                [node_id],
+            )
+            .map_err(db_error)?;
+        cover_path.map(PathBuf::from)
+    } else {
+        None
+    };
+    transaction
+            .execute(
+                "INSERT INTO metadata_bindings(
+                    node_id, provider, provider_subject_id, provider_subject_type,
+                    provider_title, provider_title_cn,
+                    provider_title_en, provider_title_ja, provider_title_ko, provider_date,
+                    provider_image_url, bound_at, updated_at, cover_download_error, provider_aliases_json
+                 ) VALUES (?1, 'BANGUMI', ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
+                    CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, NULL, COALESCE((SELECT aliases_json FROM provider_alias_sync WHERE subject_id=?2 AND subject_type=?3),?11))
+                 ON CONFLICT(node_id, provider) DO UPDATE SET
+                    provider_subject_id=excluded.provider_subject_id,
+                    provider_subject_type=excluded.provider_subject_type,
+                    provider_title=excluded.provider_title,
+                    provider_title_cn=excluded.provider_title_cn,
+                    provider_title_en=excluded.provider_title_en,
+                    provider_title_ja=excluded.provider_title_ja,
+                    provider_title_ko=excluded.provider_title_ko,
+                    provider_date=excluded.provider_date,
+                    provider_image_url=excluded.provider_image_url,
+                    provider_aliases_json=excluded.provider_aliases_json,
+                    cover_download_error=NULL,
+                    updated_at=CURRENT_TIMESTAMP",
+                params![
+                    node_id,
+                    subject.subject_id,
+                    subject.subject_type,
+                    subject.title,
+                    subject.title_cn,
+                    subject.title_en,
+                    subject.title_ja,
+                    subject.title_ko,
+                    subject.date,
+                    subject.image_url,
+                    provider_aliases_json(subject)
+                ],
+            )
+            .map_err(db_error)?;
+    if previous_subject != Some(subject.subject_id) || replacement_aliases.is_some() {
+        transaction
+            .execute(
+                "DELETE FROM confirmed_title_aliases WHERE source_node_id=?1",
+                [node_id],
+            )
+            .map_err(db_error)?;
+    }
+    if let Some(aliases) = replacement_aliases {
+        {
+            let mut statement = transaction
+                .prepare(
+                    "INSERT INTO confirmed_title_aliases(
+                            normalized_alias,original_alias,subject_id,subject_type,source_node_id
+                         ) VALUES(?1,?2,?3,?4,?5)",
+                )
+                .map_err(db_error)?;
+            for (original_alias, normalized_alias) in aliases {
+                statement
+                    .execute(params![
+                        normalized_alias,
+                        original_alias,
+                        subject.subject_id,
+                        subject.subject_type,
+                        node_id,
+                    ])
+                    .map_err(db_error)?;
+            }
+        }
+    }
+    Ok(ConditionalBindingSave::Applied(cleared_path))
+}
+
+fn clear_binding_conn(transaction: &Connection, node_id: i64) -> AppResult<Option<PathBuf>> {
+    let (cover_source, cover_path): (String, Option<String>) = transaction
+        .query_row(
+            "SELECT cover_source,cover_cache_path FROM nodes WHERE id=?1",
+            [node_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(db_error)?
+        .ok_or_else(|| "目录节点不存在。".to_string())?;
+    transaction
+        .execute(
+            "DELETE FROM metadata_bindings WHERE node_id=?1 AND provider='BANGUMI'",
+            [node_id],
+        )
+        .map_err(db_error)?;
+    transaction
+        .execute(
+            "DELETE FROM confirmed_title_aliases WHERE source_node_id=?1",
+            [node_id],
+        )
+        .map_err(db_error)?;
+    let path = if CoverSource::from_db(&cover_source) == CoverSource::Bangumi {
+        transaction
+                .execute(
+                    "UPDATE nodes SET cover_source='PLACEHOLDER', cover_cache_path=NULL, updated_at=CURRENT_TIMESTAMP WHERE id=?1",
+                    [node_id],
+                )
+                .map_err(db_error)?;
+        cover_path.map(PathBuf::from)
+    } else {
+        None
+    };
+    Ok(path)
+}
+
+#[derive(Debug)]
+pub struct WorkBindingChange {
+    pub previous_paths: Vec<PathBuf>,
+    pub cover_target: crate::models::WorkTarget,
+}
+
+fn normalize_work_source_ids(ids: &[i64]) -> AppResult<Vec<i64>> {
+    if ids.is_empty()
+        || ids.iter().any(|id| *id <= 0)
+        || ids.windows(2).any(|pair| pair[0] >= pair[1])
+    {
+        return Err("WORK_TARGET_STALE".into());
+    }
+    Ok(ids.to_vec())
+}
+
+fn capture_work_sources_conn(
+    connection: &Connection,
+    ids: &[i64],
+) -> AppResult<crate::models::WorkTarget> {
+    let ids = normalize_work_source_ids(ids)?;
+    let index = crate::logical_works::LogicalWorkIndex::load(connection)?;
+    if ids.len() > index.nodes.len() {
+        return Err("WORK_TARGET_STALE".into());
+    }
+    let sources = ids
+        .into_iter()
+        .map(|id| {
+            index
+                .nodes
+                .get(&id)
+                .cloned()
+                .ok_or_else(|| "WORK_TARGET_STALE".to_string())
+        })
+        .collect::<AppResult<Vec<_>>>()?;
+    Ok(crate::works::target_for_index(&sources, &index))
+}
+
+fn validate_work_target_conn(
+    connection: &Connection,
+    target: &crate::models::WorkTarget,
+) -> AppResult<Vec<MediaNode>> {
+    let ids = normalize_work_source_ids(&target.source_node_ids)?;
+    if ids != target.source_node_ids {
+        return Err("WORK_TARGET_STALE".into());
+    }
+    let index = crate::logical_works::LogicalWorkIndex::load(connection)?;
+    crate::works::groups_from_index(connection, &index)?
+        .into_iter()
+        .find(|group| group.target == *target)
+        .map(|group| group.sources)
+        .ok_or_else(|| "WORK_TARGET_STALE".into())
+}
+
+fn read_scan_health_conn(
+    connection: &Connection,
+    root_id: i64,
+) -> AppResult<Option<crate::models::ScanHealth>> {
+    connection.query_row("SELECT last_auto_attempt_at,last_success_at,outcome,error_count,detail FROM library_scan_health WHERE library_root_id=?1",[root_id],|row|Ok(crate::models::ScanHealth {
+        last_auto_attempt_at:row.get(0)?,last_success_at:row.get(1)?,outcome:row.get(2)?,error_count:row.get(3)?,detail:row.get(4)?,
+    })).optional().map_err(db_error)
+}
+
 fn get_root_conn(connection: &Connection, root_id: i64) -> AppResult<LibraryRoot> {
     connection
         .query_row(
@@ -2098,6 +2475,7 @@ fn get_root_conn(connection: &Connection, root_id: i64) -> AppResult<LibraryRoot
             [root_id],
             |row| {
                 Ok(LibraryRoot {
+                    scan_health: None,
                     id: row.get(0)?,
                     path: row.get(1)?,
                     display_name: row.get(2)?,
@@ -2114,7 +2492,68 @@ fn get_root_conn(connection: &Connection, root_id: i64) -> AppResult<LibraryRoot
         .ok_or_else(|| "资源库不存在。".to_string())
 }
 
-fn get_node_conn(connection: &Connection, node_id: i64) -> AppResult<MediaNode> {
+pub(crate) fn breadcrumbs_conn(
+    connection: &Connection,
+    node_id: i64,
+    include_self: bool,
+) -> AppResult<Vec<BreadcrumbItem>> {
+    let mut items = Vec::new();
+    let mut current = if include_self {
+        Some(node_id)
+    } else {
+        connection
+            .query_row(
+                "SELECT parent_node_id FROM nodes WHERE id=?1",
+                [node_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(db_error)?
+            .flatten()
+    };
+    while let Some(id) = current {
+        let value = connection
+            .query_row(
+                "SELECT parent_node_id, display_name FROM nodes WHERE id=?1",
+                [id],
+                |row| Ok((row.get::<_, Option<i64>>(0)?, row.get::<_, String>(1)?)),
+            )
+            .optional()
+            .map_err(db_error)?;
+        let Some((parent_id, display_name)) = value else {
+            break;
+        };
+        // The node with no parent mirrors LibraryRoot and is intentionally hidden.
+        if parent_id.is_some() {
+            items.push(BreadcrumbItem { id, display_name });
+        }
+        current = parent_id;
+    }
+    items.reverse();
+    Ok(items)
+}
+
+pub(crate) fn ensure_node_visible_conn(connection: &Connection, node_id: i64) -> AppResult<()> {
+    let (exists, hidden): (bool, bool) = connection
+        .query_row(
+            "WITH RECURSIVE ancestors(id,parent_node_id,node_type) AS (
+                 SELECT id,parent_node_id,node_type FROM nodes WHERE id=?1
+                 UNION
+                 SELECT n.id,n.parent_node_id,n.node_type FROM nodes n
+                 JOIN ancestors a ON n.id=a.parent_node_id
+             ) SELECT EXISTS(SELECT 1 FROM ancestors),
+                      EXISTS(SELECT 1 FROM ancestors WHERE node_type='IGNORED')",
+            [node_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(db_error)?;
+    if !exists || hidden {
+        return Err("NODE_NOT_VISIBLE：目录已隐藏或已移除，请返回资源库。".into());
+    }
+    Ok(())
+}
+
+pub(crate) fn get_node_conn(connection: &Connection, node_id: i64) -> AppResult<MediaNode> {
     let mut node = connection
         .query_row(
             &format!("{} WHERE n.id=?1", node_select()),
@@ -2126,10 +2565,11 @@ fn get_node_conn(connection: &Connection, node_id: i64) -> AppResult<MediaNode> 
         .ok_or_else(|| "目录节点不存在。".to_string())?;
     node.binding = get_binding_conn(connection, node.id)?;
     node.user_tags = list_node_tags_conn(connection, node.id)?;
+    hydrate_file_modified_times_conn(connection, std::slice::from_mut(&mut node))?;
     Ok(node)
 }
 
-fn node_select() -> &'static str {
+pub(crate) fn node_select() -> &'static str {
     "SELECT n.id,n.library_root_id,n.parent_node_id,n.absolute_path,n.folder_name,n.display_name,
      n.node_type,n.manual_type_override,n.cover_source,n.cover_cache_path,n.direct_video_count,
      n.child_media_branch_count,n.total_video_count,n.created_at,n.updated_at,n.last_seen_at FROM nodes n"
@@ -2143,47 +2583,15 @@ fn filter_structural_supplementary_match_candidates(
     connection: &Connection,
     nodes: Vec<MediaNode>,
 ) -> AppResult<Vec<MediaNode>> {
-    let mut relevant_parent_ids = nodes
-        .iter()
-        .filter(|node| {
-            !node.manual_type_override
-                && crate::scanner::is_supplementary_directory_name(&node.folder_name)
-        })
-        .filter_map(|node| node.parent_node_id)
-        .collect::<Vec<_>>();
-    relevant_parent_ids.sort_unstable();
-    relevant_parent_ids.dedup();
-    if relevant_parent_ids.is_empty() {
-        return Ok(nodes);
-    }
-
-    let sql = format!(
-        "SELECT id,direct_video_count FROM nodes WHERE id IN ({})",
-        sql_placeholders(relevant_parent_ids.len())
-    );
-    let mut statement = connection.prepare(&sql).map_err(db_error)?;
-    let parent_direct_video_counts = statement
-        .query_map(
-            rusqlite::params_from_iter(relevant_parent_ids.iter()),
-            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
-        )
-        .map_err(db_error)?
-        .collect::<Result<HashMap<_, _>, _>>()
-        .map_err(db_error)?;
-
+    let index = crate::logical_works::LogicalWorkIndex::load(connection)?;
+    let mut sources = index
+        .sources(connection)?
+        .into_iter()
+        .map(|node| (node.id, node))
+        .collect::<HashMap<_, _>>();
     Ok(nodes
         .into_iter()
-        .filter(|node| {
-            let parent_direct_video_count = node
-                .parent_node_id
-                .and_then(|parent_id| parent_direct_video_counts.get(&parent_id).copied())
-                .unwrap_or_default();
-            !crate::scanner::is_automatic_supplementary_child(
-                &node.folder_name,
-                node.manual_type_override,
-                parent_direct_video_count,
-            )
-        })
+        .filter_map(|node| sources.remove(&node.id))
         .collect())
 }
 
@@ -2204,8 +2612,10 @@ fn filter_missing_bound_cover_candidates(nodes: Vec<MediaNode>) -> Vec<MediaNode
         .collect()
 }
 
-fn node_from_row(row: &Row<'_>) -> rusqlite::Result<MediaNode> {
+pub(crate) fn node_from_row(row: &Row<'_>) -> rusqlite::Result<MediaNode> {
     Ok(MediaNode {
+        latest_file_modified_at: None,
+        last_watched_at: None,
         id: row.get(0)?,
         library_root_id: row.get(1)?,
         parent_node_id: row.get(2)?,
@@ -2225,6 +2635,67 @@ fn node_from_row(row: &Row<'_>) -> rusqlite::Result<MediaNode> {
         binding: None,
         user_tags: Vec::new(),
     })
+}
+
+/// Use indexed source timestamps, never Node.updated_at (which also changes on metadata edits).
+/// Traverse relationships in bounded batches; hidden descendants do not affect visible parents.
+fn hydrate_file_modified_times_conn(
+    connection: &Connection,
+    nodes: &mut [MediaNode],
+) -> AppResult<()> {
+    for chunk in nodes.chunks_mut(NODE_METADATA_CHUNK_SIZE) {
+        let sql = format!(
+            "WITH RECURSIVE subtree(owner,id) AS (
+                SELECT id,id FROM nodes WHERE id IN ({})
+                UNION
+                SELECT s.owner,n.id FROM subtree s JOIN nodes n ON n.parent_node_id=s.id
+                WHERE n.node_type<>'IGNORED'
+             ), times(owner,modified,watched) AS (
+                SELECT s.owner,julianday(f.modified_at),NULL FROM subtree s JOIN media_files f ON f.node_id=s.id
+                UNION ALL
+                SELECT s.owner,julianday(f.modified_at),NULL FROM subtree s JOIN resource_files f ON f.node_id=s.id
+                UNION ALL
+                SELECT s.owner,NULL,julianday(w.last_watched_at) FROM subtree s JOIN watch_history w ON w.node_id=s.id
+             ) SELECT owner,strftime('%Y-%m-%dT%H:%M:%fZ',MAX(modified)),strftime('%Y-%m-%dT%H:%M:%fZ',MAX(watched)) FROM times GROUP BY owner",
+            sql_placeholders(chunk.len())
+        );
+        let mut statement = connection.prepare(&sql).map_err(db_error)?;
+        let times = statement
+            .query_map(
+                rusqlite::params_from_iter(chunk.iter().map(|node| node.id)),
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        (
+                            row.get::<_, Option<String>>(1)?,
+                            row.get::<_, Option<String>>(2)?,
+                        ),
+                    ))
+                },
+            )
+            .map_err(db_error)?
+            .collect::<Result<HashMap<_, _>, _>>()
+            .map_err(db_error)?;
+        for node in chunk {
+            node.last_watched_at = times.get(&node.id).and_then(|time| time.1.clone());
+            node.latest_file_modified_at = times.get(&node.id).and_then(|time| time.0.clone());
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn list_children_conn(
+    connection: &Connection,
+    parent_id: i64,
+) -> AppResult<Vec<MediaNode>> {
+    list_nodes_conn(
+        connection,
+        &format!(
+            "{} WHERE n.parent_node_id=?1 AND n.node_type <> 'IGNORED'",
+            node_select()
+        ),
+        parent_id,
+    )
 }
 
 fn list_nodes_conn(
@@ -2271,10 +2742,14 @@ fn load_node_rows_by_ids_conn(
 
 /// Hydrate card-list metadata in bounded batches. The previous per-Node binding and tag lookups
 /// made All Resources and ordinary directory browsing execute 1 + 2N SQL statements.
-fn hydrate_nodes_metadata_conn(connection: &Connection, nodes: &mut [MediaNode]) -> AppResult<()> {
+pub(crate) fn hydrate_nodes_metadata_conn(
+    connection: &Connection,
+    nodes: &mut [MediaNode],
+) -> AppResult<()> {
     if nodes.is_empty() {
         return Ok(());
     }
+    hydrate_file_modified_times_conn(connection, nodes)?;
     for node in nodes.iter_mut() {
         node.binding = None;
         node.user_tags.clear();
@@ -2294,7 +2769,7 @@ fn hydrate_nodes_metadata_conn(connection: &Connection, nodes: &mut [MediaNode])
              b.provider_title_en,b.provider_title_ja,b.provider_title_ko,
              b.provider_date,b.provider_image_url,b.bound_at,b.updated_at,
              CASE WHEN n.cover_source='BANGUMI' THEN n.cover_cache_path ELSE NULL END,
-             b.cover_download_error
+             b.cover_download_error,b.provider_aliases_json
              FROM metadata_bindings b JOIN nodes n ON n.id=b.node_id
              WHERE b.provider='BANGUMI' AND b.node_id IN ({placeholders})"
         );
@@ -2503,14 +2978,14 @@ fn favorite_folder_write_error(error: rusqlite::Error) -> String {
     }
 }
 
-fn media_columns(alias: &str) -> String {
+pub(crate) fn media_columns(alias: &str) -> String {
     format!(
         "{alias}.id,{alias}.node_id,{alias}.absolute_path,{alias}.file_name,{alias}.extension,{alias}.file_size,
          {alias}.modified_at,{alias}.duration_ms,{alias}.width,{alias}.height,{alias}.codec,{alias}.last_seen_at"
     )
 }
 
-fn media_from_row(row: &Row<'_>) -> rusqlite::Result<MediaFile> {
+pub(crate) fn media_from_row(row: &Row<'_>) -> rusqlite::Result<MediaFile> {
     Ok(MediaFile {
         id: row.get(0)?,
         node_id: row.get(1)?,
@@ -2527,7 +3002,7 @@ fn media_from_row(row: &Row<'_>) -> rusqlite::Result<MediaFile> {
     })
 }
 
-fn list_media_conn(connection: &Connection, node_id: i64) -> AppResult<Vec<MediaFile>> {
+pub(crate) fn list_media_conn(connection: &Connection, node_id: i64) -> AppResult<Vec<MediaFile>> {
     let mut statement = connection
         .prepare(&format!(
             "SELECT {} FROM media_files f WHERE f.node_id=?1",
@@ -2564,7 +3039,10 @@ fn resource_from_row(row: &Row<'_>) -> rusqlite::Result<ResourceFile> {
     })
 }
 
-fn list_resources_conn(connection: &Connection, node_id: i64) -> AppResult<Vec<ResourceFile>> {
+pub(crate) fn list_resources_conn(
+    connection: &Connection,
+    node_id: i64,
+) -> AppResult<Vec<ResourceFile>> {
     let mut statement = connection
         .prepare(&format!(
             "SELECT {} FROM resource_files f WHERE f.node_id=?1",
@@ -2588,7 +3066,7 @@ fn get_binding_conn(connection: &Connection, node_id: i64) -> AppResult<Option<M
              b.provider_title_en,b.provider_title_ja,b.provider_title_ko,
              b.provider_date,b.provider_image_url,b.bound_at,b.updated_at,
              CASE WHEN n.cover_source='BANGUMI' THEN n.cover_cache_path ELSE NULL END
-             ,b.cover_download_error
+             ,b.cover_download_error,b.provider_aliases_json
              FROM metadata_bindings b JOIN nodes n ON n.id=b.node_id
              WHERE b.node_id=?1 AND b.provider='BANGUMI'",
             [node_id],
@@ -2616,7 +3094,25 @@ fn binding_from_row(row: &Row<'_>) -> rusqlite::Result<MetadataBinding> {
         updated_at: row.get(13)?,
         cover_cache_path: row.get(14)?,
         cover_download_error: row.get(15)?,
+        provider_aliases: serde_json::from_str(&row.get::<_, String>(16)?).unwrap_or_default(),
     })
+}
+
+// Keep provider text bounded even when a Subject arrives through a manual IPC call.
+fn provider_aliases_json(subject: &crate::models::BangumiSubject) -> String {
+    let mut aliases = Vec::new();
+    for alias in subject.match_aliases.iter().take(32) {
+        let clean: String = alias
+            .chars()
+            .filter(|c| !c.is_control())
+            .take(256)
+            .collect();
+        let clean = clean.trim().to_string();
+        if !clean.is_empty() && !aliases.contains(&clean) {
+            aliases.push(clean);
+        }
+    }
+    serde_json::to_string(&aliases).unwrap_or_else(|_| "[]".into())
 }
 
 fn escape_like(value: &str) -> String {
@@ -2736,6 +3232,14 @@ fn display_path(path: &Path) -> String {
         }
     }
     value.into_owned()
+}
+
+// Windows CI may expose TEMP through an 8.3 alias. Synthetic scan fixtures must use
+// the same long, non-verbatim path spelling as registered Library Roots.
+#[cfg(test)]
+pub(crate) fn test_temp_dir() -> tempfile::TempDir {
+    let parent = std::fs::canonicalize(std::env::temp_dir()).unwrap();
+    tempfile::TempDir::new_in(display_path(&parent)).unwrap()
 }
 
 pub fn natural_cmp(left: &str, right: &str) -> Ordering {
@@ -3089,7 +3593,12 @@ mod tests {
         drop(connection);
 
         for root_filter in [None, Some(first_root.id), Some(second_root.id)] {
-            let expected = legacy_search_reference(&database, query, root_filter);
+            let mut expected = legacy_search_reference(&database, query, root_filter);
+            // Every fixture Node owns a video with this timestamp. The legacy reader predates
+            // this additive DTO field; retain comparison of every old field and the new value.
+            for hit in &mut expected {
+                hit.node.latest_file_modified_at = Some("2026-08-24T00:00:00.000Z".into());
+            }
             let actual = database.search(query, root_filter).unwrap();
             assert_eq!(
                 serde_json::to_value(&actual).unwrap(),
@@ -3280,6 +3789,217 @@ mod tests {
     }
 
     #[test]
+    fn provider_aliases_persist_and_search_across_roots_without_rebinding() {
+        let temp = TempDir::new().unwrap();
+        let database = Database::new(temp.path().join("aliases.db"));
+        database.migrate().unwrap();
+        let mut roots = Vec::new();
+        for name in ["Anime", "Watching"] {
+            let path = temp.path().join(name);
+            fs::create_dir(&path).unwrap();
+            roots.push(database.add_root(&path, None).unwrap());
+        }
+        let connection = database.connect().unwrap();
+        for (id, root) in [(1, &roots[0]), (2, &roots[1]), (3, &roots[1])] {
+            connection.execute("INSERT INTO nodes(id,library_root_id,absolute_path,folder_name,display_name,node_type) VALUES(?1,?2,?3,'Folder','Folder','WORK')", params![id,root.id,format!("fixture-{id}")]).unwrap();
+        }
+        let mut subject = test_bangumi_subject(174584, 2, "フリップフラッパーズ");
+        subject.title_cn = Some("轻拍翻转小魔女".into());
+        subject.match_aliases = vec![
+            "Flip Flappers".into(),
+            "Flip Flappers".into(),
+            "  フリフラ  ".into(),
+            "100%_literal".into(),
+        ];
+        database.save_confirmed_binding(2, &subject).unwrap();
+        database.save_binding_if_absent(3, &subject).unwrap();
+        for query in ["轻拍", "flip", "フリフラ", "100%_"] {
+            let hits = database.search(query, None).unwrap();
+            assert_eq!(
+                hits.iter().map(|h| h.node.id).collect::<Vec<_>>(),
+                vec![2, 3]
+            );
+            assert!(database
+                .search(query, Some(roots[0].id))
+                .unwrap()
+                .is_empty());
+            assert_eq!(database.search(query, Some(roots[1].id)).unwrap().len(), 2);
+        }
+        assert!(database.search("100%X", None).unwrap().is_empty());
+        assert_eq!(
+            database
+                .get_node(2)
+                .unwrap()
+                .binding
+                .unwrap()
+                .provider_aliases
+                .len(),
+            3
+        );
+        // Sync updates every still-matching source, preserving a different binding chosen meanwhile.
+        database
+            .save_confirmed_binding(3, &test_bangumi_subject(99, 2, "Other"))
+            .unwrap();
+        subject.match_aliases = vec!["New official alias".into()];
+        database.complete_provider_alias_sync(&subject).unwrap();
+        assert_eq!(database.search("New official", None).unwrap().len(), 1);
+        assert_eq!(
+            database
+                .get_binding(3)
+                .unwrap()
+                .unwrap()
+                .provider_subject_id,
+            99
+        );
+        assert!(database.search("flip", None).unwrap().is_empty());
+        subject.match_aliases = vec!["Updated detail alias".into()];
+        database.update_binding_if_subject(2, &subject).unwrap();
+        assert_eq!(database.search("Updated detail", None).unwrap().len(), 1);
+        database.migrate().unwrap();
+        assert_eq!(
+            database.get_binding(2).unwrap().unwrap().provider_aliases,
+            subject.match_aliases
+        );
+    }
+
+    #[test]
+    fn file_update_times_aggregate_visible_sources_and_ignore_index_edits() {
+        let temp = TempDir::new().unwrap();
+        let root_path = temp.path().join("library");
+        fs::create_dir(&root_path).unwrap();
+        let database = Database::new(temp.path().join("times.db"));
+        database.migrate().unwrap();
+        let root = database.add_root(&root_path, None).unwrap();
+        let connection = database.connect().unwrap();
+        for (id, parent, name, kind) in [
+            (1, None, "root", "CONTAINER"),
+            (2, Some(1), "Show - 01.mkv", "WORK"),
+            (3, Some(1), "Show - 02.mkv", "WORK"),
+            (4, Some(2), "hidden", "IGNORED"),
+            (5, Some(1), "empty", "MIXED"),
+        ] {
+            connection.execute("INSERT INTO nodes(id,library_root_id,parent_node_id,absolute_path,folder_name,display_name,node_type) VALUES(?1,?2,?3,?4,?5,?5,?6)",
+                params![id,root.id,parent,root_path.join(name).to_string_lossy(),name.trim_end_matches(".mkv"),kind]).unwrap();
+        }
+        for (node_id, date) in [
+            (2, "2026-09-01T10:00:00+08:00"),
+            (3, "2026-09-02T01:00:00Z"),
+            (4, "2099-01-01T00:00:00Z"),
+        ] {
+            connection.execute("INSERT INTO media_files(node_id,absolute_path,file_name,extension,file_size,modified_at) VALUES(?1,?2,'episode.mkv','mkv',1,?3)",
+                params![node_id,format!("fixture-{node_id}.mkv"),date]).unwrap();
+        }
+        connection.execute("INSERT INTO resource_files(node_id,absolute_path,file_name,extension,file_size,modified_at) VALUES(2,'fixture.ass','subtitles.ass','ass',1,'2026-09-03T00:00:00Z')",[]).unwrap();
+        assert_eq!(
+            database
+                .get_node(1)
+                .unwrap()
+                .latest_file_modified_at
+                .as_deref(),
+            Some("2026-09-03T00:00:00.000Z")
+        );
+        assert_eq!(database.get_node(5).unwrap().latest_file_modified_at, None);
+        assert_eq!(database.get_node(5).unwrap().last_watched_at, None);
+        for (id, time) in [
+            (2, "2026-09-01T12:00:00+08:00"),
+            (3, "2026-09-01T05:00:00Z"),
+            (4, "2099-01-01T00:00:00Z"),
+        ] {
+            connection.execute("INSERT INTO watch_history(node_id,last_watched_at,watch_count) VALUES(?1,?2,1)", params![id,time]).unwrap();
+        }
+        assert_eq!(
+            database.get_node(1).unwrap().last_watched_at.as_deref(),
+            Some("2026-09-01T05:00:00.000Z")
+        );
+        let nodes = database.list_children(1).unwrap();
+        assert_eq!(
+            nodes
+                .iter()
+                .find(|n| n.id == 2)
+                .unwrap()
+                .latest_file_modified_at
+                .as_deref(),
+            Some("2026-09-03T00:00:00.000Z")
+        );
+        let groups = crate::works::group_works(
+            nodes
+                .into_iter()
+                .filter(|n| n.node_type.is_work())
+                .collect(),
+        );
+        assert_eq!(groups.len(), 1);
+        assert_eq!(
+            groups[0].node.last_watched_at.as_deref(),
+            Some("2026-09-01T05:00:00.000Z")
+        );
+        assert_eq!(
+            groups[0].node.latest_file_modified_at.as_deref(),
+            Some("2026-09-03T00:00:00.000Z")
+        );
+        connection
+            .execute(
+                "UPDATE nodes SET display_name='edited title',updated_at='2100-01-01' WHERE id=2",
+                [],
+            )
+            .unwrap();
+        assert_eq!(
+            database
+                .get_node(2)
+                .unwrap()
+                .latest_file_modified_at
+                .as_deref(),
+            Some("2026-09-03T00:00:00.000Z")
+        );
+        connection
+            .execute("DELETE FROM resource_files WHERE node_id=2", [])
+            .unwrap();
+        assert_eq!(
+            database
+                .get_node(2)
+                .unwrap()
+                .latest_file_modified_at
+                .as_deref(),
+            Some("2026-09-01T02:00:00.000Z")
+        );
+        assert_eq!(
+            database
+                .get_node(1)
+                .unwrap()
+                .latest_file_modified_at
+                .as_deref(),
+            Some("2026-09-02T01:00:00.000Z")
+        );
+        for (scope, sort) in [
+            (CollectionSortScope::All, CollectionSort::ModifiedDesc),
+            (CollectionSortScope::Browse, CollectionSort::ModifiedAsc),
+            (CollectionSortScope::Favorites, CollectionSort::ModifiedDesc),
+        ] {
+            database
+                .update_collection_sort_preference(scope, sort)
+                .unwrap();
+        }
+        let preferences = database.get_collection_sort_preferences().unwrap();
+        assert_eq!(preferences.all, CollectionSort::ModifiedDesc);
+        assert_eq!(preferences.browse, CollectionSort::ModifiedAsc);
+        assert_eq!(preferences.favorites, CollectionSort::ModifiedDesc);
+        database
+            .update_collection_sort_preference(
+                CollectionSortScope::All,
+                CollectionSort::WatchedDesc,
+            )
+            .unwrap();
+        database
+            .update_collection_sort_preference(
+                CollectionSortScope::Browse,
+                CollectionSort::WatchedAsc,
+            )
+            .unwrap();
+        let preferences = database.get_collection_sort_preferences().unwrap();
+        assert_eq!(preferences.all, CollectionSort::WatchedDesc);
+        assert_eq!(preferences.browse, CollectionSort::WatchedAsc);
+    }
+
+    #[test]
     fn library_roots_reject_equal_ancestor_and_descendant_paths() {
         let temp = TempDir::new().unwrap();
         let registered = temp.path().join("Library");
@@ -3422,7 +4142,10 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(versions, 10);
+        assert_eq!(versions, 14);
+        connection
+            .prepare("SELECT library_root_id,snapshot_json FROM library_scan_snapshots")
+            .unwrap();
         let recognition_mode: String = connection
             .query_row(
                 "SELECT recognition_mode FROM library_roots WHERE id=1",
@@ -4186,6 +4909,82 @@ mod tests {
     }
 
     #[test]
+    fn hidden_entries_include_nested_and_resource_only_nodes_and_restore_preserves_metadata() {
+        let temp = TempDir::new().unwrap();
+        let root_path = temp.path().join("library");
+        let work_path = root_path.join("作品");
+        fs::create_dir_all(&work_path).unwrap();
+        let sentinel = work_path.join("01.mkv");
+        fs::write(&sentinel, b"source remains read only").unwrap();
+        let database = Database::new(temp.path().join("hidden.db"));
+        database.migrate().unwrap();
+        let root = database.add_root(&root_path, None).unwrap();
+        let connection = database.connect().unwrap();
+        let insert = |parent: Option<i64>, path: &Path, name: &str| {
+            connection.execute(
+                "INSERT INTO nodes(library_root_id,parent_node_id,absolute_path,folder_name,display_name,node_type)
+                 VALUES(?1,?2,?3,?4,?4,'CONTAINER')",
+                params![root.id, parent, path.to_string_lossy(), name],
+            ).unwrap();
+            connection.last_insert_rowid()
+        };
+        let root_id = insert(None, &root_path, "library");
+        let work_id = insert(Some(root_id), &work_path, "自定义名称");
+        let child_id = insert(Some(work_id), &work_path.join("Extras"), "Hidden resources");
+        let visible_id = insert(Some(work_id), &work_path.join("Other"), "Visible child");
+        connection.execute(
+            "INSERT INTO media_files(node_id,absolute_path,file_name,extension,file_size,modified_at)
+             VALUES(?1,?2,'01.mkv','mkv',24,'2026-01-01')",
+            params![work_id, sentinel.to_string_lossy()],
+        ).unwrap();
+        drop(connection);
+        database.reset_node_type(work_id).unwrap();
+        database
+            .save_confirmed_binding(work_id, &test_bangumi_subject(42, 2, "Bound Work"))
+            .unwrap();
+        let tag = database
+            .create_or_assign_user_tag(work_id, "Keep tag")
+            .unwrap();
+        let favorite = database.create_favorite_folder("Keep favorite").unwrap();
+        database
+            .batch_add_nodes_to_favorite(favorite.id, &[work_id])
+            .unwrap();
+        database.set_node_type(work_id, NodeType::Ignored).unwrap();
+        database.set_node_type(child_id, NodeType::Ignored).unwrap();
+        let hidden = database.list_hidden_nodes().unwrap();
+        assert_eq!(hidden.len(), 2);
+        assert!(hidden
+            .iter()
+            .any(|node| node.id == child_id && node.total_video_count == 0));
+        assert!(!hidden
+            .iter()
+            .any(|node| node.id == root_id || node.id == visible_id));
+        let before = hidden.iter().find(|node| node.id == work_id).unwrap();
+        assert_eq!(before.binding.as_ref().unwrap().provider_subject_id, 42);
+        assert_eq!(before.user_tags[0].id, tag.id);
+        let restored = database.reset_node_type(work_id).unwrap();
+        assert_eq!(restored.node_type, NodeType::AutoWork);
+        assert!(!restored.manual_type_override);
+        assert_eq!(restored.display_name, before.display_name);
+        assert_eq!(restored.cover_cache_path, before.cover_cache_path);
+        assert_eq!(restored.binding.as_ref().unwrap().provider_subject_id, 42);
+        assert_eq!(restored.user_tags[0].id, tag.id);
+        assert_eq!(
+            database.list_favorite_folder_nodes(favorite.id).unwrap()[0].id,
+            work_id
+        );
+        assert_eq!(database.list_children(root_id).unwrap()[0].id, work_id);
+        assert_eq!(database.list_hidden_nodes().unwrap()[0].id, child_id);
+        assert_eq!(fs::read(&sentinel).unwrap(), b"source remains read only");
+
+        // The application index remains usable when a drive disappears.
+        fs::rename(&root_path, temp.path().join("offline-library")).unwrap();
+        assert_eq!(database.list_hidden_nodes().unwrap()[0].id, child_id);
+        database.reset_node_type(child_id).unwrap();
+        assert!(database.list_hidden_nodes().unwrap().is_empty());
+    }
+
+    #[test]
     fn user_tag_names_reject_empty_and_overlong_values() {
         assert!(normalize_tag_name(" \t\n ").is_err());
         assert!(normalize_tag_name(&"a".repeat(41)).is_err());
@@ -4364,8 +5163,8 @@ mod tests {
                 .execute(
                     "INSERT INTO nodes(
                         library_root_id,parent_node_id,absolute_path,folder_name,display_name,
-                        node_type,total_video_count
-                     ) VALUES(?1,?2,?3,?4,?4,?5,?6)",
+                        node_type,total_video_count,direct_video_count
+                     ) VALUES(?1,?2,?3,?4,?4,?5,?6,CASE WHEN ?5 IN ('WORK','AUTO_WORK') THEN ?6 ELSE 0 END)",
                     params![
                         root.id,
                         hidden_root_id,
@@ -4381,7 +5180,7 @@ mod tests {
         let auto_work_id = insert_node("Auto", "AUTO_WORK", 1);
         let bound_work_id = insert_node("Bound", "WORK", 1);
         let mixed_id = insert_node("Mixed", "MIXED", 2);
-        let video_container_id = insert_node("Series", "CONTAINER", 4);
+        let _video_container_id = insert_node("Series", "CONTAINER", 4);
         let _resource_container_id = insert_node("Resources", "CONTAINER", 0);
         let ignored_parent_id = insert_node("Ignored branch", "IGNORED", 1);
         connection
@@ -4424,7 +5223,7 @@ mod tests {
             .into_iter()
             .map(|node| node.id)
             .collect::<Vec<_>>();
-        assert_eq!(candidate_ids, vec![auto_work_id, video_container_id]);
+        assert_eq!(candidate_ids, vec![auto_work_id]);
 
         let all_unbound_ids = database
             .list_bangumi_match_candidates(None, false)
@@ -4432,17 +5231,14 @@ mod tests {
             .into_iter()
             .map(|node| node.id)
             .collect::<Vec<_>>();
-        assert_eq!(all_unbound_ids, vec![auto_work_id, video_container_id]);
+        assert_eq!(all_unbound_ids, vec![auto_work_id]);
         let all_including_bound_ids = database
             .list_bangumi_match_candidates(None, true)
             .unwrap()
             .into_iter()
             .map(|node| node.id)
             .collect::<Vec<_>>();
-        assert_eq!(
-            all_including_bound_ids,
-            vec![auto_work_id, bound_work_id, video_container_id]
-        );
+        assert_eq!(all_including_bound_ids, vec![auto_work_id, bound_work_id]);
         let selected_ids = database
             .list_bangumi_match_candidates(Some(&[mixed_id, bound_work_id, bound_work_id]), true)
             .unwrap();
@@ -4714,7 +5510,7 @@ mod tests {
     }
 
     #[test]
-    fn bangumi_candidates_exclude_only_automatic_supplements_of_direct_video_parents() {
+    fn automatic_matching_uses_owned_work_sources_and_explicit_boundaries() {
         let temp = TempDir::new().unwrap();
         let root_path = temp.path().join("library");
         std::fs::create_dir_all(&root_path).unwrap();
@@ -4784,7 +5580,7 @@ mod tests {
         assert!(!scan_candidate_ids.contains(&automatic_sp_id));
         assert!(scan_candidate_ids.contains(&direct_video_parent_id));
         assert!(scan_candidate_ids.contains(&manual_ova_id));
-        assert!(scan_candidate_ids.contains(&standalone_specials_id));
+        assert!(!scan_candidate_ids.contains(&standalone_specials_id));
 
         let existing_candidate_ids = database
             .list_bangumi_match_candidates(
@@ -4795,10 +5591,7 @@ mod tests {
             .into_iter()
             .map(|node| node.id)
             .collect::<Vec<_>>();
-        assert_eq!(
-            existing_candidate_ids,
-            vec![manual_ova_id, standalone_specials_id]
-        );
+        assert_eq!(existing_candidate_ids, vec![manual_ova_id]);
 
         // Structural automatic exclusion must not remove the existing manual search/bind path.
         let automatic_sp = database.get_node(automatic_sp_id).unwrap();
@@ -4827,10 +5620,16 @@ mod tests {
                 .provider_subject_id,
             manually_confirmed_subject.subject_id
         );
-        assert!(database
-            .list_bangumi_match_candidates(Some(&[automatic_sp_id]), true)
-            .unwrap()
-            .is_empty());
+        assert_eq!(
+            database
+                .list_bangumi_match_candidates(Some(&[automatic_sp_id]), true)
+                .unwrap()
+                .iter()
+                .map(|node| node.id)
+                .collect::<Vec<_>>(),
+            vec![automatic_sp_id],
+            "an explicit standalone binding establishes an independent source boundary"
+        );
     }
 
     #[test]
@@ -4990,6 +5789,7 @@ mod tests {
         let defaults = database.get_settings(&default_cache).unwrap();
         assert_eq!(defaults.language, "zh-CN");
         assert_eq!(defaults.theme, "system");
+        assert!(defaults.auto_scan_on_startup);
         assert_eq!(
             defaults.cover_cache_directory,
             default_cache.to_string_lossy()
@@ -5004,6 +5804,7 @@ mod tests {
             language: "ja-JP".into(),
             theme: "dark".into(),
             auto_check_updates: false,
+            auto_scan_on_startup: false,
         };
         database.update_settings(&updated, &default_cache).unwrap();
         let reopened = Database::new(database_path)
@@ -5012,6 +5813,7 @@ mod tests {
         assert_eq!(reopened.language, "ja-JP");
         assert_eq!(reopened.theme, "dark");
         assert!(!reopened.auto_check_updates);
+        assert!(!reopened.auto_scan_on_startup);
         assert_eq!(
             reopened.cover_cache_directory,
             custom_cache.to_string_lossy()
@@ -5215,7 +6017,7 @@ mod tests {
 
     #[test]
     fn cover_read_context_returns_only_cover_and_root_paths() {
-        let temp = TempDir::new().unwrap();
+        let temp = test_temp_dir();
         let root_path = temp.path().join("library");
         let cache_path = temp.path().join("cache/manual/node.png");
         std::fs::create_dir_all(&root_path).unwrap();

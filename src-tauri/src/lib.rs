@@ -1,16 +1,22 @@
+mod alias_sync;
 mod auto_match;
 mod bangumi;
 mod cache;
 mod commands;
 mod db;
+mod incremental;
+mod logical_works;
 pub mod models;
 mod player;
 pub mod portable_update;
+#[cfg(test)]
+mod review_tests;
 mod scanner;
 mod single_instance;
 mod title_extractor;
 pub mod update;
 mod window_state;
+mod works;
 
 use std::{
     io,
@@ -168,6 +174,7 @@ pub fn run() {
             commands::update_library_root_name,
             commands::open_library_root_in_explorer,
             commands::get_all_resources,
+            commands::list_hidden_nodes,
             commands::list_recently_watched,
             commands::list_favorite_folders,
             commands::create_favorite_folder,
@@ -178,6 +185,7 @@ pub fn run() {
             commands::batch_remove_nodes_from_favorite,
             commands::browse_library,
             commands::get_node_detail,
+            commands::get_work_detail,
             commands::search_library,
             commands::start_scan,
             commands::match_existing_content,
@@ -199,7 +207,11 @@ pub fn run() {
             commands::get_bangumi_search_prefill,
             commands::search_bangumi,
             commands::bind_bangumi,
+            commands::bind_work_bangumi,
+            commands::retry_work_bangumi_cover,
+            commands::clear_work_bangumi_binding,
             commands::retry_bangumi_cover,
+            commands::sync_pending_bangumi_aliases,
             commands::clear_bangumi_binding,
             commands::set_container_cover,
             commands::clear_node_cover,
@@ -216,6 +228,7 @@ pub fn run() {
             commands::open_resource_in_explorer,
             commands::open_cover_cache_directory,
             commands::open_external_url,
+            commands::open_bangumi_subject,
             commands::get_cache_stats,
             commands::clear_cover_cache,
             commands::rebuild_index,

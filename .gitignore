@@ -5,6 +5,8 @@ dist/
 .cargo-home/
 .npm-cache/
 .tmp/
+.playwright-cli/
+output/playwright/
 .git-codex-local/
 .agents/
 .codex/
