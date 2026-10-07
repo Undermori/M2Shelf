@@ -111,6 +111,12 @@ def check_migrations() -> None:
         "0012_provider_aliases.sql",
         "0013_alias_sync.sql",
         "0014_scan_health.sql",
+        "0015_comic_library_kind.sql",
+        "0016_comics.sql",
+        "0017_comic_binding_types.sql",
+        "0018_document_books.sql",
+        "0019_ebook_library.sql",
+        "0020_book_file_recognition.sql",
     ]
     if [path.name for path in migration_paths] != expected:
         fail(f"expected exactly migrations {expected}, got {[p.name for p in migration_paths]}")
@@ -140,13 +146,18 @@ def check_migrations() -> None:
                 "confirmed_title_aliases",
                 "library_scan_snapshots",
                 "library_scan_health",
+                "comic_books", "comic_pages", "comic_reading_progress", "comic_bookmarks",
             }
             missing = required_tables - table_names(connection)
             if missing:
                 fail(f"migration schema missing tables: {sorted(missing)}")
 
             required_columns = {
-                "library_roots": {"recognition_mode"},
+                "library_roots": {"recognition_mode", "media_kind"},
+                "comic_books": {"node_id", "source_path", "source_kind", "page_count", "index_error", "revision"},
+                "comic_pages": {"comic_book_id", "page_index", "source_locator", "crc32"},
+                "comic_reading_progress": {"comic_book_id", "last_page_index", "last_read_at"},
+                "comic_bookmarks": {"comic_book_id", "page_index"},
                 "library_scan_health": {
                     "library_root_id", "last_auto_attempt_at", "last_success_at",
                     "outcome", "error_count", "detail",
@@ -160,6 +171,7 @@ def check_migrations() -> None:
                     "direct_video_count",
                     "child_media_branch_count",
                     "total_video_count",
+                    "direct_comic_book_count", "child_comic_branch_count", "total_comic_book_count",
                 },
                 "media_files": {
                     "node_id",
@@ -853,6 +865,7 @@ def check_source_safety() -> None:
         "rename_favorite_folder",
         "delete_favorite_folder",
         "batch_remove_nodes_from_favorite",
+        "remove_comic_bookmark",
     }
     dangerous_names = [
         name
@@ -1007,7 +1020,7 @@ def check_bangumi_contract() -> None:
     db = read("src-tauri/src/db.rs")
     required_request_fragments = [
         '"keyword": keyword',
-        '"filter": { "type": SUPPORTED_SUBJECT_TYPES',
+        '"filter": { "type": types',
         '"sort": "match"',
         '"nsfw": false',
     ]
@@ -2656,7 +2669,7 @@ def check_ui_windows_interaction_contract() -> None:
             "watchedAtByNodeId" in recent_page,
             "watchedAt={props.watchedAtByNodeId?.get(node.id)}" in poster_grid,
             'className="media-card-watch-time"' in media_card,
-            't("recent.watchedAt"' in media_card,
+            't("comic.openedAt"' in media_card,
         )
     )
     recent_locale_keys = (
@@ -2669,7 +2682,7 @@ def check_ui_windows_interaction_contract() -> None:
     if not recent_watch_ok or missing_recent_locales:
         fail(f"Recently Watched UI/API/i18n contract is incomplete: {missing_recent_locales}")
     else:
-        passed("Recently Watched sidebar, poster time, API, and four-locale contract")
+        passed("recent activity preserves compatible video API and uses mixed opened copy")
 
     favorite_commands = (
         "listFavoriteFolders",
@@ -2740,11 +2753,15 @@ def check_ui_windows_interaction_contract() -> None:
         (
             'className="about-author-links"' in settings_page,
             "openAuthorLink(bootstrap?.websiteUrl)" in settings_page,
-            "openAuthorLink(bootstrap?.xUrl)" in settings_page,
+            "openAuthorLink(bootstrap?.xUrl)" not in settings_page,
             't("settings.websiteLabel")' in settings_page,
-            't("settings.xLabel")' in settings_page,
-            't("settings.originalAuthor")' in settings_page,
-            't("settings.contributor")' in settings_page,
+            't("settings.xLabel")' not in settings_page,
+            't("settings.specialThanks")' in settings_page,
+            'className="about-credit"' in settings_page,
+            '<dt>{t("settings.specialThanks")}</dt><dd>Juvenile_A</dd>' in settings_page,
+            'className="about-thanks"' not in settings_page,
+            't("settings.originalAuthor")' not in settings_page,
+            't("settings.createdBy")' not in settings_page,
             "Juvenile_A" in settings_page,
             bilibili_url not in settings_page,
             x_url not in settings_page,
@@ -2764,8 +2781,7 @@ def check_ui_windows_interaction_contract() -> None:
         (
             about_locale_values == expected_about_locale_values,
             i18n.count('"settings.websiteLabel"') == 4,
-            i18n.count('"settings.originalAuthor"') == 4,
-            i18n.count('"settings.contributor"') == 4,
+            i18n.count('"settings.specialThanks"') == 4,
             i18n.count('"settings.xLabel": "Undermori · X"') == 4,
             "官网" not in i18n,
         )
@@ -2858,6 +2874,35 @@ def check_ui_windows_interaction_contract() -> None:
     else:
         passed("solid theme backgrounds and vertical-only responsive content scrolling")
 
+    workspace_css = read("src/styles/workspace.css")
+    workspace_style_ok = all((
+        'import "./styles/workspace.css"' in read("src/main.tsx"),
+        '--surface-app: #f5f6f8' in workspace_css,
+        '--surface-app: #18191d' in workspace_css,
+        'flex-basis: 272px' in workspace_css,
+        'flex-basis: 248px' in workspace_css,
+        '.content-scroll.is-settings' in workspace_css,
+        'align-self: flex-start; min-height: 100%' in workspace_css,
+        '.search-toolbar .search-controls' in workspace_css,
+        'max-width: 880px; margin: 24px auto 0' in workspace_css,
+        '.search-field input:focus-visible' in workspace_css,
+        re.search(r'\.settings-layout\s*\{[^}]*max-width:\s*980px;[^}]*margin:\s*0(?:\s+auto)?;', workspace_css) is not None,
+        'settings-savebar' not in read("src/pages/SettingsPage.tsx"),
+        'role="status"' in read("src/pages/SettingsPage.tsx"),
+        ':root[data-theme="dark"]' in workspace_css,
+        '.about-grid .about-credit { grid-column: 1 / -1' in workspace_css,
+        'column-gap: 20px' in workspace_css,
+        'min-height: 0' in workspace_css,
+        '.media-card-grid .quick-bind' in workspace_css,
+        'radial-gradient(' not in workspace_css,
+        'linear-gradient(' not in workspace_css,
+        all(value.strip() == "none" for value in re.findall(r'transform:\s*([^;]+);', workspace_css)),
+    ))
+    if workspace_style_ok:
+        passed("workspace skin preserves artwork, intrinsic headers and independent About credits")
+    else:
+        fail("workspace skin must retain neutral themes, independent credits and non-transformed artwork")
+
     tauri_config = json.loads(read("src-tauri/tauri.conf.json"))
     main_window = tauri_config.get("app", {}).get("windows", [{}])[0]
     app_settings_match = re.search(r"pub struct AppSettings\s*\{(?P<body>.*?)\n\}", rust_models, re.S)
@@ -2936,7 +2981,7 @@ def check_ui_windows_interaction_contract() -> None:
     elif not all(key in media_card for key in ("card.systemWork", "card.systemSeries", "card.systemOtherResources")):
         fail("poster system labels are not limited to Work/Series/Other resources")
     else:
-        passed("poster badges reduced to Work/Series/Other resources with no Bangumi check badge")
+        passed("three structural poster labels retained beneath composed media-kind badges")
 
     css_without_comments = re.sub(r"/\*.*?\*/", "", css, flags=re.DOTALL)
     poster_css_rules: list[tuple[str, dict[str, str]]] = []
@@ -3221,7 +3266,7 @@ def check_durable_context() -> None:
         "User tags",
         "Alt+Left",
         "Per-Monitor V2",
-        "Recently watched",
+        "Recently opened",
         "Favorites",
     ]
     required_context_tokens = [
@@ -3266,6 +3311,37 @@ def check_durable_context() -> None:
         fail(f"durable project context is incomplete: {missing}")
     else:
         passed("durable cross-account/agent project context")
+
+
+def check_comic_contract() -> None:
+    scanner = read("src-tauri/src/comics.rs")
+    reader = read("src-tauri/src/comic_reader.rs")
+    models = read("src-tauri/src/models.rs")
+    migration = read("src-tauri/migrations/0015_comic_library_kind.sql")
+    network = read("src-tauri/src/bangumi.rs")
+    ui = read("src/pages/ComicReaderPage.tsx")
+    cache = read("src/lib/comicReader.ts")
+    translations = read("src/lib/comicMessages.ts")
+    documents = read("src-tauri/src/ebooks.rs")
+    document_ui = read("src/pages/DocumentReaderPage.tsx")
+    checks = {
+        "immutable comic Root and legacy VIDEO default": all(value in migration for value in ("DEFAULT 'VIDEO'", "COMIC", "FOLDER", "CREATE TRIGGER")) and "LibraryMediaKind" in models,
+        "ebook and video scopes preserve legacy roots without rebuilding them": all(value in read("src-tauri/migrations/0019_ebook_library.sql") for value in ("ADD COLUMN", "book_library_kind", "video_subject_scope", "DEFAULT 'MIXED'", "CREATE TRIGGER")) and "DROP TABLE library_roots" not in read("src-tauri/migrations/0019_ebook_library.sql"),
+        "separate bounded comic scanner with no archive extraction": all(value in scanner for value in ("MAX_PAGE_BYTES", "MAX_PAGES", "MAX_ARCHIVE_ENTRIES", "by_index_raw", "last_seen_at", "index_error")) and ".extract(" not in scanner,
+        "binary page IPC and source containment": "tauri::ipc::Response" in read("src-tauri/src/commands.rs") and all(value in reader for value in ("read_snapshot", "GetFinalPathNameByHandleW", "MAX_PAGE_BYTES", "COMIC_PAGE_CHANGED")) and "fs::write" not in reader,
+        "comic progress and bookmarks reject stale book revisions": all(value in reader for value in ("progress_at_revision", "bookmark_at_revision", "expected", "transaction()")),
+        "Bangumi comic queries are Root scoped": "search_for_kind" in network and "LibraryMediaKind::Comic" in network and "&[1]" in network,
+        "reader bounds binary cache and cancels obsolete queued demand": all(value in cache for value in ("128*1024*1024", "MAX_ENTRIES=12", "this.active<2", "demand(", "URL.revokeObjectURL", "dispose()")),
+        "reader virtualizes and flushes actual decoded visible progress": all(value in ui for value in ("shownStart+11", "cache?.peek(index)", "desiredScroll", "pendingProgress", "await flush()", "book.revision")),
+        "independent four-locale comic copy": translations.count('"comic.scanSummary"') == 4 and all(value in translations for value in ("Record<keyof typeof zhCN, string>", "'zh-CN'", "'en-US'", "'ja-JP'", "'ko-KR'")),
+        "local PDF and safe EPUB use indexed revision checked binary reads": all(value in reader for value in ("read_document", "document_format", "book.revision")) and all(value in documents for value in ("XML_LIMIT", "allow_dtd: false", "nodes_limit: 30_000", "COMIC_PAGE_CHANGED")) and "read_book_document" in read("src-tauri/src/commands.rs") and "dangerouslySetInnerHTML" not in document_ui,
+        "large PDF uses bounded native range IPC and viewport-height fitting": all(value in reader for value in ("read_pdf_range", "PDF_CHUNK_BYTES", "SeekFrom::Start", "checked_file")) and all(value in document_ui for value in ("PDFDataRangeTransport", "readPdfRange", "availableHeight/natural.height", "disableAutoFetch:true")),
+        "plain ZIP is an attachment and books share the core file table": 'extension(path) == "cbz"' in scanner and all(value in read("src/components/ComicBookList.tsx") for value in ("media-file-list", "media-file-row", "file-list-heading", "onDoubleClick")),
+        "LTR defaults and permanent non-overlay controls": "direction:'LTR'" in read("src/types/comic.ts") and "hideTimer" not in ui and "position:relative;flex-shrink:0" in read("src/styles/comics.css"),
+        "themed native window controls use scoped permissions": '"decorations": false' in read("src-tauri/tauri.conf.json") and all(value in read("src-tauri/capabilities/default.json") for value in ("allow-minimize", "allow-toggle-maximize", "allow-close", "allow-start-dragging")) and "data-tauri-drag-region" in read("src/components/WindowTitlebar.tsx"),
+    }
+    for description, valid in checks.items():
+        (passed if valid else fail)(description)
 
 
 def main() -> int:
@@ -3329,6 +3405,7 @@ def main() -> int:
     check_brand_release_and_icons()
     check_ui_windows_interaction_contract()
     check_durable_context()
+    check_comic_contract()
 
     for message in PASSES:
         print(f"PASS  {message}")

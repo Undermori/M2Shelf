@@ -7,6 +7,7 @@ import { LoadingState } from "../components/LoadingState";
 import { api, chooseCoverCacheDirectory, choosePlayerExecutable, desktopAvailable } from "../lib/api";
 import { compactPath, errorMessage, formatBytes, formatDate } from "../lib/format";
 import { useI18n } from "../lib/i18n";
+import {defaultComicReaderSettings,type ComicReaderSettings} from '../types/comic';
 
 interface SettingsPageProps {
   roots: LibraryRoot[];
@@ -15,6 +16,7 @@ interface SettingsPageProps {
   onHiddenNodes: () => void;
   onRemoveRoot: (root: LibraryRoot) => void;
   onScanRoot: (root: LibraryRoot) => void;
+  onIgnoreScanWarnings?: (root: LibraryRoot) => void;
   onAppearanceChange: (settings: AppSettings) => number;
   onPersistenceFailure: (failed: AppSettings, rollback: AppSettings | null, message: string, appearanceRevision: number) => void;
   updateDownloadStatus: UpdateDownloadStatus;
@@ -23,15 +25,16 @@ interface SettingsPageProps {
   onSuccess: (message: string) => void;
 }
 
-export function SettingsPage({ roots, bootstrap, onAddRoot, onHiddenNodes, onRemoveRoot, onScanRoot, onAppearanceChange, onPersistenceFailure, updateDownloadStatus, onCheckForUpdate, onError, onSuccess }: SettingsPageProps) {
+export function SettingsPage({ roots, bootstrap, onAddRoot, onHiddenNodes, onRemoveRoot, onScanRoot, onIgnoreScanWarnings, onAppearanceChange, onPersistenceFailure, updateDownloadStatus, onCheckForUpdate, onError, onSuccess }: SettingsPageProps) {
   const { t } = useI18n();
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [cache, setCache] = useState<CacheStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved">("idle");
+  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "fading">("idle");
   const [testing, setTesting] = useState(false);
   const [extensionDraft, setExtensionDraft] = useState("");
+  const reader=settings?.comicReader??defaultComicReaderSettings;
   const persistedSettings = useRef<AppSettings | null>(null);
   const latestSettings = useRef<AppSettings | null>(null);
   const settingsRevision = useRef(0);
@@ -45,6 +48,13 @@ export function SettingsPage({ roots, bootstrap, onAddRoot, onHiddenNodes, onRem
     return () => { mounted.current = false; };
   }, []);
 
+  // A receipt is shown only for an actual save, never for the initial settings read.
+  useEffect(() => {
+    if (saveState !== "saved" && saveState !== "fading") return;
+    const timer = window.setTimeout(() => setSaveState(saveState === "saved" ? "fading" : "idle"), saveState === "saved" ? 3200 : 180);
+    return () => window.clearTimeout(timer);
+  }, [saveState]);
+
   useEffect(() => {
     let active = true;
     if (!desktopAvailable) { setLoading(false); return; }
@@ -54,7 +64,6 @@ export function SettingsPage({ roots, bootstrap, onAddRoot, onHiddenNodes, onRem
         persistedSettings.current = settingsResult.value;
         latestSettings.current = settingsResult.value;
         setSettings(settingsResult.value);
-        setSaveState("saved");
       }
       else onError(errorMessage(settingsResult.reason));
       if (cacheResult.status === "fulfilled") setCache(cacheResult.value);
@@ -76,6 +85,7 @@ export function SettingsPage({ roots, bootstrap, onAddRoot, onHiddenNodes, onRem
       setSaving(true);
       setSaveState("saving");
     }
+    let lastSaveSucceeded = false;
     try {
       while (saveRequested.current) {
         saveRequested.current = false;
@@ -86,6 +96,7 @@ export function SettingsPage({ roots, bootstrap, onAddRoot, onHiddenNodes, onRem
         const previousPersisted = persistedSettings.current;
         try {
           const saved = await api.updateSettings(candidate);
+          lastSaveSucceeded = true;
           persistedSettings.current = saved;
           if (previousPersisted?.coverCacheDirectory !== saved.coverCacheDirectory) {
             try {
@@ -102,6 +113,7 @@ export function SettingsPage({ roots, bootstrap, onAddRoot, onHiddenNodes, onRem
           }
         } catch (error) {
           if (revision !== settingsRevision.current) continue;
+          lastSaveSucceeded = false;
           const rollback = persistedSettings.current;
           settingsRevision.current += 1;
           saveRequested.current = false;
@@ -118,7 +130,7 @@ export function SettingsPage({ roots, bootstrap, onAddRoot, onHiddenNodes, onRem
       saveInFlight.current = false;
       if (mounted.current) {
         setSaving(false);
-        setSaveState("saved");
+        setSaveState(lastSaveSucceeded ? "saved" : "idle");
       }
     }
   };
@@ -185,14 +197,14 @@ export function SettingsPage({ roots, bootstrap, onAddRoot, onHiddenNodes, onRem
   if (loading) return <LoadingState label={t("settings.loading")} />;
   return (
     <section className="settings-page">
-      <header className="settings-header"><p className="eyebrow">{t("brand.name")}</p><h1>{t("settings.title")}</h1><p>{t("settings.description")}</p></header>
+      <header className="settings-header"><p className="eyebrow">{t("brand.name")}</p><div className="settings-title-row"><h1>{t("settings.title")}</h1><span className={`settings-save-status${saveState === "saved" || saveState === "saving" ? " is-visible" : ""}`} role="status" aria-live="polite" aria-atomic="true">{saveState !== "idle" && <><Icon name={saving || saveState === "saving" ? "refresh" : "check"} />{saving || saveState === "saving" ? t("settings.autoSaving") : t("settings.autoSaved")}</>}</span></div><p>{t("settings.description")}</p></header>
       {!desktopAvailable && <div className="preview-banner"><Icon name="info" /><span><strong>{t("settings.previewTitle")}</strong><small>{t("settings.previewDescription")}</small></span></div>}
 
       <div className="settings-layout">
         <section className="settings-section">
           <div className="settings-section-heading"><span className="settings-symbol coral"><Icon name="folder" /></span><div><h2>{t("settings.rootsTitle")}</h2><p>{t("settings.rootsDescription")}</p></div><button className="button secondary" disabled={!desktopAvailable} onClick={onAddRoot} type="button"><Icon name="plus" />{t("settings.addDirectory")}</button></div>
           {roots.length === 0 ? <EmptyState compact icon="folder" title={t("settings.noDirectory")} description={t("settings.noDirectoryDescription")} /> : <div className="settings-root-list">{roots.map((root) => (
-            <article className="settings-root" key={root.id}><span><Icon name="folder-open" /></span><div><strong>{root.displayName}</strong><p title={root.path}>{compactPath(root.path, 74)}</p><small>{t("settings.lastScan", { date: formatDate(root.lastScanAt) })}</small><LibraryScanHealth health={root.scanHealth} /></div><button aria-label={t("settings.scanNamed", { name: root.displayName })} onClick={() => onScanRoot(root)} title={t("settings.scanLibrary")} type="button"><Icon name="refresh" /></button><button className="danger-icon" aria-label={t("settings.removeNamed", { name: root.displayName })} onClick={() => onRemoveRoot(root)} title={t("settings.removeIndexOnly")} type="button"><Icon name="trash" /></button></article>
+            <article className="settings-root" key={root.id}><span><Icon name="folder-open" /></span><div><strong>{root.displayName}</strong><p title={root.path}>{compactPath(root.path, 74)}</p><small>{t(root.mediaKind==='ANIMATION'?'comic.animation':root.mediaKind==='LIVE_ACTION'?'library.liveAction':root.mediaKind==='EBOOK'?'ebook.name':root.mediaKind==='COMIC'?'comic.name':'comic.unboundVideo')} · {t(root.recognitionMode==='VIDEO_FILE'?(root.mediaKind==='COMIC'||root.mediaKind==='EBOOK'?'bookMode.fileTitle':'rootMode.videoFileTitle'):'rootMode.folderTitle')}</small><small>{t("settings.lastScan", { date: formatDate(root.lastScanAt) })}</small><LibraryScanHealth health={root.scanHealth} /></div><div className="settings-root-actions">{root.scanHealth && root.scanHealth.outcome !== 'SUCCESS' && <button className="icon-button" aria-pressed={!!root.scanHealth.warningsIgnored} aria-label={t(root.scanHealth.warningsIgnored?'comic.restoreWarnings':'comic.ignoreWarnings')} title={t(root.scanHealth.warningsIgnored?'comic.restoreWarnings':'comic.ignoreWarnings')} disabled={!onIgnoreScanWarnings} onClick={()=>onIgnoreScanWarnings?.(root)} type="button"><Icon name={root.scanHealth.warningsIgnored?'warning':'close'}/></button>}<button aria-label={t("settings.scanNamed", { name: root.displayName })} onClick={() => onScanRoot(root)} title={t("settings.scanLibrary")} type="button"><Icon name="refresh" /></button><button className="danger-icon" aria-label={t("settings.removeNamed", { name: root.displayName })} onClick={() => onRemoveRoot(root)} title={t("settings.removeIndexOnly")} type="button"><Icon name="trash" /></button></div></article>
           ))}</div>}
           <div className="settings-hidden-entry"><div><strong>{t("hidden.title")}</strong><p>{t("settings.hiddenDescription")}</p></div><button className="button secondary" disabled={!desktopAvailable} onClick={onHiddenNodes} type="button" aria-haspopup="dialog"><Icon name="eye-off" />{t("hidden.title")}</button></div>
           <p className="safety-copy"><Icon name="shield" />{t("settings.removeSafety")}</p>
@@ -205,11 +217,21 @@ export function SettingsPage({ roots, bootstrap, onAddRoot, onHiddenNodes, onRem
 
         <section className="settings-section">
           <div className="settings-section-heading"><span className="settings-symbol gold"><Icon name="settings" /></span><div><h2>{t("settings.browseScanTitle")}</h2><p>{t("settings.browseScanDescription")}</p></div></div>
-          <div className="settings-columns"><label className="field-label"><span>{t("settings.defaultView")}</span><select disabled={!settings} onChange={(event) => changeSettings((current) => ({ ...current, defaultViewMode: event.target.value as "GRID" | "LIST" }))} value={settings?.defaultViewMode ?? "GRID"}><option value="GRID">{t("settings.posterGrid")}</option><option value="LIST">{t("settings.compactList")}</option></select></label><label className="switch-field settings-switch-row"><span><strong>{t("settings.enableBangumi")}</strong><small>{t("settings.bangumiNetwork")}</small></span><input aria-label={t("settings.enableBangumi")} checked={settings?.bangumiSearchEnabled ?? false} disabled={!settings} onChange={(event) => changeSettings((current) => ({ ...current, bangumiSearchEnabled: event.target.checked }))} type="checkbox" /><i /></label></div>
+          <div className="settings-preference-list"><label className="field-label"><span>{t("settings.defaultView")}</span><select disabled={!settings} onChange={(event) => changeSettings((current) => ({ ...current, defaultViewMode: event.target.value as "GRID" | "LIST" }))} value={settings?.defaultViewMode ?? "GRID"}><option value="GRID">{t("settings.posterGrid")}</option><option value="LIST">{t("settings.compactList")}</option></select></label><label className="switch-field settings-switch-row"><span><strong>{t("settings.enableBangumi")}</strong><small>{t("settings.bangumiNetwork")}</small></span><input aria-label={t("settings.enableBangumi")} checked={settings?.bangumiSearchEnabled ?? false} disabled={!settings} onChange={(event) => changeSettings((current) => ({ ...current, bangumiSearchEnabled: event.target.checked }))} type="checkbox" /><i /></label>
           <label className="switch-field settings-switch-row"><span><strong>{t("settings.autoScanOnStartup")}</strong><small>{t("settings.autoScanOnStartupDescription")}</small></span><input aria-label={t("settings.autoScanOnStartup")} checked={settings?.autoScanOnStartup ?? true} disabled={!settings} onChange={(event) => changeSettings((current) => ({ ...current, autoScanOnStartup: event.target.checked }))} type="checkbox" /><i /></label>
+          <label className="switch-field settings-switch-row"><span><strong>{t("settings.allResourcesFlattened")}</strong><small>{t("settings.allResourcesFlattenedDescription")}</small></span><input aria-label={t("settings.allResourcesFlattened")} checked={settings?.allResourcesFlattened ?? false} disabled={!settings} onChange={(event) => changeSettings((current) => ({ ...current, allResourcesFlattened: event.target.checked }))} type="checkbox" /><i /></label>
+          </div>
           <div className="extension-editor"><span>{t("settings.videoExtensions")}</span><div className="extension-chips">{settings?.videoExtensions.map((extension) => <button disabled={settings.videoExtensions.length <= 1} key={extension} onClick={() => changeSettings((current) => ({ ...current, videoExtensions: current.videoExtensions.filter((item) => item !== extension) }))} title={t("settings.removeExtension")} type="button">{extension}<Icon name="close" /></button>)}</div><div className="extension-add"><input onChange={(event) => setExtensionDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); addExtension(); } }} placeholder={t("settings.extensionPlaceholder")} value={extensionDraft} /><button onClick={addExtension} type="button">{t("common.add")}</button></div></div>
         </section>
 
+        <section className="settings-section comic-settings">
+          <div className="settings-section-heading"><span className="settings-symbol navy"><Icon name="work"/></span><div><h2>{t('comic.defaults')}</h2><p>{t('comic.defaultsHelp')}</p></div></div>
+          <div className="settings-columns">
+            <label className="field-label"><span>{t('comic.direction')}</span><select disabled={!settings} value={reader.direction} onChange={e=>changeSettings(s=>({...s,comicReader:{...(s.comicReader??defaultComicReaderSettings),direction:e.target.value as ComicReaderSettings['direction']}}))}><option value="RTL">{t('comic.rtl')}</option><option value="LTR">{t('comic.ltr')}</option></select></label>
+            <label className="field-label"><span>{t('comic.layout')}</span><select disabled={!settings} value={reader.layout} onChange={e=>changeSettings(s=>({...s,comicReader:{...(s.comicReader??defaultComicReaderSettings),layout:e.target.value as ComicReaderSettings['layout']}}))}><option value="DOUBLE">{t('comic.double')}</option><option value="SINGLE">{t('comic.single')}</option></select></label>
+            <label className="field-label"><span>{t('comic.mode')}</span><select disabled={!settings} value={reader.mode} onChange={e=>changeSettings(s=>({...s,comicReader:{...(s.comicReader??defaultComicReaderSettings),mode:e.target.value as ComicReaderSettings['mode']}}))}><option value="PAGED">{t('comic.paged')}</option><option value="SCROLL">{t('comic.scroll')}</option><option value="WEBTOON">{t('comic.webtoon')}</option></select></label>
+          </div><label className="switch-field settings-switch-row"><span><strong>{t('comic.wideAlone')}</strong></span><input disabled={!settings} type="checkbox" checked={reader.widePageAlone} onChange={e=>changeSettings(s=>({...s,comicReader:{...(s.comicReader??defaultComicReaderSettings),widePageAlone:e.target.checked}}))}/><i/></label>
+        </section>
         <section className="settings-section">
           <div className="settings-section-heading"><span className="settings-symbol coral"><Icon name="globe" /></span><div><h2>{t("settings.appearanceTitle")}</h2><p>{t("settings.appearanceDescription")}</p></div></div>
           <div className="settings-columns">
@@ -235,14 +257,11 @@ export function SettingsPage({ roots, bootstrap, onAddRoot, onHiddenNodes, onRem
             <div><dt>{t("settings.currentVersion")}</dt><dd>{bootstrap?.version ?? t("common.notAvailable")}</dd></div>
             <div><dt>{t("settings.updateDate")}</dt><dd>{bootstrap?.buildDate && bootstrap.buildDate !== "unknown" ? bootstrap.buildDate : t("common.notAvailable")}</dd></div>
             <div><dt>{t("settings.architecture")}</dt><dd>{bootstrap?.architecture ?? t("common.notAvailable")}</dd></div>
-            <div><dt>{t("settings.originalAuthor")}</dt><dd>{t("brand.author")}</dd></div>
-            <div><dt>{t("settings.contributor")}</dt><dd>Juvenile_A</dd></div>
-            <div><dt>{t("settings.website")}</dt><dd className="about-author-links"><button disabled={!bootstrap?.websiteUrl || !desktopAvailable} onClick={() => void openAuthorLink(bootstrap?.websiteUrl)} type="button">{t("settings.websiteLabel")} <Icon name="external" /></button><button disabled={!bootstrap?.xUrl || !desktopAvailable} onClick={() => void openAuthorLink(bootstrap?.xUrl)} type="button">{t("settings.xLabel")} <Icon name="external" /></button></dd></div>
+            <div><dt>{t("settings.website")}</dt><dd className="about-author-links"><button disabled={!bootstrap?.websiteUrl || !desktopAvailable} onClick={() => void openAuthorLink(bootstrap?.websiteUrl)} type="button">{t("settings.websiteLabel")} <Icon name="external" /></button></dd></div>
+            <div className="about-credit"><dt>{t("settings.specialThanks")}</dt><dd>Juvenile_A</dd></div>
           </dl>
-          <p className="created-by">{t("settings.createdBy")} <button disabled={!bootstrap?.websiteUrl || !desktopAvailable} onClick={() => void openAuthorLink(bootstrap?.websiteUrl)} type="button">{t("brand.author")}</button></p>
         </section>
       </div>
-      <footer className="settings-savebar"><span><Icon name="shield" />{t("common.readOnlyShort")}</span><span className="settings-save-status" aria-live="polite"><Icon name={saving || saveState === "saving" ? "refresh" : "check"} />{!settings ? t("settings.autoSaveDesktop") : saving || saveState === "saving" ? t("settings.autoSaving") : t("settings.autoSaved")}</span></footer>
     </section>
   );
 }

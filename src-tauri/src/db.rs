@@ -10,7 +10,7 @@ use rusqlite::{params, Connection, OptionalExtension, Row, TransactionBehavior};
 
 use crate::models::{
     AllResourcesResult, AppSettings, BatchMutationResult, BreadcrumbItem, CollectionSort,
-    CollectionSortPreferences, CollectionSortScope, CoverSource, FavoriteFolder,
+    CollectionSortPreferences, CollectionSortScope, CoverSource, FavoriteFolder, LibraryMediaKind,
     LibraryRecognitionMode, LibraryRoot, MediaFile, MediaNode, MetadataBinding, NodeType,
     RecentlyWatchedEntry, ResourceFile, ResourceType, SearchHit, SearchHitKind, UserTag,
     UserTagMembership, ViewMode, WindowSize,
@@ -177,6 +177,24 @@ impl Database {
             ),
             (13_i64, include_str!("../migrations/0013_alias_sync.sql")),
             (14_i64, include_str!("../migrations/0014_scan_health.sql")),
+            (
+                15_i64,
+                include_str!("../migrations/0015_comic_library_kind.sql"),
+            ),
+            (16_i64, include_str!("../migrations/0016_comics.sql")),
+            (
+                17_i64,
+                include_str!("../migrations/0017_comic_binding_types.sql"),
+            ),
+            (
+                18_i64,
+                include_str!("../migrations/0018_document_books.sql"),
+            ),
+            (19_i64, include_str!("../migrations/0019_ebook_library.sql")),
+            (
+                20_i64,
+                include_str!("../migrations/0020_book_file_recognition.sql"),
+            ),
         ];
         for (version, sql) in migrations {
             let applied = connection
@@ -192,7 +210,9 @@ impl Database {
                     .map_err(db_error)?;
                 let result: AppResult<()> = (|| {
                     connection.execute_batch(sql).map_err(db_error)?;
-                    if version == 14 {
+                    // Reclassification uses the current DTO projection. Run only once all
+                    // additive columns exist, including when upgrading a pre-14 database.
+                    if version == 19 {
                         crate::logical_works::LogicalWorkIndex::reclassify(&connection, None)?;
                     }
                     connection
@@ -225,20 +245,24 @@ impl Database {
                 "SELECT r.id, r.path, r.display_name, r.created_at, r.last_scan_at, r.recognition_mode,
                     (SELECT COUNT(*) FROM nodes n
                      WHERE n.library_root_id = r.id AND n.node_type <> 'IGNORED'
-                       AND n.total_video_count > 0
+                       AND (n.total_video_count > 0 OR n.total_comic_book_count > 0)
                        AND EXISTS (
                            SELECT 1 FROM nodes hidden
                            WHERE hidden.id=n.parent_node_id
                              AND hidden.library_root_id=r.id
                              AND hidden.parent_node_id IS NULL
                        )),
-                    (SELECT COUNT(*) FROM media_files f JOIN nodes n ON n.id=f.node_id WHERE n.library_root_id=r.id)
+                    CASE WHEN r.media_kind='COMIC' THEN
+                      (SELECT COUNT(*) FROM comic_books b JOIN nodes n ON n.id=b.node_id WHERE n.library_root_id=r.id)
+                    ELSE (SELECT COUNT(*) FROM media_files f JOIN nodes n ON n.id=f.node_id WHERE n.library_root_id=r.id) END,
+                    CASE WHEN r.media_kind='COMIC' THEN r.book_library_kind WHEN r.video_subject_scope<>'MIXED' THEN r.video_subject_scope ELSE r.media_kind END
                  FROM library_roots r ORDER BY r.display_name COLLATE NOCASE, r.path COLLATE NOCASE",
             )
             .map_err(db_error)?;
         let rows = statement
             .query_map([], |row| {
                 Ok(LibraryRoot {
+                    media_kind: LibraryMediaKind::from_db(&row.get::<_, String>(8)?),
                     scan_health: None,
                     id: row.get(0)?,
                     path: row.get(1)?,
@@ -296,10 +320,26 @@ impl Database {
         self.add_root_with_mode(path, display_name, LibraryRecognitionMode::Folder)
     }
 
+    #[cfg(test)]
     pub fn add_root_with_mode(
         &self,
         path: &Path,
         display_name: Option<String>,
+        recognition_mode: LibraryRecognitionMode,
+    ) -> AppResult<LibraryRoot> {
+        self.add_root_with_kind(
+            path,
+            display_name,
+            LibraryMediaKind::Video,
+            recognition_mode,
+        )
+    }
+
+    pub fn add_root_with_kind(
+        &self,
+        path: &Path,
+        display_name: Option<String>,
+        media_kind: LibraryMediaKind,
         recognition_mode: LibraryRecognitionMode,
     ) -> AppResult<LibraryRoot> {
         let canonical = canonical_library_root(path)?;
@@ -320,8 +360,8 @@ impl Database {
         ensure_root_does_not_overlap_conn(&transaction, &canonical, None)?;
         transaction
             .execute(
-                "INSERT INTO library_roots(path, display_name, recognition_mode) VALUES (?1, ?2, ?3)",
-                params![normalized, name, recognition_mode.as_db()],
+                "INSERT INTO library_roots(path, display_name, recognition_mode, media_kind, book_library_kind, video_subject_scope) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![normalized, name, recognition_mode.as_db(), if media_kind.is_book() { "COMIC" } else { "VIDEO" }, if media_kind == LibraryMediaKind::Ebook { "EBOOK" } else { "COMIC" }, match media_kind { LibraryMediaKind::Animation => "ANIMATION", LibraryMediaKind::LiveAction => "LIVE_ACTION", _ => "MIXED" }],
             )
             .map_err(|error| {
                 if error.to_string().contains("UNIQUE") {
@@ -367,15 +407,36 @@ impl Database {
         Ok(registered)
     }
 
-    /// Removes only M²Shelf's SQLite index. It never touches the source directory.
+    /// Presentation preference only; retain the real scan outcome and successful baseline.
+    pub fn set_scan_warnings_ignored(&self, root_id: i64, ignored: bool) -> AppResult<LibraryRoot> {
+        let mut connection = self.connect()?;
+        let tx = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(db_error)?;
+        get_root_conn(&tx, root_id)?;
+        tx.execute("INSERT INTO settings(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            params![format!("library_scan_warnings_ignored:{root_id}"), if ignored { "true" } else { "false" }]).map_err(db_error)?;
+        let mut root = get_root_conn(&tx, root_id)?;
+        root.scan_health = read_scan_health_conn(&tx, root_id)?;
+        tx.commit().map_err(db_error)?;
+        Ok(root)
+    }
+
     pub fn remove_root(&self, root_id: i64) -> AppResult<()> {
-        let connection = self.connect()?;
-        let changed = connection
+        let mut connection = self.connect()?;
+        let tx = connection.transaction().map_err(db_error)?;
+        let changed = tx
             .execute("DELETE FROM library_roots WHERE id=?1", [root_id])
             .map_err(db_error)?;
         if changed == 0 {
             return Err("资源库不存在。".into());
         }
+        tx.execute(
+            "DELETE FROM settings WHERE key=?1",
+            [format!("library_scan_warnings_ignored:{root_id}")],
+        )
+        .map_err(db_error)?;
+        tx.commit().map_err(db_error)?;
         Ok(())
     }
 
@@ -468,11 +529,11 @@ impl Database {
         self.read_snapshot(|connection| {
             let mut statement = connection
                 .prepare(&format!(
-                    "{} WHERE n.node_type <> 'IGNORED' AND n.total_video_count > 0
-                 AND n.parent_node_id IN (
+                    "{} WHERE n.node_type <> 'IGNORED' AND (n.total_video_count > 0 OR n.total_comic_book_count > 0)
+                 AND (n.parent_node_id IN (
                      SELECT hidden.id FROM nodes hidden
                      WHERE hidden.parent_node_id IS NULL
-                 )",
+                 ) OR (n.parent_node_id IS NULL AND n.direct_comic_book_count>0))",
                     node_select()
                 ))
                 .map_err(db_error)?;
@@ -488,7 +549,12 @@ impl Database {
                     .then_with(|| left.id.cmp(&right.id))
             });
             let index = crate::logical_works::LogicalWorkIndex::load(connection)?;
+            let mut comic_statement = connection.prepare(&format!("{} WHERE n.direct_comic_book_count>0 AND n.node_type IN ('WORK','AUTO_WORK','MIXED')", node_select())).map_err(db_error)?;
+            let mut comic_nodes = comic_statement.query_map([], node_from_row).map_err(db_error)?.collect::<Result<Vec<_>,_>>().map_err(db_error)?;
+            comic_nodes.retain(|n| ensure_node_visible_conn(connection,n.id).is_ok());
+            hydrate_nodes_metadata_conn(connection, &mut comic_nodes)?;
             Ok(AllResourcesResult {
+                comic_nodes,
                 recognition_warnings: index
                     .warnings
                     .iter()
@@ -535,15 +601,21 @@ impl Database {
         let records = {
             let mut statement = connection
                 .prepare(
-                    "SELECT h.node_id,h.last_watched_at
-                     FROM watch_history h JOIN nodes n ON n.id=h.node_id
-                     WHERE n.node_type <> 'IGNORED'
-                     ORDER BY h.last_watched_at DESC,h.node_id DESC",
+                    "WITH activity(node_id,stamp,book_id) AS (
+                       SELECT node_id,last_watched_at,NULL FROM watch_history
+                       UNION ALL SELECT b.node_id,p.last_read_at,b.id FROM comic_reading_progress p JOIN comic_books b ON b.id=p.comic_book_id
+                     ), ranked AS (SELECT *,ROW_NUMBER() OVER(PARTITION BY node_id ORDER BY stamp DESC,book_id DESC) AS rank FROM activity)
+                     SELECT a.node_id,a.stamp,a.book_id FROM ranked a JOIN nodes n ON n.id=a.node_id
+                     WHERE a.rank=1 AND n.node_type<>'IGNORED' ORDER BY a.stamp DESC,a.node_id DESC",
                 )
                 .map_err(db_error)?;
             let rows = statement
                 .query_map([], |row| {
-                    Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<i64>>(2)?,
+                    ))
                 })
                 .map_err(db_error)?
                 .collect::<Result<Vec<_>, _>>()
@@ -553,8 +625,10 @@ impl Database {
 
         records
             .into_iter()
-            .map(|(node_id, watched_at)| {
+            .filter(|(node_id, _, _)| ensure_node_visible_conn(&connection, *node_id).is_ok())
+            .map(|(node_id, watched_at, comic_book_id)| {
                 Ok(RecentlyWatchedEntry {
+                    comic_book_id,
                     node: get_node_conn(&connection, node_id)?,
                     watched_at,
                 })
@@ -593,6 +667,7 @@ impl Database {
                               SELECT 1 FROM node_tags nt JOIN tags t ON t.id=nt.tag_id
                               WHERE nt.node_id=n.id AND t.name LIKE ?1 ESCAPE '\\'
                           )
+                          OR EXISTS (SELECT 1 FROM comic_books c WHERE c.node_id=n.id AND c.display_name LIKE ?1 ESCAPE '\\')
                           OR EXISTS (
                               SELECT 1 FROM metadata_bindings b
                               WHERE b.node_id=n.id AND b.provider='BANGUMI'
@@ -731,6 +806,8 @@ impl Database {
                  )
                  AND (
                      n.node_type IN ('AUTO_WORK','WORK')
+                     OR (n.node_type='CONTAINER' AND n.parent_node_id IS NOT NULL
+                         AND EXISTS (SELECT 1 FROM library_roots r WHERE r.id=n.library_root_id AND r.media_kind='COMIC'))
                  )
                  ORDER BY n.id",
                 node_select()
@@ -783,6 +860,8 @@ impl Database {
         let sql = format!(
             "{} WHERE (
                  n.node_type IN ('AUTO_WORK','WORK')
+                 OR (n.node_type='CONTAINER' AND n.parent_node_id IS NOT NULL
+                     AND EXISTS (SELECT 1 FROM library_roots r WHERE r.id=n.library_root_id AND r.media_kind='COMIC'))
              )
              AND NOT EXISTS (
                  WITH RECURSIVE ancestors(id,parent_node_id,node_type) AS (
@@ -849,6 +928,7 @@ impl Database {
             return Err("目录节点不存在。".into());
         }
         crate::logical_works::LogicalWorkIndex::reclassify_related(&connection, &[node_id], true)?;
+        crate::comics::refresh_related(&connection, &[node_id])?;
         let result = get_node_conn(&connection, node_id)?;
         connection.commit().map_err(db_error)?;
         Ok(result)
@@ -885,6 +965,7 @@ impl Database {
         }
         drop(statement);
         crate::logical_works::LogicalWorkIndex::reclassify_related(&transaction, &node_ids, true)?;
+        crate::comics::refresh_related(&transaction, &node_ids)?;
         transaction.commit().map_err(db_error)?;
         Ok(BatchMutationResult {
             requested: node_ids.len() as u64,
@@ -900,6 +981,18 @@ impl Database {
             .map_err(db_error)?;
         let node = get_node_conn(&connection, node_id)?;
         let root = get_root_conn(&connection, node.library_root_id)?;
+        if root.media_kind.is_book() {
+            connection
+                .execute(
+                    "UPDATE nodes SET manual_type_override=0 WHERE id=?1",
+                    [node_id],
+                )
+                .map_err(db_error)?;
+            crate::comics::refresh_related(&connection, &[node_id])?;
+            let result = get_node_conn(&connection, node_id)?;
+            connection.commit().map_err(db_error)?;
+            return Ok(result);
+        }
         let has_bdmv =
             crate::scanner::has_typical_bdmv(Path::new(&node.absolute_path), Path::new(&root.path));
         let direct_video_count = connection
@@ -947,6 +1040,17 @@ impl Database {
         ensure_batch_nodes_exist_conn(&transaction, &node_ids)?;
         let mut updated = 0_usize;
         for node_id in &node_ids {
+            if get_node_conn(&transaction, *node_id)?.media_kind.is_book() {
+                transaction
+                    .execute(
+                        "UPDATE nodes SET manual_type_override=0 WHERE id=?1",
+                        [node_id],
+                    )
+                    .map_err(db_error)?;
+                crate::comics::refresh_related(&transaction, &[*node_id])?;
+                updated += 1;
+                continue;
+            }
             let (absolute_path, root_path) = transaction
                 .query_row(
                     "SELECT n.absolute_path,r.path
@@ -1381,7 +1485,7 @@ impl Database {
     pub fn pending_alias_subjects(&self) -> AppResult<Vec<crate::models::BangumiSubject>> {
         let connection = self.connect()?;
         let mut statement = connection.prepare("SELECT MIN(b.node_id) FROM metadata_bindings b
-            WHERE b.provider='BANGUMI' AND b.provider_subject_type IN (2,6)
+            WHERE b.provider='BANGUMI' AND b.provider_subject_type IN (1,2,6)
             AND NOT EXISTS(SELECT 1 FROM provider_alias_sync s WHERE s.subject_id=b.provider_subject_id AND s.subject_type=b.provider_subject_type)
             GROUP BY b.provider_subject_id,b.provider_subject_type ORDER BY MIN(b.node_id)").map_err(db_error)?;
         let ids = statement
@@ -1477,6 +1581,9 @@ impl Database {
         subject: &crate::models::BangumiSubject,
     ) -> AppResult<bool> {
         let node = self.get_node(node_id)?;
+        if !node.media_kind.accepts_subject(subject.subject_type) || subject.subject_id <= 0 {
+            return Err("BANGUMI_MEDIA_KIND_CONFLICT".into());
+        }
         if !node.can_bind_bangumi() {
             return Err("只有作品或包含视频的系列可以绑定 Bangumi。".into());
         }
@@ -1968,6 +2075,10 @@ impl Database {
             .and_then(|value| serde_json::from_str::<Vec<String>>(value).ok())
             .unwrap_or_else(default_video_extensions);
         Ok(AppSettings {
+            comic_reader: values
+                .get("comic_reader")
+                .and_then(|v| serde_json::from_str(v).ok())
+                .unwrap_or_default(),
             mpv_path: values.get("mpv_path").filter(|p| !p.is_empty()).cloned(),
             default_view_mode: match values.get("default_view_mode").map(String::as_str) {
                 Some("LIST") => ViewMode::List,
@@ -1999,6 +2110,9 @@ impl Database {
                 .get("auto_scan_on_startup")
                 .map(|value| value != "false")
                 .unwrap_or(true),
+            all_resources_flattened: values
+                .get("all_resources_flattened")
+                .is_some_and(|value| value == "true"),
         })
     }
 
@@ -2116,6 +2230,10 @@ impl Database {
         let mut connection = self.connect()?;
         let transaction = connection.transaction().map_err(db_error)?;
         let values = [
+            (
+                "comic_reader",
+                serde_json::to_string(&settings.comic_reader).map_err(|e| e.to_string())?,
+            ),
             ("mpv_path", settings.mpv_path.clone().unwrap_or_default()),
             (
                 "default_view_mode",
@@ -2142,6 +2260,10 @@ impl Database {
             (
                 "auto_scan_on_startup",
                 settings.auto_scan_on_startup.to_string(),
+            ),
+            (
+                "all_resources_flattened",
+                settings.all_resources_flattened.to_string(),
             ),
         ];
         for (key, value) in values {
@@ -2243,6 +2365,10 @@ fn save_binding_conn(
     expected_subject: Option<Option<i64>>,
     replacement_aliases: Option<&[(String, String)]>,
 ) -> AppResult<ConditionalBindingSave> {
+    let node = get_node_conn(transaction, node_id)?;
+    if !node.media_kind.accepts_subject(subject.subject_type) || subject.subject_id <= 0 {
+        return Err("BANGUMI_MEDIA_KIND_CONFLICT".into());
+    }
     let (node_type, total_video_count, cover_source, cover_path): (
         String,
         i64,
@@ -2259,7 +2385,10 @@ fn save_binding_conn(
         .map_err(db_error)?
         .ok_or_else(|| "目录节点不存在。".to_string())?;
     let node_type = NodeType::from_db(&node_type);
-    if !(node_type.is_work() || (node_type == NodeType::Container && total_video_count > 0)) {
+    if !(node_type.is_work()
+        || (node_type == NodeType::Container
+            && (total_video_count > 0 || node.total_comic_book_count > 0)))
+    {
         return Err("只有作品或包含视频的系列可以绑定 Bangumi。".into());
     }
     let previous_subject = transaction
@@ -2453,6 +2582,7 @@ fn read_scan_health_conn(
     root_id: i64,
 ) -> AppResult<Option<crate::models::ScanHealth>> {
     connection.query_row("SELECT last_auto_attempt_at,last_success_at,outcome,error_count,detail FROM library_scan_health WHERE library_root_id=?1",[root_id],|row|Ok(crate::models::ScanHealth {
+        warnings_ignored: connection.query_row("SELECT value='true' FROM settings WHERE key=?1", [format!("library_scan_warnings_ignored:{root_id}")], |r| r.get(0)).optional()?.unwrap_or(false),
         last_auto_attempt_at:row.get(0)?,last_success_at:row.get(1)?,outcome:row.get(2)?,error_count:row.get(3)?,detail:row.get(4)?,
     })).optional().map_err(db_error)
 }
@@ -2463,18 +2593,22 @@ fn get_root_conn(connection: &Connection, root_id: i64) -> AppResult<LibraryRoot
             "SELECT r.id,r.path,r.display_name,r.created_at,r.last_scan_at,r.recognition_mode,
              (SELECT COUNT(*) FROM nodes n
               WHERE n.library_root_id=r.id AND n.node_type <> 'IGNORED'
-                AND n.total_video_count > 0
+                AND (n.total_video_count > 0 OR n.total_comic_book_count > 0)
                 AND EXISTS (
                     SELECT 1 FROM nodes hidden
                     WHERE hidden.id=n.parent_node_id
                       AND hidden.library_root_id=r.id
                       AND hidden.parent_node_id IS NULL
                 )),
-             (SELECT COUNT(*) FROM media_files f JOIN nodes n ON n.id=f.node_id WHERE n.library_root_id=r.id)
+             CASE WHEN r.media_kind='COMIC' THEN
+                (SELECT COUNT(*) FROM comic_books b JOIN nodes n ON n.id=b.node_id WHERE n.library_root_id=r.id)
+             ELSE (SELECT COUNT(*) FROM media_files f JOIN nodes n ON n.id=f.node_id WHERE n.library_root_id=r.id) END,
+             CASE WHEN r.media_kind='COMIC' THEN r.book_library_kind WHEN r.video_subject_scope<>'MIXED' THEN r.video_subject_scope ELSE r.media_kind END
              FROM library_roots r WHERE r.id=?1",
             [root_id],
             |row| {
                 Ok(LibraryRoot {
+                    media_kind: LibraryMediaKind::from_db(&row.get::<_, String>(8)?),
                     scan_health: None,
                     id: row.get(0)?,
                     path: row.get(1)?,
@@ -2572,7 +2706,9 @@ pub(crate) fn get_node_conn(connection: &Connection, node_id: i64) -> AppResult<
 pub(crate) fn node_select() -> &'static str {
     "SELECT n.id,n.library_root_id,n.parent_node_id,n.absolute_path,n.folder_name,n.display_name,
      n.node_type,n.manual_type_override,n.cover_source,n.cover_cache_path,n.direct_video_count,
-     n.child_media_branch_count,n.total_video_count,n.created_at,n.updated_at,n.last_seen_at FROM nodes n"
+     n.child_media_branch_count,n.total_video_count,n.created_at,n.updated_at,n.last_seen_at,
+     (SELECT CASE WHEN r.media_kind='COMIC' THEN r.book_library_kind WHEN r.video_subject_scope<>'MIXED' THEN r.video_subject_scope ELSE r.media_kind END FROM library_roots r WHERE r.id=n.library_root_id),
+     n.direct_comic_book_count,n.child_comic_branch_count,n.total_comic_book_count FROM nodes n"
 }
 
 /// Automatic matching treats a non-manually-classified SP/OVA/Extras child as part of a parent
@@ -2583,6 +2719,21 @@ fn filter_structural_supplementary_match_candidates(
     connection: &Connection,
     nodes: Vec<MediaNode>,
 ) -> AppResult<Vec<MediaNode>> {
+    let mut statement = connection
+        .prepare(
+            "WITH RECURSIVE readable(id,parent_node_id) AS (
+            SELECT n.id,n.parent_node_id FROM nodes n JOIN comic_books b ON b.node_id=n.id
+            WHERE b.index_error IS NULL AND b.page_count>0 AND n.node_type<>'IGNORED'
+            UNION SELECT n.id,n.parent_node_id FROM nodes n JOIN readable r ON r.parent_node_id=n.id
+            WHERE n.node_type<>'IGNORED'
+         ) SELECT DISTINCT id FROM readable",
+        )
+        .map_err(db_error)?;
+    let readable = statement
+        .query_map([], |r| r.get::<_, i64>(0))
+        .map_err(db_error)?
+        .collect::<Result<std::collections::HashSet<_>, _>>()
+        .map_err(db_error)?;
     let index = crate::logical_works::LogicalWorkIndex::load(connection)?;
     let mut sources = index
         .sources(connection)?
@@ -2591,7 +2742,13 @@ fn filter_structural_supplementary_match_candidates(
         .collect::<HashMap<_, _>>();
     Ok(nodes
         .into_iter()
-        .filter_map(|node| sources.remove(&node.id))
+        .filter_map(|node| {
+            if node.media_kind.is_book() {
+                readable.contains(&node.id).then_some(node)
+            } else {
+                sources.remove(&node.id)
+            }
+        })
         .collect())
 }
 
@@ -2614,6 +2771,10 @@ fn filter_missing_bound_cover_candidates(nodes: Vec<MediaNode>) -> Vec<MediaNode
 
 pub(crate) fn node_from_row(row: &Row<'_>) -> rusqlite::Result<MediaNode> {
     Ok(MediaNode {
+        media_kind: LibraryMediaKind::from_db(&row.get::<_, String>(16)?),
+        direct_comic_book_count: row.get(17)?,
+        child_comic_branch_count: row.get(18)?,
+        total_comic_book_count: row.get(19)?,
         latest_file_modified_at: None,
         last_watched_at: None,
         id: row.get(0)?,
@@ -2656,6 +2817,8 @@ fn hydrate_file_modified_times_conn(
                 SELECT s.owner,julianday(f.modified_at),NULL FROM subtree s JOIN resource_files f ON f.node_id=s.id
                 UNION ALL
                 SELECT s.owner,NULL,julianday(w.last_watched_at) FROM subtree s JOIN watch_history w ON w.node_id=s.id
+                UNION ALL SELECT s.owner,julianday(b.modified_at),NULL FROM subtree s JOIN comic_books b ON b.node_id=s.id
+                UNION ALL SELECT s.owner,NULL,julianday(p.last_read_at) FROM subtree s JOIN comic_books b ON b.node_id=s.id JOIN comic_reading_progress p ON p.comic_book_id=b.id
              ) SELECT owner,strftime('%Y-%m-%dT%H:%M:%fZ',MAX(modified)),strftime('%Y-%m-%dT%H:%M:%fZ',MAX(watched)) FROM times GROUP BY owner",
             sql_placeholders(chunk.len())
         );
@@ -2696,6 +2859,38 @@ pub(crate) fn list_children_conn(
         ),
         parent_id,
     )
+}
+
+/// Book detail needs only folders not already expanded into the core table.
+/// Filter those rows before hydrating metadata, rather than hydrating every volume.
+pub(crate) fn list_remaining_children_conn(
+    connection: &Connection,
+    parent_ids: &[i64],
+) -> AppResult<Vec<MediaNode>> {
+    let expanded = parent_ids
+        .iter()
+        .copied()
+        .collect::<std::collections::HashSet<_>>();
+    let mut nodes = Vec::new();
+    for chunk in parent_ids.chunks(NODE_METADATA_CHUNK_SIZE) {
+        let sql = format!(
+            "{} WHERE n.parent_node_id IN ({}) AND n.node_type<>'IGNORED'",
+            node_select(),
+            sql_placeholders(chunk.len())
+        );
+        let mut statement = connection.prepare(&sql).map_err(db_error)?;
+        nodes.extend(
+            statement
+                .query_map(rusqlite::params_from_iter(chunk), node_from_row)
+                .map_err(db_error)?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(db_error)?
+                .into_iter()
+                .filter(|node| !expanded.contains(&node.id)),
+        );
+    }
+    hydrate_nodes_metadata_conn(connection, &mut nodes)?;
+    Ok(nodes)
 }
 
 fn list_nodes_conn(
@@ -3043,18 +3238,27 @@ pub(crate) fn list_resources_conn(
     connection: &Connection,
     node_id: i64,
 ) -> AppResult<Vec<ResourceFile>> {
-    let mut statement = connection
-        .prepare(&format!(
-            "SELECT {} FROM resource_files f WHERE f.node_id=?1",
-            resource_columns("f")
-        ))
-        .map_err(db_error)?;
-    let mut files = statement
-        .query_map([node_id], resource_from_row)
-        .map_err(db_error)?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(db_error)?;
+    let mut files = list_resources_for_nodes_conn(connection, &[node_id])?;
     files.sort_by(|left, right| natural_cmp(&left.file_name, &right.file_name));
+    Ok(files)
+}
+
+pub(crate) fn list_resources_for_nodes_conn(
+    connection: &Connection,
+    node_ids: &[i64],
+) -> AppResult<Vec<ResourceFile>> {
+    let mut files = Vec::new();
+    for chunk in node_ids.chunks(NODE_METADATA_CHUNK_SIZE) {
+        let sql = format!("SELECT {} FROM resource_files f WHERE f.node_id IN ({}) AND NOT EXISTS (SELECT 1 FROM comic_books b WHERE b.node_id=f.node_id AND b.source_path=f.absolute_path COLLATE NOCASE AND lower(b.source_path) NOT LIKE '%.zip') AND NOT EXISTS (SELECT 1 FROM comic_books b JOIN comic_pages p ON p.comic_book_id=b.id WHERE b.node_id=f.node_id AND b.source_kind='IMAGE_FOLDER' AND p.source_locator=f.absolute_path COLLATE NOCASE)", resource_columns("f"), sql_placeholders(chunk.len()));
+        let mut statement = connection.prepare(&sql).map_err(db_error)?;
+        files.extend(
+            statement
+                .query_map(rusqlite::params_from_iter(chunk), resource_from_row)
+                .map_err(db_error)?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(db_error)?,
+        );
+    }
     Ok(files)
 }
 
@@ -4142,7 +4346,7 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(versions, 14);
+        assert_eq!(versions, 20);
         connection
             .prepare("SELECT library_root_id,snapshot_json FROM library_scan_snapshots")
             .unwrap();
@@ -5790,12 +5994,14 @@ mod tests {
         assert_eq!(defaults.language, "zh-CN");
         assert_eq!(defaults.theme, "system");
         assert!(defaults.auto_scan_on_startup);
+        assert!(!defaults.all_resources_flattened);
         assert_eq!(
             defaults.cover_cache_directory,
             default_cache.to_string_lossy()
         );
 
         let updated = AppSettings {
+            comic_reader: Default::default(),
             mpv_path: None,
             default_view_mode: ViewMode::List,
             video_extensions: vec!["MKV".into(), ".mp4".into()],
@@ -5805,6 +6011,7 @@ mod tests {
             theme: "dark".into(),
             auto_check_updates: false,
             auto_scan_on_startup: false,
+            all_resources_flattened: true,
         };
         database.update_settings(&updated, &default_cache).unwrap();
         let reopened = Database::new(database_path)
@@ -5814,6 +6021,21 @@ mod tests {
         assert_eq!(reopened.theme, "dark");
         assert!(!reopened.auto_check_updates);
         assert!(!reopened.auto_scan_on_startup);
+        assert!(reopened.all_resources_flattened);
+        let mut legacy_json = serde_json::to_value(&reopened).unwrap();
+        legacy_json
+            .as_object_mut()
+            .unwrap()
+            .remove("allResourcesFlattened");
+        let legacy: AppSettings = serde_json::from_value(legacy_json).unwrap();
+        assert!(!legacy.all_resources_flattened);
+        database.update_settings(&legacy, &default_cache).unwrap();
+        assert!(
+            !database
+                .get_settings(&default_cache)
+                .unwrap()
+                .all_resources_flattened
+        );
         assert_eq!(
             reopened.cover_cache_directory,
             custom_cache.to_string_lossy()

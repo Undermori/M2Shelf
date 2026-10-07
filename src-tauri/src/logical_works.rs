@@ -92,7 +92,7 @@ impl LogicalWorkIndex {
 
     fn load_with_classification(connection: &Connection, reclassify: bool) -> AppResult<Self> {
         let mut statement = connection
-            .prepare(db::node_select())
+            .prepare(&format!("{} WHERE n.library_root_id IN (SELECT id FROM library_roots WHERE media_kind='VIDEO')",db::node_select()))
             .map_err(|e| e.to_string())?;
         let mut nodes = statement
             .query_map([], db::node_from_row)

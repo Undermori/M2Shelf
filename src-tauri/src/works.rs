@@ -414,6 +414,7 @@ fn work_detail_conn(connection: &Connection, node_id: i64) -> AppResult<NodeDeta
         .ok_or_else(|| "NODE_NOT_VISIBLE：作品已不在当前索引中，请刷新资源库。".to_string())?;
     let source_ids: HashSet<i64> = group.sources.iter().map(|node| node.id).collect();
     let mut detail = NodeDetail {
+        comic_books: None,
         binding: group.node.binding.clone(),
         breadcrumbs: db::breadcrumbs_conn(connection, group.node.id, true)?,
         node: group.node,
@@ -450,12 +451,22 @@ pub fn node_detail(database: &Database, node_id: i64) -> AppResult<NodeDetail> {
     database.read_snapshot(|connection| {
         db::ensure_node_visible_conn(connection, node_id)?;
         let node = db::get_node_conn(connection, node_id)?;
+        let is_book = node.media_kind.is_book();
         let mut detail = NodeDetail {
+            comic_books: None,
             binding: node.binding.clone(),
             node,
-            children: db::list_children_conn(connection, node_id)?,
+            children: if is_book {
+                Vec::new()
+            } else {
+                db::list_children_conn(connection, node_id)?
+            },
             media_files: db::list_media_conn(connection, node_id)?,
-            resource_files: db::list_resources_conn(connection, node_id)?,
+            resource_files: if is_book {
+                Vec::new()
+            } else {
+                db::list_resources_conn(connection, node_id)?
+            },
             breadcrumbs: db::breadcrumbs_conn(connection, node_id, true)?,
             work_sources: None,
             work_target: None,
@@ -463,6 +474,10 @@ pub fn node_detail(database: &Database, node_id: i64) -> AppResult<NodeDetail> {
             expanded_folder_ids: Vec::new(),
             recognition_warnings: Vec::new(),
         };
+        if detail.node.media_kind.is_book() {
+            crate::comics::populate_detail(connection, &mut detail)?;
+            return Ok(detail);
+        }
         let index = LogicalWorkIndex::load(connection)?;
         let sources = vec![detail.node.clone()];
         populate_owned_content_conn(connection, &index, &mut detail, &sources)?;

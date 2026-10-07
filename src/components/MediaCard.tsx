@@ -1,6 +1,6 @@
 import { memo, useEffect, useRef, useState } from "react";
 import type { MediaNode, ViewMode } from "../types/media";
-import { canBindBangumi, formatDate, nodeDisplayTitle } from "../lib/format";
+import { canBindBangumi, formatDate, nodeDisplayTitle, mediaBadge } from "../lib/format";
 import { FileModifiedTime } from "./FileModifiedTime";
 import { Icon } from "./Icon";
 import { useCoverDataUrl } from "../hooks/useCoverDataUrl";
@@ -61,15 +61,15 @@ function MediaCardComponent({ node, viewMode, onOpen, onMenu, onBangumi, onRetry
               <small>{coverError ? t("card.coverFailed") : container ? t("card.resourceContainer") : t("card.noCover")}</small>
             </span>
           )}
-          <span className="type-pill system-tag"><Icon name={systemTag.icon} />{systemTag.label}</span>
+          <span className="type-pill system-tag"><Icon name={systemTag.icon} />{mediaBadge(node)}</span>
           {editMode && <span aria-hidden="true" className="selection-indicator"><Icon name={selected ? "check" : "plus"} /></span>}
         </span>
         <span className="media-card-copy">
           <strong title={title}>{title}</strong>
-          {watchedAt && <time className="media-card-watch-time" dateTime={watchedAt}>{t("recent.watchedAt", { time: formatDate(watchedAt) })}</time>}
+          {watchedAt && <time className="media-card-watch-time" dateTime={watchedAt}>{t("comic.openedAt", { time: formatDate(watchedAt) })}</time>}
           {showModifiedTime && <FileModifiedTime value={node.latestFileModifiedAt} />}
           <small>
-            {videos > 0 ? t("card.videoCount", { count: videos }) : container ? t("card.childCount", { count: node.childMediaBranchCount ?? 0 }) : t("card.awaitingScan")}
+            {(node.mediaKind==='COMIC'||node.mediaKind==='EBOOK')?t('comic.books',{count:node.totalComicBookCount??0}):videos > 0 ? t("card.videoCount", { count: videos }) : container ? t("card.childCount", { count: node.childMediaBranchCount ?? 0 }) : t("card.awaitingScan")}
           </small>
           {viewMode === "list" && !node.binding && <span className="card-path">{node.absolutePath}</span>}
           {(node.userTags?.length ?? 0) > 0 && (

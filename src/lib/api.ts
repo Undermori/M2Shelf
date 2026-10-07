@@ -33,6 +33,8 @@ import type {
   UpdateRecoveryNotice,
 } from "../types/media";
 import { translateActive } from "./i18n";
+import type { ComicBook, ComicOpenResult } from '../types/comic';
+import type { LibraryMediaKind } from '../types/media';
 
 export class DesktopOnlyError extends Error {
   constructor() {
@@ -54,6 +56,10 @@ export function isStaleWorkError(error: unknown): boolean {
 
 export function isUnavailableNodeError(error: unknown): boolean {
   return String(error instanceof M2ShelfError ? error.causeValue : error).includes("NODE_NOT_VISIBLE");
+}
+
+export function isScanBusyError(error: unknown): boolean {
+  return String(error instanceof M2ShelfError ? error.causeValue : error).includes("SCAN_WORKER_BUSY");
 }
 
 const commandErrorKeys = {
@@ -82,6 +88,7 @@ const commandErrorKeys = {
   open_library_root_in_explorer: "error.fileFailed",
   open_node_in_explorer: "error.fileFailed",
   open_media_in_explorer: "error.fileFailed",
+  open_comic_in_explorer: "error.fileFailed",
   open_resource_file: "error.fileFailed",
   open_resource_in_explorer: "error.fileFailed",
   get_settings: "error.settingsFailed",
@@ -127,6 +134,12 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
   try {
     return await invoke<T>(command, args);
   } catch (error) {
+    if (isScanBusyError(error)) throw new M2ShelfError(translateActive("app.scanAlreadyRunning"), error, command);
+    if (String(error).includes('COMIC_')) {
+      const text=String(error);
+      const key=text.includes('ENCRYPTED')?'comic.encrypted':text.includes('LIMIT')?'comic.limit':text.includes('OUTSIDE_ROOT')?'comic.outside':'comic.error';
+      throw new M2ShelfError(translateActive(key),error,command);
+    }
     // Rust keeps precise diagnostics for logs/tests. UI receives stable localized copy instead
     // of leaking a Chinese backend string into English, Japanese, or Korean interfaces.
     throw new M2ShelfError(String(error).includes("WORK_TARGET_STALE") ? translateActive("works.changed") : commandErrorMessage(command), error, command);
@@ -136,6 +149,16 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
 export const desktopAvailable = isTauri();
 
 export const api = {
+  revealComicBook: (comicBookId:number)=>call<void>('open_comic_in_explorer',{comicBookId}),
+  comicDetail: (nodeId:number)=>call<ComicBook[]>('get_comic_detail',{nodeId}),
+  openComicBook: (comicBookId:number)=>call<ComicOpenResult>('open_comic_book',{comicBookId}),
+  readBookDocument: (comicBookId:number,pageIndex:number,expectedRevision:string)=>call<ArrayBuffer>('read_book_document',{comicBookId,pageIndex,expectedRevision}),
+  readPdfRange: (comicBookId:number,begin:number,end:number,expectedRevision:string)=>call<ArrayBuffer>('read_pdf_range',{comicBookId,begin,end,expectedRevision}),
+  readComicPage: (comicBookId:number,pageIndex:number,expectedRevision?:string)=>call<ArrayBuffer>('read_comic_page',{comicBookId,pageIndex,expectedRevision:expectedRevision??null}),
+  updateComicProgress: (comicBookId:number,pageIndex:number,expectedRevision?:string)=>call<void>('update_comic_progress',{comicBookId,pageIndex,expectedRevision:expectedRevision??null}),
+  comicBookmarks: (comicBookId:number)=>call<number[]>('list_comic_bookmarks',{comicBookId}),
+  addComicBookmark: (comicBookId:number,pageIndex:number,expectedRevision?:string)=>call<number[]>('add_comic_bookmark',{comicBookId,pageIndex,expectedRevision:expectedRevision??null}),
+  removeComicBookmark: (comicBookId:number,pageIndex:number,expectedRevision?:string)=>call<number[]>('remove_comic_bookmark',{comicBookId,pageIndex,expectedRevision:expectedRevision??null}),
   bindWorkBangumi: (target: WorkTarget, subject: BangumiSubject) => call<MetadataBinding>("bind_work_bangumi", { target, subject }),
   retryWorkBangumiCover: (target: WorkTarget, failedSourceNodeIds: number[] = []) => call<MetadataBinding>("retry_work_bangumi_cover", { target, failedSourceNodeIds }),
   clearWorkBangumi: (target: WorkTarget) => call<void>("clear_work_bangumi_binding", { target }),
@@ -144,8 +167,9 @@ export const api = {
     call<void>("acknowledge_update_recovery_notice", { notice }),
   showMainWindow: () => call<void>("show_main_window"),
   listRoots: () => call<LibraryRoot[]>("list_library_roots"),
-  addRoot: (path: string, recognitionMode: LibraryRecognitionMode) =>
-    call<LibraryRoot>("add_library_root", { path, displayName: null, recognitionMode }),
+  setLibraryScanWarningsIgnored: (rootId: number, ignored: boolean) => call<LibraryRoot>("set_library_scan_warnings_ignored", {rootId, ignored}),
+  addRoot: (path: string, recognitionMode: LibraryRecognitionMode, mediaKind:LibraryMediaKind='VIDEO') =>
+    call<LibraryRoot>("add_library_root", { path, displayName: null, recognitionMode,mediaKind }),
   removeRoot: (rootId: number) => call<void>("remove_library_root", { rootId }),
   renameRoot: (rootId: number, displayName: string) =>
     call<LibraryRoot>("update_library_root_name", { rootId, displayName }),
@@ -177,8 +201,8 @@ export const api = {
     call<MediaNode>("set_node_display_name", { nodeId, displayName }),
   bangumiPrefill: (nodeId: number) =>
     call<BangumiSearchPrefill>("get_bangumi_search_prefill", { nodeId }),
-  searchBangumi: (keyword: string, limit = 20) =>
-    call<BangumiSubject[]>("search_bangumi", { keyword, limit }),
+  searchBangumi: (keyword: string, limit = 20, nodeId?:number) =>
+    call<BangumiSubject[]>("search_bangumi", { keyword, limit,nodeId:nodeId??null }),
   bindBangumi: (nodeId: number, subject: BangumiSubject) =>
     call<MetadataBinding>("bind_bangumi", { nodeId, subject }),
   syncPendingBangumiAliases: () => call<boolean>("sync_pending_bangumi_aliases"),

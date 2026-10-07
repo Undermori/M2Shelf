@@ -129,6 +129,8 @@ pub fn reveal(path: &Path) -> AppResult<()> {
     }
     #[cfg(target_os = "windows")]
     {
+        let shell_path = shell_path(path);
+        let path = shell_path.as_path();
         if path.is_file() {
             reveal_file_in_explorer(path)
         } else {
@@ -195,7 +197,7 @@ struct OwnedItemIdList(*mut ITEMIDLIST);
 #[cfg(target_os = "windows")]
 impl OwnedItemIdList {
     fn from_path(path: &Path) -> AppResult<Self> {
-        let wide_path = path_to_wide(path);
+        let wide_path = path_to_wide(&shell_path(path));
         let pidl = unsafe { ILCreateFromPathW(wide_path.as_ptr()) };
         if pidl.is_null() {
             Err("Windows Shell 无法识别该文件路径。".into())
@@ -229,6 +231,30 @@ fn path_to_wide(path: &Path) -> Vec<u16> {
         .encode_wide()
         .chain(std::iter::once(0))
         .collect()
+}
+
+/// Rust canonical paths use verbatim prefixes that Explorer's Shell parser rejects.
+/// Convert only disk/UNC prefixes at the Shell boundary, preserving every UTF-16 unit.
+#[cfg(target_os = "windows")]
+fn shell_path(path: &Path) -> std::path::PathBuf {
+    use std::{
+        ffi::OsString,
+        os::windows::ffi::OsStringExt,
+        path::{Component, Prefix},
+    };
+    let wide: Vec<u16> = path.as_os_str().encode_wide().collect();
+    match path.components().next() {
+        Some(Component::Prefix(prefix)) => match prefix.kind() {
+            Prefix::VerbatimDisk(_) => OsString::from_wide(&wide[4..]).into(),
+            Prefix::VerbatimUNC(_, _) => {
+                let mut normal = vec![b'\\' as u16, b'\\' as u16];
+                normal.extend_from_slice(&wide[8..]);
+                OsString::from_wide(&normal).into()
+            }
+            _ => path.to_path_buf(),
+        },
+        _ => path.to_path_buf(),
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -412,10 +438,33 @@ mod tests {
         std::fs::write(&file, []).unwrap();
 
         let item = OwnedItemIdList::from_path(&file).unwrap();
+        let canonical = std::fs::canonicalize(&file).unwrap();
+        assert_eq!(shell_path(&canonical), file);
+        // This is the path form sent by the checked comic/PDF source reader.
+        let canonical_item = OwnedItemIdList::from_path(&canonical).unwrap();
+        assert!(!canonical_item.0.is_null());
         let parent = item.clone_list().unwrap();
         let child = unsafe { ILFindLastID(item.0) };
 
         assert!(!child.is_null());
         assert_ne!(unsafe { ILRemoveLastID(parent.0) }, 0);
+    }
+
+    #[test]
+    fn shell_paths_convert_verbatim_disk_and_unc_without_changing_names() {
+        for (input, expected) in [
+            (
+                r"\\?\C:\媒体 日本語\[A&B] 第 01 卷.pdf",
+                r"C:\媒体 日本語\[A&B] 第 01 卷.pdf",
+            ),
+            (
+                r"\\?\UNC\server\书库\[A&B] 01.pdf",
+                r"\\server\书库\[A&B] 01.pdf",
+            ),
+            (r"C:\媒体\01.pdf", r"C:\媒体\01.pdf"),
+            (r"\\server\书库\01.pdf", r"\\server\书库\01.pdf"),
+        ] {
+            assert_eq!(shell_path(Path::new(input)), Path::new(expected));
+        }
     }
 }

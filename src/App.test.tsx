@@ -5,13 +5,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppSettings, MediaNode, ScanProgress } from "./types/media";
 
 const mocks = vi.hoisted(() => ({
+  chooseDirectory: vi.fn(),
   api: {
     bootstrap: vi.fn(), getSettings: vi.fn(), listRoots: vi.fn(),
     getCollectionSortPreferences: vi.fn(), updateCollectionSortPreference: vi.fn(), scanStatus: vi.fn(), allResources: vi.fn(),
     listRecentlyWatched: vi.fn(), listFavoriteFolders: vi.fn(), showMainWindow: vi.fn(),
-    startScan: vi.fn(), nodeDetail: vi.fn(), cacheStats: vi.fn(), updateSettings: vi.fn(),
+    addRoot: vi.fn(), startScan: vi.fn(), nodeDetail: vi.fn(), cacheStats: vi.fn(), updateSettings: vi.fn(),
     bindWorkBangumi: vi.fn(), bindBangumi: vi.fn(), clearWorkBangumi: vi.fn(), retryWorkBangumiCover: vi.fn(), bangumiPrefill: vi.fn(), searchBangumi: vi.fn(), renameNode: vi.fn(), playMedia: vi.fn(), openMediaInExplorer: vi.fn(),
-    listHiddenNodes: vi.fn(), resetNodeType: vi.fn(), search: vi.fn(), browse: vi.fn(), syncPendingBangumiAliases: vi.fn(), openBangumiSubject: vi.fn(),
+    listHiddenNodes: vi.fn(), resetNodeType: vi.fn(), search: vi.fn(), browse: vi.fn(), syncPendingBangumiAliases: vi.fn(), openBangumiSubject: vi.fn(), openExternalUrl: vi.fn(),
   },
   progress: new Set<(value: ScanProgress) => void>(),
   finished: new Set<(value: ScanProgress) => void>(),
@@ -21,6 +22,7 @@ vi.mock("./lib/api", async (importOriginal) => ({
   ...await importOriginal<typeof import("./lib/api")>(),
   desktopAvailable: true,
   api: mocks.api,
+  chooseDirectory: mocks.chooseDirectory,
   onScanProgress: async (callback: (value: ScanProgress) => void) => {
     mocks.progress.add(callback); return () => mocks.progress.delete(callback);
   },
@@ -72,6 +74,7 @@ beforeEach(() => {
   settings = {
     mpvPath: null, defaultViewMode: "GRID", videoExtensions: [".mkv"],
     bangumiSearchEnabled: false, autoCheckUpdates: false, autoScanOnStartup: true,
+    allResourcesFlattened: true,
     language: "zh-CN", theme: "light", coverCacheDirectory: "X:/AppCache",
   };
   mocks.api.getSettings.mockImplementation(async () => settings);
@@ -104,16 +107,161 @@ beforeEach(() => {
       durationMs: null, width: null, height: null, codec: null })),
   }));
 });
-afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe("startup refresh and work browsing", () => {
-  it.each([
-    ["zh-CN", "原作者", "功能改进与维护"],
-    ["en-US", "Original author", "Feature improvements and maintenance"],
-    ["ja-JP", "原作者", "機能改善・メンテナンス"],
-    ["ko-KR", "원작자", "기능 개선 및 유지보수"],
-  ] as const)("shows both author roles in %s", async (language, original, contributor) => {
+  it("queues scanning a new ebook library until the existing scan finishes", async () => {
+    mocks.chooseDirectory.mockResolvedValue('X:/New Books');
+    const added={...root,id:2,path:'X:/New Books',displayName:'New Books',mediaKind:'EBOOK',recognitionMode:'VIDEO_FILE'};
+    mocks.api.addRoot.mockImplementation(async()=>{mocks.api.listRoots.mockResolvedValue([root,added]);return added;});
+    mount();await screen.findByText('Example Work');
+    await waitFor(()=>expect(mocks.api.startScan).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole('button',{name:'添加资源目录'}));
+    fireEvent.click(await screen.findByRole('button',{name:'电子书'}));
+    fireEvent.click(screen.getByRole('button',{name:/按单个文件识别/}));
+    await waitFor(()=>expect(mocks.api.addRoot).toHaveBeenCalledWith('X:/New Books','VIDEO_FILE','EBOOK'));
+    expect(mocks.api.startScan).toHaveBeenCalledTimes(1);
+    await act(async()=>{for(const callback of mocks.finished)callback(progress);});
+    await waitFor(()=>expect(mocks.api.startScan).toHaveBeenCalledWith(2,undefined,false));
+    expect(mocks.api.startScan).toHaveBeenCalledTimes(2);
+  });
+  it("retains a newly added library when the native worker is briefly busy after completion", async () => {
     settings.autoScanOnStartup = false;
+    mocks.chooseDirectory.mockResolvedValue('X:/New Books');
+    mocks.api.startScan.mockRejectedValueOnce(new Error('SCAN_WORKER_BUSY')).mockResolvedValueOnce({scanId:'new-books'});
+    mocks.api.addRoot.mockResolvedValue({...root,id:2,path:'X:/New Books',mediaKind:'EBOOK',recognitionMode:'VIDEO_FILE'});
+    mount();await screen.findByText('Example Work');
+    fireEvent.click(screen.getByRole('button',{name:'添加资源目录'}));
+    fireEvent.click(await screen.findByRole('button',{name:'电子书'}));
+    fireEvent.click(screen.getByRole('button',{name:/按单个文件识别/}));
+    await waitFor(()=>expect(mocks.api.startScan).toHaveBeenCalledTimes(2),{timeout:2000});
+    expect(mocks.api.startScan.mock.calls.every(call=>call[0]===2)).toBe(true);
+  });
+  it("shows a transient save receipt only after a successful edit, not on initial load", async () => {
+    settings.autoScanOnStartup = false;
+    mount();
+    await screen.findByText("Example Work");
+    fireEvent.click(screen.getByRole("button", { name: "设置" }));
+    const toggle = await screen.findByRole("checkbox", { name: "全部资源穿透显示" });
+    expect(document.querySelector(".settings-savebar")).toBeNull();
+    const receipt = document.querySelector(".settings-save-status")!;
+    expect(receipt.textContent).toBe("");
+    vi.useFakeTimers();
+    await act(async () => { fireEvent.click(toggle); });
+    expect(receipt.textContent).toBe("所有修改已自动保存");
+    await act(async () => { vi.advanceTimersByTime(3000); });
+    expect(receipt.textContent).toBe("所有修改已自动保存");
+    // A new edit cancels the previous receipt's timeout.
+    await act(async () => { fireEvent.click(toggle); });
+    await act(async () => { vi.advanceTimersByTime(400); });
+    expect(receipt.textContent).toBe("所有修改已自动保存");
+    await act(async () => { vi.advanceTimersByTime(2800); });
+    expect(receipt.classList.contains("is-visible")).toBe(false);
+    await act(async () => { vi.advanceTimersByTime(180); });
+    expect(receipt.textContent).toBe("");
+    expect(mocks.api.updateSettings).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps saving feedback until IPC completes and never reports a failed save as successful", async () => {
+    settings.autoScanOnStartup = false;
+    let rejectSave!: (reason: Error) => void;
+    mocks.api.updateSettings.mockImplementation(() => new Promise((_resolve, reject) => { rejectSave = reject; }));
+    mount();
+    await screen.findByText("Example Work");
+    fireEvent.click(screen.getByRole("button", { name: "设置" }));
+    const toggle = await screen.findByRole("checkbox", { name: "全部资源穿透显示" });
+    fireEvent.click(toggle);
+    const receipt = document.querySelector(".settings-save-status")!;
+    expect(receipt.textContent).toBe("正在自动保存…");
+    vi.useFakeTimers();
+    await act(async () => { vi.advanceTimersByTime(5000); });
+    expect(receipt.textContent).toBe("正在自动保存…");
+    await act(async () => { rejectSave(new Error("fixture save failure")); });
+    expect(receipt.textContent).toBe("");
+    expect((toggle as HTMLInputElement).checked).toBe(true);
+    expect(screen.queryByText("所有修改已自动保存")).toBeNull();
+  });
+
+  it.each([
+    ["zh-CN", "全部资源穿透显示"],
+    ["en-US", "Flatten All Resources"],
+    ["ja-JP", "すべてのリソースをフラット表示"],
+    ["ko-KR", "전체 리소스 펼쳐 보기"],
+  ].flatMap(([language, label]) => (["light", "dark"] as const).map(theme => [language, label, theme] as const)))("localizes the flatten toggle in %s with the shared switch style (%s, %s)", async (language, label, theme) => {
+    settings.autoScanOnStartup = false;
+    settings.theme = theme;
+    mount();
+    await screen.findByText("Example Work");
+    fireEvent.click(screen.getByRole("button", { name: "设置" }));
+    const languageSelect = await screen.findByRole("combobox", { name: "界面语言" });
+    await waitFor(() => expect((languageSelect as HTMLSelectElement).disabled).toBe(false));
+    fireEvent.change(languageSelect, { target: { value: language } });
+    const toggle = await screen.findByRole("checkbox", { name: label });
+    expect(toggle.closest("label")?.className).toBe("switch-field settings-switch-row");
+    expect((toggle as HTMLInputElement).checked).toBe(true);
+    expect(document.documentElement.dataset.theme).toBe(theme);
+  });
+  it("keeps original folder cards when flattening is off, saves the toggle, and ignores old grouping snapshots", async () => {
+    settings.autoScanOnStartup = false;
+    settings.allResourcesFlattened = false;
+    mount();
+    await screen.findByText(/^Archive/);
+    expect(screen.queryByText("Example Work")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "设置" }));
+    const toggle = await screen.findByRole("checkbox", { name: "全部资源穿透显示" });
+    await waitFor(() => expect((toggle as HTMLInputElement).disabled).toBe(false));
+    expect((toggle as HTMLInputElement).checked).toBe(false);
+    fireEvent.click(toggle);
+    await waitFor(() => expect(settings.allResourcesFlattened).toBe(true));
+    fireEvent.click(screen.getByRole("button", { name: "全部资源" }));
+    await screen.findByText("Example Work");
+    expect(screen.queryByText(/^Archive/)).toBeNull();
+    expect(mocks.api.startScan).not.toHaveBeenCalled();
+    cleanup();
+    mount();
+    await screen.findByText("Example Work");
+    fireEvent.click(screen.getByRole("button", { name: "设置" }));
+    const savedToggle = await screen.findByRole("checkbox", { name: "全部资源穿透显示" });
+    await waitFor(() => expect((savedToggle as HTMLInputElement).disabled).toBe(false));
+    expect((savedToggle as HTMLInputElement).checked).toBe(true);
+    fireEvent.click(savedToggle);
+    await waitFor(() => expect(settings.allResourcesFlattened).toBe(false));
+    fireEvent.click(screen.getByRole("button", { name: "全部资源" }));
+    await screen.findByText(/^Archive/);
+    cleanup();
+    mount();
+    await screen.findByText(/^Archive/);
+  });
+
+  it("rolls back failed flattening persistence after leaving Settings", async () => {
+    settings.autoScanOnStartup = false;
+    settings.allResourcesFlattened = false;
+    let rejectSave!: (reason: Error) => void;
+    mocks.api.updateSettings.mockImplementation(() => new Promise((_resolve, reject) => { rejectSave = reject; }));
+    mount();
+    await screen.findByText(/^Archive/);
+    fireEvent.click(screen.getByRole("button", { name: "设置" }));
+    const toggle = await screen.findByRole("checkbox", { name: "全部资源穿透显示" });
+    await waitFor(() => expect((toggle as HTMLInputElement).disabled).toBe(false));
+    fireEvent.click(toggle);
+    fireEvent.click(screen.getByRole("button", { name: "全部资源" }));
+    await screen.findByText("Example Work");
+    await act(async () => rejectSave(new Error("fixture save failure")));
+    await screen.findByText(/^Archive/);
+    expect(settings.allResourcesFlattened).toBe(false);
+  });
+  it.each([
+    ["zh-CN", "关注作者", "特别感谢", "原作者", "功能改进与维护"],
+    ["en-US", "Follow the author", "Special thanks", "Original author", "Feature improvements and maintenance"],
+    ["ja-JP", "作者をフォロー", "スペシャルサンクス", "原作者", "機能改善・メンテナンス"],
+    ["ko-KR", "제작자 팔로우", "특별 감사", "원작자", "기능 개선 및 유지보수"],
+  ].flatMap(([language, follow, thanks, original, contributor]) => (["light", "dark"] as const).map(theme => [language, follow, thanks, original, contributor, theme] as const)))("shows compact author links and thanks in %s (%s, %s, %s, %s, %s)", async (language, follow, thanks, original, contributor, theme) => {
+    settings.autoScanOnStartup = false;
+    settings.theme = theme;
+    const websiteUrl = "https://space.bilibili.com/2903441";
+    const xUrl = "https://x.com/f_undermori";
+    mocks.api.bootstrap.mockResolvedValue({ name: "M²Shelf", version: "0.5.11", websiteUrl, xUrl, updateRecoveryNotice: null });
+    mocks.api.openExternalUrl.mockResolvedValue(undefined);
     mount();
     await screen.findByText("Example Work");
     fireEvent.click(screen.getByRole("button", { name: "设置" }));
@@ -121,11 +269,26 @@ describe("startup refresh and work browsing", () => {
     const languageSelect = screen.getByRole("combobox", { name: "界面语言" }) as HTMLSelectElement;
     await waitFor(() => expect(languageSelect.disabled).toBe(false));
     fireEvent.change(languageSelect, { target: { value: language } });
-    const about = within(document.querySelector(".about-grid") as HTMLElement);
-    expect(await about.findByText(original)).toBeTruthy();
-    expect(about.getByText(contributor)).toBeTruthy();
-    expect(about.getByText("森下Undermori")).toBeTruthy();
-    expect(about.getByText("Juvenile_A")).toBeTruthy();
+    const section = document.querySelector(".about-section") as HTMLElement;
+    const about = within(section);
+    expect(await about.findByText(follow)).toBeTruthy();
+    const credit = section.querySelector(".about-credit") as HTMLElement;
+    expect(credit.querySelector("dt")?.textContent).toBe(thanks);
+    expect(credit.querySelector("dd")?.textContent).toBe("Juvenile_A");
+    expect(section.querySelector(".about-thanks")).toBeNull();
+    expect(about.queryByText(original)).toBeNull();
+    expect(about.queryByText(contributor)).toBeNull();
+    expect(about.queryByText("Created by")).toBeNull();
+    expect(section.querySelector(".created-by")).toBeNull();
+    expect(section.querySelectorAll(".about-grid > div")).toHaveLength(5);
+    expect(about.getAllByText("Juvenile_A")).toHaveLength(1);
+    const links = within(section.querySelector(".about-author-links") as HTMLElement).getAllByRole("button");
+    expect(links).toHaveLength(1);
+    expect(links[0].textContent).toContain("Bilibili");
+    expect(section.textContent).not.toContain("Undermori · X");
+    fireEvent.click(links[0]);
+    expect(mocks.api.openExternalUrl.mock.calls).toEqual([[websiteUrl]]);
+    expect(document.documentElement.dataset.theme).toBe(theme);
   });
 
   it("lets the backend select damaged sources when no poster decode failure was reported", async () => {
@@ -180,8 +343,12 @@ describe("startup refresh and work browsing", () => {
     await screen.findByRole("heading", { name: "作品库" });
     // Settings retains the selected library, which previously leaked into sidebar search.
     fireEvent.click(screen.getByRole("button", { name: "设置" }));
+    expect(document.querySelector(".content-scroll.is-settings")).not.toBeNull();
     fireEvent.click(within(document.querySelector(".sidebar")!).getByRole("button", { name: "搜索" }));
     const query = document.querySelector(".search-toolbar input")!;
+    expect(document.querySelector(".content-scroll.is-settings")).toBeNull();
+    expect(query.closest(".page-title-row")).toBeNull();
+    expect(query.closest("form")?.previousElementSibling?.className).toBe("page-title-row");
     fireEvent.change(query, { target: { value: "轻拍" } });
     await screen.findByText(flip.displayName);
     expect(mocks.api.search).toHaveBeenLastCalledWith("轻拍", undefined);
@@ -409,9 +576,6 @@ describe("startup refresh and work browsing", () => {
     expect(document.querySelector(".work-sources")).not.toBeNull();
     fireEvent.click(document.querySelector(".back-button")!);
     await screen.findByRole("heading", { name: "作品库" });
-    fireEvent.change(screen.getByRole("combobox", { name: "资源展示方式" }), { target: { value: "folders" } });
-    await screen.findByText(/^Archive/);
-    fireEvent.change(screen.getByRole("combobox", { name: "资源展示方式" }), { target: { value: "works" } });
     fireEvent.click(screen.getByRole("button", { name: /编辑模式/ }));
     expect(document.querySelectorAll(".media-card")).toHaveLength(2);
     expect(screen.getByText("Release B")).toBeTruthy();

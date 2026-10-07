@@ -94,7 +94,7 @@ export function BangumiModal({ node, onClose, onBound, onStale }: BangumiModalPr
     setError(null);
     setErrorKind("search");
     try {
-      const nextResults = await api.searchBangumi(query);
+      const nextResults = await api.searchBangumi(query,20,node.id);
       if (!requestIsCurrent(generation, nodeId)) return;
       setResults(nextResults);
     } catch (caught) {

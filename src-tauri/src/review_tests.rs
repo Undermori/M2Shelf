@@ -36,6 +36,7 @@ fn fixture(files: &[&str], mode: LibraryRecognitionMode) -> (TempDir, Database, 
             current_path: String::new(),
             folders_scanned: 0,
             videos_found: 0,
+            comic_books_found: 0,
             status: ScanStatus::Running,
             errors: 0,
             message: None,
@@ -264,6 +265,24 @@ fn scan_health_failure_is_durable_without_advancing_last_success() {
     assert_eq!(health.outcome, "PARTIAL");
     assert_eq!(health.last_success_at, success);
     assert_eq!(health.error_count, 1);
+    assert!(!health.warnings_ignored);
+    let ignored = db.set_scan_warnings_ignored(root, true).unwrap();
+    assert!(ignored.scan_health.unwrap().warnings_ignored);
+    db.record_auto_scan_health(root, "PARTIAL", 2, Some("another failure"))
+        .unwrap();
+    let health = db.get_root(root).unwrap().scan_health.unwrap();
+    assert!(health.warnings_ignored);
+    assert_eq!(health.error_count, 2);
+    assert_eq!(health.outcome, "PARTIAL");
+    assert_eq!(health.last_success_at, success);
+    assert!(
+        !db.set_scan_warnings_ignored(root, false)
+            .unwrap()
+            .scan_health
+            .unwrap()
+            .warnings_ignored
+    );
+    assert!(db.set_scan_warnings_ignored(i64::MAX, true).is_err());
 }
 
 #[test]
@@ -553,6 +572,7 @@ fn ordinary_work_detail_uses_owned_count_and_activity_times() {
             .unwrap();
     }
     let mut detail = crate::models::NodeDetail {
+        comic_books: None,
         node: db.get_node(parent).unwrap(),
         children: db.list_children(parent).unwrap(),
         media_files: db.list_media(parent).unwrap(),
@@ -948,6 +968,7 @@ fn deep_directory_failure_preserves_old_index_and_baseline_while_another_root_up
             current_path: String::new(),
             folders_scanned: 0,
             videos_found: 0,
+            comic_books_found: 0,
             status: ScanStatus::Running,
             errors: 0,
             message: None,

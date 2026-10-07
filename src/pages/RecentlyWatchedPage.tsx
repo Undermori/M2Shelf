@@ -32,10 +32,10 @@ export function RecentlyWatchedPage({ entries, loading, viewMode, onViewMode, on
     <section className="browse-page recently-watched-page">
       <header className="page-toolbar">
         <div className="toolbar-topline">
-          <span className="all-resources-location"><Icon name="clock" />{t("recent.location")}</span>
+          <span className="all-resources-location"><Icon name="clock" />{t('comic.recentTitle')}</span>
         </div>
         <div className="page-title-row">
-          <div><h1>{t("recent.title")}</h1><p>{t("recent.description")}</p></div>
+          <div><h1>{t('comic.recentTitle')}</h1><p>{t('comic.recentDescription')}</p></div>
           <div className="browse-controls">
             <div className="view-toggle" aria-label={t("common.displayMode")}><button className={viewMode === "grid" ? "is-active" : ""} onClick={() => onViewMode("grid")} title={t("common.grid")} type="button"><Icon name="grid" /></button><button className={viewMode === "list" ? "is-active" : ""} onClick={() => onViewMode("list")} title={t("common.list")} type="button"><Icon name="list" /></button></div>
           </div>
@@ -43,7 +43,7 @@ export function RecentlyWatchedPage({ entries, loading, viewMode, onViewMode, on
       </header>
       <div className="page-content">
         {nodes.length > 0 && <><div className="all-resources-summary"><strong>{t("recent.count", { count: number(nodes.length) })}</strong></div><PosterGrid nodes={nodes} viewMode={viewMode} onOpen={onOpenNode} onMenu={onMenu} onBangumi={onBangumi} onRetryCover={onRetryCover} coverRevision={coverRevision} watchedAtByNodeId={watchedAtByNodeId} /></>}
-        {!loading && nodes.length === 0 && <EmptyState compact icon="clock" title={t("recent.emptyTitle")} description={t("recent.emptyDescription")} />}
+        {!loading && nodes.length === 0 && <EmptyState compact icon="clock" title={t('comic.recentEmpty')} description={t('comic.recentHelp')} />}
       </div>
     </section>
   );

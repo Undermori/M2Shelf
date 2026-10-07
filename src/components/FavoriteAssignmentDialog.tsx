@@ -29,10 +29,11 @@ export function FavoriteAssignmentDialog({ nodeIds, onClose, onApplied, onFolder
   useEffect(() => { if (nodeIds.length > 0) void load(); }, [load, nodeIds.length]);
   useEffect(() => { if (folders) inputRef.current?.focus(); }, [folders]);
   useEffect(() => {
+    if (nodeIds.length === 0) return;
     const key = (event: KeyboardEvent) => event.key === "Escape" && !busy && onClose();
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
-  }, [busy, onClose]);
+  }, [busy, nodeIds.length, onClose]);
 
   if (nodeIds.length === 0) return null;
 

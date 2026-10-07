@@ -10,6 +10,7 @@ export type ViewMode = "grid" | "list";
 export type CollectionSort = "title-asc" | "title-desc" | "added-desc" | "added-asc" | "modified-desc" | "modified-asc" | "watched-asc" | "watched-desc";
 export type CollectionSortScope = "all" | "browse" | "favorites";
 export type LibraryRecognitionMode = "FOLDER" | "VIDEO_FILE";
+export type LibraryMediaKind = "VIDEO" | "ANIMATION" | "LIVE_ACTION" | "COMIC" | "EBOOK";
 export interface CollectionSortPreferences {
   all: CollectionSort;
   browse: CollectionSort;
@@ -32,6 +33,7 @@ export type ResourceType =
   | "OTHER";
 
 export interface ScanHealth {
+  warningsIgnored?: boolean;
   lastAutoAttemptAt: string | null;
   lastSuccessAt: string | null;
   outcome: "SUCCESS" | "PARTIAL" | "FAILED" | "CANCELLED";
@@ -41,6 +43,7 @@ export interface ScanHealth {
 export interface WorkTarget { sourceNodeIds: number[]; snapshot: string; }
 export interface NestedMediaFile { file: MediaFile; sourceNodeId: number; sourceName: string; relativeDirectory: string; }
 export interface LibraryRoot {
+  mediaKind?: LibraryMediaKind;
   scanHealth?: ScanHealth | null;
   id: number;
   path: string;
@@ -58,7 +61,7 @@ export interface MetadataBinding {
   nodeId: number;
   provider: "BANGUMI";
   providerSubjectId: number;
-  providerSubjectType: 2 | 6;
+  providerSubjectType: 1 | 2 | 6;
   providerTitle: string;
   providerTitleCn: string | null;
   providerTitleEn: string | null;
@@ -95,6 +98,10 @@ export interface FavoriteFolder {
 }
 
 export interface MediaNode {
+  mediaKind?: LibraryMediaKind;
+  directComicBookCount?: number;
+  childComicBranchCount?: number;
+  totalComicBookCount?: number;
   workTarget?: WorkTarget;
   lastWatchedAt?: string | null;
   latestFileModifiedAt?: string | null;
@@ -156,6 +163,7 @@ export interface BreadcrumbItem {
 }
 
 export interface BrowseResult {
+  comicBooks?: import('./comic').ComicBook[];
   root: LibraryRoot;
   breadcrumbs: BreadcrumbItem[];
   nodes: MediaNode[];
@@ -164,6 +172,7 @@ export interface BrowseResult {
 }
 
 export interface AllResourcesResult {
+  comicNodes?: MediaNode[];
   nodes: MediaNode[];
   totalCount: number;
   works: { node: MediaNode; sources: MediaNode[]; target?: WorkTarget }[];
@@ -172,6 +181,7 @@ export interface AllResourcesResult {
 
 /** A locally recorded playback, ordered newest first by the native API. */
 export interface RecentlyWatchedEntry {
+  comicBookId?: number | null;
   node: MediaNode;
   watchedAt: string;
 }
@@ -204,6 +214,7 @@ export interface ScanProgress {
   currentPath: string;
   foldersScanned: number;
   videosFound: number;
+  comicBooksFound?:number;
   status: ScanStatus;
   errors: number;
   message?: string | null;
@@ -224,12 +235,14 @@ export interface BatchMutationResult {
 }
 
 export interface AppSettings {
+  comicReader?: import('./comic').ComicReaderSettings;
   mpvPath: string | null;
   defaultViewMode: "GRID" | "LIST";
   videoExtensions: string[];
   bangumiSearchEnabled: boolean;
   autoCheckUpdates: boolean;
   autoScanOnStartup: boolean;
+  allResourcesFlattened: boolean;
   language: AppLanguage;
   theme: AppTheme;
   coverCacheDirectory: string;
@@ -292,6 +305,7 @@ export interface ScanStarted {
 }
 
 export interface NodeDetail {
+  comicBooks?: import('./comic').ComicBook[];
   workTarget?: WorkTarget | null;
   nestedMediaFiles?: NestedMediaFile[];
   expandedFolderIds?: number[];

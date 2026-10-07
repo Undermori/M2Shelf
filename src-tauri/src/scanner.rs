@@ -53,7 +53,7 @@ pub(crate) struct ChildMediaSummary {
 }
 
 #[derive(Debug)]
-enum ScanAbort {
+pub(crate) enum ScanAbort {
     Cancelled,
     Failed(String),
 }
@@ -190,9 +190,9 @@ pub fn run_scan_with_auto_match(
             completed_roots.insert(root_id);
         }
         scan_targets.retain(|target| {
-            root_results
-                .get(&target.root.id)
-                .is_some_and(|result| result.0 == "SUCCESS")
+            root_results.get(&target.root.id).is_some_and(|result| {
+                scan_outcome_allows_matching(&result.0, target.root.media_kind)
+            })
         });
         Ok(())
     }))
@@ -343,6 +343,12 @@ pub fn run_scan_with_auto_match(
     }
 }
 
+// Partial comic scans retain valid indexed books. An unrelated unreadable archive must not
+// suppress their matching; failed/cancelled Roots and snapshot baselines remain protected.
+fn scan_outcome_allows_matching(outcome: &str, kind: crate::models::LibraryMediaKind) -> bool {
+    outcome == "SUCCESS" || (outcome == "PARTIAL" && kind.is_book())
+}
+
 /// Matches Nodes already indexed in SQLite without walking or mutating the media filesystem.
 /// Reusing `ScanControl` keeps long online runs visible, cancellable, and compatible with the
 /// existing progress/completion event flow.
@@ -436,7 +442,10 @@ fn update_auto_match_progress(
 /// `Path::starts_with` compares path components, so a sibling such as `Media-Backup` cannot be
 /// mistaken for a child of `Media`. Canonicalization also resolves junctions and symlinks before
 /// the boundary decision is made.
-fn canonicalize_within_library_root(path: &Path, canonical_root: &Path) -> Result<PathBuf, String> {
+pub(crate) fn canonicalize_within_library_root(
+    path: &Path,
+    canonical_root: &Path,
+) -> Result<PathBuf, String> {
     let canonical = fs::canonicalize(path).map_err(|error| {
         format!(
             "无法确认扫描路径 {} 的实际位置，已跳过：{error}",
@@ -500,6 +509,10 @@ fn run_scan_inner(
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             progress.root_id = target.root.id;
             progress.current_path = target.path.to_string_lossy().into_owned();
+        }
+        if target.root.media_kind.is_book() {
+            crate::comics::scan_library(app, &connection, target, &canonical_root, control, token)?;
+            continue;
         }
         if matches!(
             target.root.recognition_mode,
@@ -1390,7 +1403,7 @@ fn scan_directory(
     Ok(total_video_count.max(0))
 }
 
-fn upsert_node(
+pub(crate) fn upsert_node(
     connection: &Connection,
     root_id: i64,
     parent_node_id: Option<i64>,
@@ -1512,7 +1525,7 @@ fn index_media_file(
     Ok(())
 }
 
-fn index_resource_file(
+pub(crate) fn index_resource_file(
     connection: &Connection,
     node_id: i64,
     path: &Path,
@@ -1709,7 +1722,7 @@ pub fn resource_type_for_extension(extension: &str) -> ResourceType {
     }
 }
 
-fn update_progress(
+pub(crate) fn update_progress(
     app: Option<&AppHandle>,
     control: &ScanControl,
     path: &Path,
@@ -1728,7 +1741,7 @@ fn update_progress(
     }
 }
 
-fn check_cancel(control: &ScanControl) -> Result<(), ScanAbort> {
+pub(crate) fn check_cancel(control: &ScanControl) -> Result<(), ScanAbort> {
     if control.cancel.load(Ordering::Relaxed) {
         Err(ScanAbort::Cancelled)
     } else {
@@ -1982,6 +1995,19 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
+    fn partial_comic_scans_can_match_readable_nodes_but_failed_scans_cannot() {
+        use crate::models::LibraryMediaKind::{Comic, Video};
+        assert!(scan_outcome_allows_matching("SUCCESS", Video));
+        assert!(scan_outcome_allows_matching("SUCCESS", Comic));
+        assert!(scan_outcome_allows_matching("PARTIAL", Comic));
+        assert!(!scan_outcome_allows_matching("PARTIAL", Video));
+        for outcome in ["FAILED", "CANCELLED"] {
+            assert!(!scan_outcome_allows_matching(outcome, Comic));
+            assert!(!scan_outcome_allows_matching(outcome, Video));
+        }
+    }
+
+    #[test]
     fn auto_match_progress_snapshot_includes_live_outcome_counts() {
         let control = ScanControl {
             unchanged_directories: Default::default(),
@@ -1995,6 +2021,7 @@ mod tests {
                 current_path: String::new(),
                 folders_scanned: 0,
                 videos_found: 0,
+                comic_books_found: 0,
                 status: ScanStatus::Running,
                 errors: 0,
                 message: None,
@@ -2008,6 +2035,10 @@ mod tests {
             })),
         };
         let node = crate::models::MediaNode {
+            media_kind: crate::models::LibraryMediaKind::Video,
+            direct_comic_book_count: 0,
+            child_comic_branch_count: 0,
+            total_comic_book_count: 0,
             latest_file_modified_at: None,
             last_watched_at: None,
             id: 13,
@@ -2165,6 +2196,7 @@ mod tests {
                     current_path: root.path.clone(),
                     folders_scanned: 0,
                     videos_found: 0,
+                    comic_books_found: 0,
                     status: ScanStatus::Running,
                     errors: 0,
                     message: None,
@@ -2383,6 +2415,7 @@ mod tests {
                 current_path: root.path.clone(),
                 folders_scanned: 0,
                 videos_found: 0,
+                comic_books_found: 0,
                 status: ScanStatus::Running,
                 errors: 0,
                 message: None,
@@ -3186,6 +3219,7 @@ mod tests {
                 current_path: root.path.clone(),
                 folders_scanned: 0,
                 videos_found: 0,
+                comic_books_found: 0,
                 status: ScanStatus::Running,
                 errors: 0,
                 message: None,
@@ -3387,6 +3421,7 @@ mod tests {
                     current_path: root.path.clone(),
                     folders_scanned: 0,
                     videos_found: 0,
+                    comic_books_found: 0,
                     status: ScanStatus::Running,
                     errors: 0,
                     message: None,

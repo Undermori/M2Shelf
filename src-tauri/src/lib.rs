@@ -2,8 +2,11 @@ mod alias_sync;
 mod auto_match;
 mod bangumi;
 mod cache;
+mod comic_reader;
+mod comics;
 mod commands;
 mod db;
+mod ebooks;
 mod incremental;
 mod logical_works;
 pub mod models;
@@ -166,6 +169,16 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::get_app_bootstrap,
+            commands::get_comic_detail,
+            commands::open_comic_book,
+            commands::open_comic_in_explorer,
+            commands::read_book_document,
+            commands::read_pdf_range,
+            commands::read_comic_page,
+            commands::update_comic_progress,
+            commands::list_comic_bookmarks,
+            commands::add_comic_bookmark,
+            commands::remove_comic_bookmark,
             commands::acknowledge_update_recovery_notice,
             commands::show_main_window,
             commands::list_library_roots,
@@ -217,6 +230,7 @@ pub fn run() {
             commands::clear_node_cover,
             commands::get_cover_data_url,
             commands::get_settings,
+            commands::set_library_scan_warnings_ignored,
             commands::update_settings,
             commands::get_collection_sort_preferences,
             commands::update_collection_sort_preference,

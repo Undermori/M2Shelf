@@ -15,8 +15,8 @@ use crate::{
     models::{
         AllResourcesResult, AppBootstrap, AppSettings, BangumiSearchPrefill, BangumiSubject,
         BatchMutationResult, BrowseResult, CacheStats, CollectionSort, CollectionSortPreferences,
-        CollectionSortScope, CoverSource, FavoriteFolder, LibraryRecognitionMode, LibraryRoot,
-        MediaFile, MediaNode, MetadataBinding, NodeDetail, NodeType, PlayerTestResult,
+        CollectionSortScope, CoverSource, FavoriteFolder, LibraryMediaKind, LibraryRecognitionMode,
+        LibraryRoot, MediaFile, MediaNode, MetadataBinding, NodeDetail, NodeType, PlayerTestResult,
         RebuildResult, RecentlyWatchedEntry, ScanPhase, ScanProgress, ScanStarted, ScanStatus,
         SearchHit, UpdateCheckResult, UpdateDistribution, UpdateDownloadStatus, UserTag,
         UserTagMembership, WorkTarget,
@@ -29,6 +29,15 @@ use crate::{
 const BILIBILI_URL: &str = "https://space.bilibili.com/2903441";
 const X_URL: &str = "https://x.com/f_undermori";
 const MAX_BINDING_TITLE_CHARS: usize = 500;
+
+#[tauri::command]
+pub fn set_library_scan_warnings_ignored(
+    root_id: i64,
+    ignored: bool,
+    state: State<'_, AppState>,
+) -> AppResult<LibraryRoot> {
+    state.database.set_scan_warnings_ignored(root_id, ignored)
+}
 const MAX_BINDING_SUMMARY_CHARS: usize = 50_000;
 const MAX_BINDING_URL_CHARS: usize = 2_048;
 
@@ -343,9 +352,135 @@ pub fn list_library_roots(state: State<'_, AppState>) -> AppResult<Vec<LibraryRo
 }
 
 #[tauri::command]
+pub fn get_comic_detail(
+    node_id: i64,
+    state: State<'_, AppState>,
+) -> AppResult<Vec<crate::comics::ComicBook>> {
+    crate::comic_reader::detail(&state.database, node_id)
+}
+#[tauri::command]
+pub fn open_comic_in_explorer(comic_book_id: i64, state: State<'_, AppState>) -> AppResult<()> {
+    crate::comic_reader::reveal(&state.database, comic_book_id)
+}
+#[tauri::command]
+pub fn open_comic_book(
+    comic_book_id: i64,
+    state: State<'_, AppState>,
+) -> AppResult<crate::comics::ComicOpenResult> {
+    crate::comic_reader::open(&state.database, comic_book_id)
+}
+#[tauri::command]
+pub async fn read_comic_page(
+    comic_book_id: i64,
+    page_index: i64,
+    expected_revision: Option<String>,
+    state: State<'_, AppState>,
+) -> AppResult<tauri::ipc::Response> {
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::comic_reader::read_page_at_revision(
+            &database,
+            comic_book_id,
+            page_index,
+            expected_revision.as_deref(),
+        )
+        .map(tauri::ipc::Response::new)
+    })
+    .await
+    .map_err(|_| "COMIC_READ_FAILED".to_string())?
+}
+#[tauri::command]
+pub async fn read_pdf_range(
+    comic_book_id: i64,
+    begin: u64,
+    end: u64,
+    expected_revision: String,
+    state: State<'_, AppState>,
+) -> AppResult<tauri::ipc::Response> {
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::comic_reader::read_pdf_range(
+            &database,
+            comic_book_id,
+            begin,
+            end,
+            &expected_revision,
+        )
+        .map(tauri::ipc::Response::new)
+    })
+    .await
+    .map_err(|_| "COMIC_READ_FAILED".to_string())?
+}
+#[tauri::command]
+pub async fn read_book_document(
+    comic_book_id: i64,
+    page_index: i64,
+    expected_revision: String,
+    state: State<'_, AppState>,
+) -> AppResult<tauri::ipc::Response> {
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::comic_reader::read_document(&database, comic_book_id, page_index, &expected_revision)
+            .map(tauri::ipc::Response::new)
+    })
+    .await
+    .map_err(|_| "COMIC_READ_FAILED".to_string())?
+}
+
+#[tauri::command]
+pub fn update_comic_progress(
+    comic_book_id: i64,
+    page_index: i64,
+    expected_revision: Option<String>,
+    state: State<'_, AppState>,
+) -> AppResult<()> {
+    crate::comic_reader::progress_at_revision(
+        &state.database,
+        comic_book_id,
+        page_index,
+        expected_revision.as_deref(),
+    )
+}
+#[tauri::command]
+pub fn list_comic_bookmarks(comic_book_id: i64, state: State<'_, AppState>) -> AppResult<Vec<i64>> {
+    crate::comic_reader::bookmarks(&state.database, comic_book_id)
+}
+#[tauri::command]
+pub fn add_comic_bookmark(
+    comic_book_id: i64,
+    page_index: i64,
+    expected_revision: Option<String>,
+    state: State<'_, AppState>,
+) -> AppResult<Vec<i64>> {
+    crate::comic_reader::bookmark_at_revision(
+        &state.database,
+        comic_book_id,
+        page_index,
+        true,
+        expected_revision.as_deref(),
+    )
+}
+#[tauri::command]
+pub fn remove_comic_bookmark(
+    comic_book_id: i64,
+    page_index: i64,
+    expected_revision: Option<String>,
+    state: State<'_, AppState>,
+) -> AppResult<Vec<i64>> {
+    crate::comic_reader::bookmark_at_revision(
+        &state.database,
+        comic_book_id,
+        page_index,
+        false,
+        expected_revision.as_deref(),
+    )
+}
+
+#[tauri::command]
 pub fn add_library_root(
     path: String,
     display_name: Option<String>,
+    media_kind: Option<LibraryMediaKind>,
     recognition_mode: LibraryRecognitionMode,
     state: State<'_, AppState>,
 ) -> AppResult<LibraryRoot> {
@@ -361,9 +496,12 @@ pub fn add_library_root(
         state.update_manager.cache_dir(),
         library_root_paths(&state)?,
     )?;
-    state
-        .database
-        .add_root_with_mode(&canonical, display_name, recognition_mode)
+    state.database.add_root_with_kind(
+        &canonical,
+        display_name,
+        media_kind.unwrap_or_default(),
+        recognition_mode,
+    )
 }
 
 #[tauri::command]
@@ -475,6 +613,7 @@ pub fn browse_library(
             Some(id) => id,
             None => {
                 return Ok(BrowseResult {
+                    comic_books: Vec::new(),
                     root,
                     breadcrumbs: Vec::new(),
                     nodes: Vec::new(),
@@ -490,6 +629,7 @@ pub fn browse_library(
             return Err("目录节点不属于该资源库。".into());
         }
         Ok(BrowseResult {
+            comic_books: crate::comics::books(connection, parent_id)?,
             root,
             breadcrumbs: crate::db::breadcrumbs_conn(connection, parent_id, true)?,
             nodes: crate::db::list_children_conn(connection, parent_id)?,
@@ -568,6 +708,7 @@ pub fn match_existing_content(
         current_path,
         folders_scanned: 0,
         videos_found: 0,
+        comic_books_found: 0,
         status: ScanStatus::Running,
         errors: 0,
         message: Some("正在匹配现有资源的封面与标题…".into()),
@@ -771,6 +912,28 @@ pub fn get_bangumi_search_prefill(
         .into_iter()
         .map(|file| file.file_name)
         .collect::<Vec<_>>();
+    if node.media_kind.is_book() {
+        let parent = node
+            .parent_node_id
+            .and_then(|id| state.database.get_node(id).ok())
+            .map(|n| n.display_name);
+        let book_names = crate::comic_reader::detail(&state.database, node_id)?
+            .into_iter()
+            .take(32)
+            .map(|b| b.display_name)
+            .collect::<Vec<_>>();
+        let e = crate::comics::match_evidence_with_books(
+            &node.folder_name,
+            &node.display_name,
+            parent.as_deref(),
+            &book_names,
+        );
+        return Ok(BangumiSearchPrefill {
+            original_name: node.folder_name,
+            extracted_name: e.primary_title.clone(),
+            candidates: crate::auto_match::match_queries(&e),
+        });
+    }
     Ok(title_extractor::build_search_prefill(
         &node.folder_name,
         &node.display_name,
@@ -782,6 +945,7 @@ pub fn get_bangumi_search_prefill(
 pub async fn search_bangumi(
     keyword: String,
     limit: Option<usize>,
+    node_id: Option<i64>,
     state: State<'_, AppState>,
 ) -> AppResult<Vec<BangumiSubject>> {
     let settings = state
@@ -790,9 +954,15 @@ pub async fn search_bangumi(
     if !settings.bangumi_search_enabled {
         return Err("Bangumi 搜索已在设置中关闭。".into());
     }
-    tauri::async_runtime::spawn_blocking(move || bangumi::search(&keyword, limit.unwrap_or(20)))
-        .await
-        .map_err(|error| format!("Bangumi 搜索任务失败：{error}"))?
+    let kind = node_id
+        .map(|id| state.database.get_node(id).map(|n| n.media_kind))
+        .transpose()?
+        .unwrap_or_default();
+    tauri::async_runtime::spawn_blocking(move || {
+        bangumi::search_for_kind(&keyword, limit.unwrap_or(20), kind)
+    })
+    .await
+    .map_err(|error| format!("Bangumi 搜索任务失败：{error}"))?
 }
 
 #[tauri::command]
@@ -801,9 +971,12 @@ pub async fn bind_bangumi(
     subject: BangumiSubject,
     state: State<'_, AppState>,
 ) -> AppResult<MetadataBinding> {
-    validate_bindable_bangumi_subject(&subject)?;
+    validate_bangumi_subject_payload(&subject)?;
     let database = state.database.clone();
     let node = database.get_node(node_id)?;
+    if !node.media_kind.accepts_subject(subject.subject_type) || subject.subject_id <= 0 {
+        return Err("BANGUMI_MEDIA_KIND_CONFLICT".into());
+    }
     if !node.can_bind_bangumi() {
         return Err("只有作品或包含视频的系列可以绑定 Bangumi。".into());
     }
@@ -816,12 +989,26 @@ pub async fn bind_bangumi(
         .parent_node_id
         .and_then(|parent_id| database.get_node(parent_id).ok())
         .map(|parent| parent.display_name);
-    let evidence = title_extractor::build_match_evidence(
-        &node.folder_name,
-        &node.display_name,
-        parent_name.as_deref(),
-        &media_file_names,
-    );
+    let evidence = if node.media_kind.is_book() {
+        let book_names = crate::comic_reader::detail(&database, node_id)?
+            .into_iter()
+            .take(32)
+            .map(|b| b.display_name)
+            .collect::<Vec<_>>();
+        crate::comics::match_evidence_with_books(
+            &node.folder_name,
+            &node.display_name,
+            parent_name.as_deref(),
+            &book_names,
+        )
+    } else {
+        title_extractor::build_match_evidence(
+            &node.folder_name,
+            &node.display_name,
+            parent_name.as_deref(),
+            &media_file_names,
+        )
+    };
     let confirmed_aliases = title_extractor::confirmed_alias_candidates(&evidence);
     // Detail enrichment improves multilingual metadata, but the confirmed search subject remains
     // authoritative when the optional detail request is unavailable.
@@ -1537,6 +1724,7 @@ fn start_scan_internal(
         current_path: targets[0].path.to_string_lossy().into_owned(),
         folders_scanned: 0,
         videos_found: 0,
+        comic_books_found: 0,
         status: ScanStatus::Running,
         errors: unavailable_roots,
         message: Some("正在扫描…".into()),
@@ -1606,7 +1794,7 @@ fn ensure_no_active_scan(state: &AppState) -> AppResult<()> {
         return Err("应用正在退出以完成更新，不能开始新的资源操作。".into());
     }
     if state.scan_worker_active.load(Ordering::Acquire) {
-        return Err("已有扫描正在运行；请等待完成或先停止扫描。".into());
+        return Err("SCAN_WORKER_BUSY".into());
     }
     let guard = state
         .active_scan
@@ -1616,7 +1804,7 @@ fn ensure_no_active_scan(state: &AppState) -> AppResult<()> {
         .as_ref()
         .is_some_and(|control| control.progress().status.is_active())
     {
-        Err("已有扫描正在运行；请等待完成或先停止扫描。".into())
+        Err("SCAN_WORKER_BUSY".into())
     } else {
         Ok(())
     }
@@ -1802,6 +1990,7 @@ mod tests {
     #[test]
     fn settings_paths_are_bounded_before_filesystem_validation_or_persistence() {
         let mut settings = AppSettings {
+            comic_reader: Default::default(),
             mpv_path: Some("C:\\Player\\player.exe".into()),
             default_view_mode: crate::models::ViewMode::Grid,
             video_extensions: vec!["mkv".into()],
@@ -1811,6 +2000,7 @@ mod tests {
             theme: "system".into(),
             auto_check_updates: true,
             auto_scan_on_startup: true,
+            all_resources_flattened: false,
         };
         assert!(settings.validate_path_lengths().is_ok());
         settings.mpv_path = Some("x".repeat(crate::models::MAX_SETTINGS_PATH_CHARS + 1));

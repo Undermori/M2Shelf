@@ -157,9 +157,18 @@ fn prepare_root(
     ignored.sort();
     let mut extensions = extensions.iter().collect::<Vec<_>>();
     extensions.sort();
-    let configuration =
-        serde_json::to_string(&(1, &target.root.recognition_mode, extensions, &ignored))
-            .map_err(|e| e.to_string())?;
+    let configuration = serde_json::to_string(&(
+        if target.root.media_kind.is_book() {
+            3
+        } else {
+            2
+        },
+        &target.root.media_kind,
+        &target.root.recognition_mode,
+        extensions,
+        &ignored,
+    ))
+    .map_err(|e| e.to_string())?;
     let previous = connection
         .query_row(
             "SELECT snapshot_json FROM library_scan_snapshots WHERE library_root_id=?1",

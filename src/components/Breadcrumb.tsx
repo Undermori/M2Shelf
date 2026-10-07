@@ -12,9 +12,10 @@ interface BreadcrumbProps {
 
 export function Breadcrumb({ rootLabel, items, currentNodeId, onRoot, onNode }: BreadcrumbProps) {
   const { t } = useI18n();
+  if (items.length === 0) return null;
   return (
     <nav className="breadcrumb" aria-label={t("breadcrumb.location")}>
-      <button onClick={onRoot} type="button"><Icon name="archive" />{rootLabel}</button>
+      <button onClick={onRoot} type="button">{rootLabel}</button>
       {items.map((item) => {
         const current = item.id === currentNodeId;
         return (

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { AllResourcesResult, AppBootstrap, AppSettings, AppTheme, BatchMutationResult, BrowseResult, CollectionSort, CollectionSortPreferences, CollectionSortScope, FavoriteFolder, LibraryRecognitionMode, LibraryRoot, MediaFile, MediaNode, MetadataBinding, NodeDetail, RecentlyWatchedEntry, ResourceFile, ScanProgress, SearchHit, UpdateCheckResult, UpdateDownloadStatus, UpdateRecoveryNotice, ViewMode } from "./types/media";
-import { api, isStaleWorkError, isUnavailableNodeError, chooseCoverImage, chooseDirectory, desktopAvailable, onScanFinished, onScanProgress } from "./lib/api";
+import { api, isScanBusyError, isStaleWorkError, isUnavailableNodeError, chooseCoverImage, chooseDirectory, desktopAvailable, onScanFinished, onScanProgress } from "./lib/api";
 import { canBindBangumi, errorMessage } from "./lib/format";
 import { SourceChoiceDialog } from "./components/SourceChoiceDialog";
 import { BangumiModal } from "./components/BangumiModal";
@@ -33,6 +33,9 @@ import { RecentlyWatchedPage } from "./pages/RecentlyWatchedPage";
 import { FavoritesPage } from "./pages/FavoritesPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { WorkDetailPage } from "./pages/WorkDetailPage";
+import { ComicDetailPage } from './pages/ComicDetailPage';
+import { ComicReaderPage } from './pages/ComicReaderPage';
+import type {ComicBook} from './types/comic';
 import { useI18n } from "./lib/i18n";
 
 type ContextState = { node: MediaNode; x: number; y: number } | null;
@@ -41,6 +44,8 @@ type BatchContextState = { x: number; y: number } | null;
 type ConfirmState = { title: string; description: string; confirmLabel?: string; destructive?: boolean; run: () => Promise<void> } | null;
 type PendingRootAdd = { path: string; onboarding: boolean; playerPath: string | null } | null;
 type NavigationSnapshot = {
+  readerBookId:number|null;
+  allMediaKind: 'ALL'|'VIDEO'|'COMIC'|'EBOOK';
   page: AppPage;
   selectedRootId: number | null;
   browseData: BrowseResult | null;
@@ -50,7 +55,6 @@ type NavigationSnapshot = {
   searchRootId: number | null;
   viewMode: ViewMode;
   allFilter: string;
-  allGrouping: "works" | "folders";
   allTagFilterId: number | null;
   allSort: CollectionSort;
   browseFilter: string;
@@ -196,11 +200,14 @@ function App() {
   const [favoriteSort, setFavoriteSort] = useState<CollectionSort>("title-asc");
   const [currentNode, setCurrentNode] = useState<MediaNode | null>(null);
   const [detail, setDetail] = useState<NodeDetail | null>(null);
+  const [readerBookId,setReaderBookId]=useState<number|null>(null);
+  const [allMediaKind,setAllMediaKind]=useState<'ALL'|'VIDEO'|'COMIC'|'EBOOK'>('ALL');
   const [contentLoading, setContentLoading] = useState(false);
   const [viewMode, setViewMode] = useState<ViewMode>("grid");
   const [allFilter, setAllFilter] = useState("");
   const [allTagFilterId, setAllTagFilterId] = useState<number | null>(null);
-  const [allGrouping, setAllGrouping] = useState<"works" | "folders">("works");
+  const [allResourcesFlattened, setAllResourcesFlattened] = useState(false);
+  const allGrouping = allResourcesFlattened ? "works" : "folders";
   const startupScanAttempted = useRef(false);
   const [startupScanSettled, setStartupScanSettled] = useState(false);
   const refreshWorkGroupsRef = useRef<(nodeId: number) => void>(() => undefined);
@@ -234,6 +241,9 @@ function App() {
   const [hiddenNodesOpen, setHiddenNodesOpen] = useState(false);
   const [pendingRootAdd, setPendingRootAdd] = useState<PendingRootAdd>(null);
   const [rootAddBusy, setRootAddBusy] = useState(false);
+  const [addedRootScanQueue, setAddedRootScanQueue] = useState<number[]>([]);
+  const [addedRootScanAttempt, setAddedRootScanAttempt] = useState(0);
+  const addedRootScanInFlight = useRef(false);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
   const [autoCheckUpdates, setAutoCheckUpdates] = useState(false);
   const [updateCheckResult, setUpdateCheckResult] = useState<UpdateCheckResult | null>(null);
@@ -253,9 +263,9 @@ function App() {
   const updateRecoveryAcknowledgeInFlight = useRef(false);
   const autoUpdateCheckStarted = useRef(false);
   const updateBannerDismissedRef = useRef(false);
-  const settingsAppearanceRef = useRef({ language, theme, autoCheckUpdates });
+  const settingsAppearanceRef = useRef({ language, theme, autoCheckUpdates, allResourcesFlattened });
   const settingsAppearanceRevision = useRef(0);
-  settingsAppearanceRef.current = { language, theme, autoCheckUpdates };
+  settingsAppearanceRef.current = { language, theme, autoCheckUpdates, allResourcesFlattened };
   const mainWindowShowRequested = useRef(false);
   const contentScrollRef = useRef<HTMLDivElement>(null);
   const navigationSnapshots = useRef<Map<number, NavigationSnapshot>>(new Map());
@@ -326,6 +336,7 @@ function App() {
   }, []);
 
   const captureNavigation = useCallback((): NavigationSnapshot => ({
+    readerBookId,allMediaKind,
     page,
     selectedRootId,
     browseData,
@@ -335,7 +346,6 @@ function App() {
     searchRootId,
     viewMode,
     allFilter,
-    allGrouping,
     allTagFilterId,
     allSort,
     browseFilter,
@@ -346,7 +356,7 @@ function App() {
     favoriteFilter,
     favoriteSort,
     scrollTop: contentScrollRef.current?.scrollTop ?? 0,
-  }), [allFilter, allGrouping, allSort, allTagFilterId, browseData, browseFilter, browseSort, browseTagFilterId, currentNode, detail, favoriteFilter, favoriteNodes, favoriteSort, page, searchQuery, searchRootId, selectedFavoriteFolderId, selectedRootId, viewMode]);
+  }), [readerBookId,allMediaKind,allFilter, allSort, allTagFilterId, browseData, browseFilter, browseSort, browseTagFilterId, currentNode, detail, favoriteFilter, favoriteNodes, favoriteSort, page, searchQuery, searchRootId, selectedFavoriteFolderId, selectedRootId, viewMode]);
   const captureNavigationRef = useRef(captureNavigation);
   captureNavigationRef.current = captureNavigation;
 
@@ -373,6 +383,7 @@ function App() {
   }, [rememberSectionNavigation]);
 
   const restorePreviousNavigation = useCallback((previous: NavigationSnapshot) => {
+    setReaderBookId(previous.readerBookId);setAllMediaKind(previous.allMediaKind);
     setPage(previous.page);
     setSelectedRootId(previous.selectedRootId);
     setBrowseData(previous.browseData);
@@ -382,7 +393,6 @@ function App() {
     setSearchRootId(previous.searchRootId);
     setViewMode(previous.viewMode);
     setAllFilter(previous.allFilter);
-    setAllGrouping(previous.allGrouping);
     setAllTagFilterId(previous.allTagFilterId);
     setAllSort(previous.allSort);
     setBrowseFilter(previous.browseFilter);
@@ -396,6 +406,7 @@ function App() {
   }, [queueScroll]);
 
   const restoreSectionNavigation = useCallback((previous: NavigationSnapshot) => {
+    setReaderBookId(null);setAllMediaKind(previous.allMediaKind);
     setPage(previous.page);
     setViewMode(previous.viewMode);
     setDetail(null);
@@ -403,7 +414,6 @@ function App() {
       setCurrentNode(null);
       setSearchRootId(null);
       setAllFilter(previous.allFilter);
-      setAllGrouping(previous.allGrouping);
       setAllTagFilterId(previous.allTagFilterId);
       setAllSort(previous.allSort);
     } else if (previous.page === "search") {
@@ -476,15 +486,21 @@ function App() {
   }, []);
 
   const applySettingsAppearance = useCallback((settings: AppSettings): number => {
+    if (settingsAppearanceRef.current.allResourcesFlattened !== settings.allResourcesFlattened) {
+      setEditMode(false);
+      setSelectedNodeIds(new Set());
+    }
     settingsAppearanceRevision.current += 1;
     settingsAppearanceRef.current = {
       language: settings.language,
       theme: settings.theme,
       autoCheckUpdates: settings.autoCheckUpdates,
+      allResourcesFlattened: settings.allResourcesFlattened,
     };
     setLanguage(settings.language);
     setTheme(settings.theme);
     setAutoCheckUpdates(settings.autoCheckUpdates);
+    setAllResourcesFlattened(settings.allResourcesFlattened);
     return settingsAppearanceRevision.current;
   }, [setLanguage]);
 
@@ -493,6 +509,7 @@ function App() {
     const failedAppearanceIsCurrent = current.language === failed.language
       && current.theme === failed.theme
       && current.autoCheckUpdates === failed.autoCheckUpdates
+      && current.allResourcesFlattened === failed.allResourcesFlattened
       && settingsAppearanceRevision.current === appearanceRevision;
     if (rollback && failedAppearanceIsCurrent) applySettingsAppearance(rollback);
     toast(message, "error");
@@ -763,7 +780,8 @@ function App() {
     setAllResources((current) => {
       if (!current) return current;
       const nodes = patchNodeList(current.nodes, nodeId, update);
-      return nodes === current.nodes ? current : { ...current, nodes };
+      const comicNodes=current.comicNodes?patchNodeList(current.comicNodes,nodeId,update):undefined;
+      return nodes === current.nodes && comicNodes===current.comicNodes ? current : { ...current, nodes,comicNodes };
     });
     setBrowseData((current) => {
       if (!current) return current;
@@ -961,6 +979,7 @@ function App() {
         if (!active) return;
         setAutoCheckUpdates(settings.autoCheckUpdates ?? true);
         setStartupScanEnabled(settings.autoScanOnStartup ?? true);
+        setAllResourcesFlattened(settings.allResourcesFlattened ?? false);
         setRoots(nextRoots);
         setSelectedRootId(nextRoots[0]?.id ?? null);
         persistedSortPreferences.current = sortPreferences;
@@ -1075,9 +1094,11 @@ function App() {
     const matchOnly = matchOnlyScanIds.current.delete(progress.scanId)
       || (progress.foldersScanned === 0 && progress.videosFound === 0 && progress.phase === "AUTO_MATCHING");
     const labels: Record<string, string> = { COMPLETED: t("app.scanCompleted"), CANCELLED: t("app.scanCancelled"), FAILED: t("app.scanFailed") };
-    const summary = matchOnly ? t(progress.status === "CANCELLED" ? "app.matchCancelled" : progress.status === "FAILED" ? "app.matchFailed" : "app.matchCompleted") : t("app.scanSummary", {
+    const summaryKey=progress.comicBooksFound&&progress.videosFound?'comic.scanMixedSummary':progress.comicBooksFound||(!progress.videosFound&&['COMIC','EBOOK'].includes(roots.find(root=>root.id===progress.rootId)?.mediaKind??'VIDEO'))?'comic.scanSummary':'app.scanSummary';
+    const summary = matchOnly ? t(progress.status === "CANCELLED" ? "app.matchCancelled" : progress.status === "FAILED" ? "app.matchFailed" : "app.matchCompleted") : t(summaryKey, {
       status: labels[progress.status] ?? t("app.scanEnded"),
       videos: number(progress.videosFound),
+      books: number(progress.comicBooksFound??0),
       errors: progress.errors ? t("app.scanErrorsSuffix", { count: number(progress.errors) }) : "",
     });
     const unmatched = progress.autoMatchUnmatched + (progress.autoMatchPending ?? 0);
@@ -1094,7 +1115,7 @@ function App() {
       page === "all" ? Promise.resolve(null) : loadAllResources(),
       page === "recent" ? Promise.resolve([]) : loadRecentlyWatched(),
     ]).catch((error) => { if (!progress.background) toast(errorMessage(error), "error"); });
-  }, [loadAllResources, loadRecentlyWatched, loadRoots, number, page, refreshCurrent, selectedRootId, t, toast]);
+  }, [loadAllResources, loadRecentlyWatched, loadRoots, number, page, refreshCurrent, roots, selectedRootId, t, toast]);
 
   const scanProgressHandlerRef = useRef(handleScanProgress);
   const scanFinishedHandlerRef = useRef(handleScanFinished);
@@ -1464,22 +1485,22 @@ function App() {
     setPendingRootAdd({ path, onboarding: true, playerPath: mpvPath });
   };
 
-  const confirmRootRecognitionMode = async (mode: LibraryRecognitionMode) => {
+  const confirmRootRecognitionMode = async (mode: LibraryRecognitionMode,kind:import('./types/media').LibraryMediaKind) => {
     const request = pendingRootAdd;
     if (!request || rootAddBusy) return;
     setRootAddBusy(true);
     let rootCreated = false;
     try {
-      const root = await api.addRoot(request.path, mode);
+      const root = await api.addRoot(request.path, mode,kind);
       rootCreated = true;
       setPendingRootAdd(null);
+      setAddedRootScanQueue(queue => [...queue, root.id]);
       if (request.playerPath) {
         const settings = await api.getSettings();
         await api.updateSettings({ ...settings, mpvPath: request.playerPath });
       }
       await loadRoots(root.id);
       await selectRoot(root.id, !request.onboarding);
-      if (request.onboarding) await api.startScan(root.id);
       toast(t(request.onboarding ? "app.libraryCreated" : "app.rootAdded"), "success");
     } catch (error) {
       if (rootCreated) setPendingRootAdd(null);
@@ -1489,13 +1510,29 @@ function App() {
     }
   };
 
-  const startScan = useCallback(async (rootId?: number, nodeId?: number, background = false) => {
-    if (scan) { if (!background) toast(t("app.scanAlreadyRunning"), "info"); return; }
+  const startScan = useCallback(async (rootId?: number, nodeId?: number, background = false, queued = false) => {
+    if (scan) { if (!background && !queued) toast(t("app.scanAlreadyRunning"), "info"); return "RETRY"; }
     try {
       const started = await api.startScan(rootId, nodeId, background);
       if (!finishedScanIds.current.has(started.scanId)) setScan({ background, libraryChanged: false, scanId: started.scanId, rootId: rootId ?? selectedRootId ?? 0, currentPath: t("app.scanPreparing"), foldersScanned: 0, videosFound: 0, errors: 0, status: "RUNNING", phase: "SCANNING", autoMatchCurrent: 0, autoMatchTotal: 0, autoMatchMatched: 0, autoMatchPending: 0, autoMatchUnmatched: 0, autoMatchErrors: 0 });
-    } catch (error) { if (!background) toast(errorMessage(error), "error"); }
+      return "STARTED";
+    } catch (error) { if (queued && isScanBusyError(error)) return "RETRY"; if (!background) toast(errorMessage(error), "error"); return "FAILED"; }
   }, [scan, selectedRootId, t, toast]);
+
+  useEffect(() => {
+    if (scan || !scanListenersReady || !addedRootScanQueue.length || addedRootScanInFlight.current) return;
+    // A newly added library waits for the current scanner to finish instead of being skipped.
+    const rootId = addedRootScanQueue[0];
+    const timer = window.setTimeout(() => {
+      addedRootScanInFlight.current = true;
+      void startScan(rootId, undefined, false, true).then(result => {
+        addedRootScanInFlight.current = false;
+        if (result === "RETRY") setAddedRootScanAttempt(attempt => attempt + 1);
+        else setAddedRootScanQueue(queue => queue.filter(id => id !== rootId));
+      });
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [scan, scanListenersReady, addedRootScanQueue, addedRootScanAttempt, startScan]);
 
   useEffect(() => {
     if (!desktopAvailable || !initialized || !scanListenersReady || !bootstrap
@@ -1821,6 +1858,8 @@ function App() {
   }, [bangumiNode, patchNodeEverywhere, refreshCurrentAndAllResources, t, toast]);
 
   const selectedRoot = useMemo(() => roots.find((root) => root.id === selectedRootId) ?? null, [roots, selectedRootId]);
+  const ActiveDetailPage=detail?.node.mediaKind==='COMIC'||detail?.node.mediaKind==='EBOOK'?ComicDetailPage:WorkDetailPage;
+  const openComic=(book:ComicBook)=>{rememberNavigation(captureNavigation());setReaderBookId(book.id);};
   const allProjectCount = (page === "all" && allGrouping === "works" ? allResources?.works.length : allResources?.totalCount)
     ?? roots.reduce((sum, root) => sum + (root.nodeCount ?? 0), 0);
   const projectCount = page === "all" || (page === "search" && searchRootId == null)
@@ -1839,25 +1878,26 @@ function App() {
     <UpdateDialog open={updateDialogOpen && !bootstrap?.updateRecoveryNotice} checkResult={updateCheckResult} downloadStatus={updateDownloadStatus} failureAction={updateFailureAction} confirmInstallRequest={updateInstallRequest} onClose={closeUpdateDialog} onDownload={(version) => void downloadUpdate(version)} onInstall={(version) => void installDownloadedUpdate(version)} onRetry={retryUpdate} />
     <UpdateRecoveryDialog notice={bootstrap?.updateRecoveryNotice ?? null} busy={updateRecoveryBusy} error={updateRecoveryError} onAcknowledge={(notice) => void acknowledgeUpdateRecoveryNotice(notice)} />
   </>;
-  const rootModeUi = <LibraryRecognitionModeDialog path={pendingRootAdd?.path ?? null} busy={rootAddBusy} onChoose={(mode) => void confirmRootRecognitionMode(mode)} onClose={() => { if (!rootAddBusy) setPendingRootAdd(null); }} />;
+  const rootModeUi = <LibraryRecognitionModeDialog path={pendingRootAdd?.path ?? null} busy={rootAddBusy} onChoose={(mode,kind) => void confirmRootRecognitionMode(mode,kind)} onClose={() => { if (!rootAddBusy) setPendingRootAdd(null); }} />;
 
   if (showOnboarding) return <><OnboardingPage onComplete={finishOnboarding} onError={(message) => toast(message, "error")} />{rootModeUi}{updateUi}<ToastStack toasts={toasts} onDismiss={(id) => setToasts((items) => items.filter((item) => item.id !== id))} /></>;
+  if(readerBookId!==null)return <><ComicReaderPage key={readerBookId} bookId={readerBookId} onBack={()=>{goBack();void loadAllResources();}} onProgress={()=>{void loadRecentlyWatched();}}/><ToastStack toasts={toasts} onDismiss={id=>setToasts(items=>items.filter(item=>item.id!==id))}/></>;
 
   return (
     <div className="app-shell">
       <Sidebar page={page} roots={roots} selectedRootId={selectedRootId} loading={rootsLoading} onNavigate={navigate} onSelectRoot={navigateRootSection} onAddRoot={() => void addRoot()} onRootMenu={(event, root) => setRootContext({ root, x: event.clientX, y: event.clientY })} projectCount={projectCount} />
       <main className="main-content">
         {!desktopAvailable && <div className="web-preview-notice"><Icon name="info" />{t("app.previewNotice")}</div>}
-        {scan && !scan.background && (scan.status === "RUNNING" || scan.status === "CANCELLING") && <ScanBanner progress={scan} onCancel={() => void cancelScan()} />}
-        <div className="content-scroll" ref={contentScrollRef}>
-          {page === "all" && <AllResourcesPage grouping={allGrouping} onGrouping={(value) => { setAllGrouping(value); changeEditMode(false); }} data={allResources} loading={allResourcesLoading} viewMode={viewMode} onViewMode={setViewMode} filter={allFilter} onFilter={setAllFilter} tagFilterId={allTagFilterId} onTagFilter={setAllTagFilterId} sort={allSort} onSort={changeAllSort} onOpenNode={openNode} onMenu={openNodeMenu} onBangumi={requestBangumi} onRetryCover={retryCover} onScan={() => void startScan()} onAddRoot={() => void addRoot()} onSearch={(query) => openSearch(query, null)} coverRevision={coverRevision} editMode={editMode} selectedNodeIds={selectedNodeIds} matchBusy={matchBusy || favoriteBusy || Boolean(scan)} onEditMode={changeEditMode} onToggleSelection={toggleNodeSelection} onSelectAll={selectNodeIds} onClearSelection={clearNodeSelection} onBatchTags={() => setBatchTagsOpen(true)} onBatchFavorites={() => setFavoriteAssignmentNodeIds([...selectedNodeIds])} onBatchMenu={openBatchMenu} onMatch={(nodeIds, rematch) => void matchExisting(nodeIds, rematch)} />}
-          {page === "recent" && <RecentlyWatchedPage entries={recentlyWatched} loading={recentlyWatchedLoading} viewMode={viewMode} onViewMode={setViewMode} onOpenNode={(node) => void openNode(node)} onMenu={(event, node) => setContext({ node, x: event.clientX, y: event.clientY })} onBangumi={requestBangumi} onRetryCover={(node, failed) => void retryCover(node, failed)} coverRevision={coverRevision} />}
+        {scan && !scan.background && (scan.status === "RUNNING" || scan.status === "CANCELLING") && <ScanBanner progress={scan} mediaKind={roots.find(root=>root.id===scan.rootId)?.mediaKind} onCancel={() => void cancelScan()} />}
+        <div className={`content-scroll${page === "settings" ? " is-settings" : ""}`} ref={contentScrollRef}>
+          {page === "all" && <AllResourcesPage mediaKind={allMediaKind} onMediaKind={setAllMediaKind} grouping={allGrouping} data={allResources} loading={allResourcesLoading} viewMode={viewMode} onViewMode={setViewMode} filter={allFilter} onFilter={setAllFilter} tagFilterId={allTagFilterId} onTagFilter={setAllTagFilterId} sort={allSort} onSort={changeAllSort} onOpenNode={openNode} onMenu={openNodeMenu} onBangumi={requestBangumi} onRetryCover={retryCover} onScan={() => void startScan()} onAddRoot={() => void addRoot()} onSearch={(query) => openSearch(query, null)} coverRevision={coverRevision} editMode={editMode} selectedNodeIds={selectedNodeIds} matchBusy={matchBusy || favoriteBusy || Boolean(scan)} onEditMode={changeEditMode} onToggleSelection={toggleNodeSelection} onSelectAll={selectNodeIds} onClearSelection={clearNodeSelection} onBatchTags={() => setBatchTagsOpen(true)} onBatchFavorites={() => setFavoriteAssignmentNodeIds([...selectedNodeIds])} onBatchMenu={openBatchMenu} onMatch={(nodeIds, rematch) => void matchExisting(nodeIds, rematch)} />}
+          {page === "recent" && <RecentlyWatchedPage entries={recentlyWatched} loading={recentlyWatchedLoading} viewMode={viewMode} onViewMode={setViewMode} onOpenNode={(node) => {const bookId=recentlyWatched?.find(e=>e.node.id===node.id)?.comicBookId;if(bookId)openComic({id:bookId} as ComicBook);else void openNode(node);}} onMenu={(event, node) => setContext({ node, x: event.clientX, y: event.clientY })} onBangumi={requestBangumi} onRetryCover={(node, failed) => void retryCover(node, failed)} coverRevision={coverRevision} />}
           {page === "favorites" && <FavoritesPage folders={favoriteFolders} nodes={favoriteNodes} selectedFolderId={selectedFavoriteFolderId} loading={favoritesLoading} viewMode={viewMode} onViewMode={setViewMode} filter={favoriteFilter} onFilter={setFavoriteFilter} sort={favoriteSort} onSort={changeFavoriteSort} onOpenFolder={(folderId) => void openFavoriteFolder(folderId)} onBack={goBack} onCreate={() => setFavoriteFolderDialog("new")} onRename={setFavoriteFolderDialog} onDelete={deleteFavoriteFolder} onOpenNode={openNode} onMenu={openNodeMenu} onBangumi={requestBangumi} onRetryCover={retryCover} coverRevision={coverRevision} editMode={editMode} selectedNodeIds={selectedNodeIds} busy={favoriteBusy || matchBusy || Boolean(scan)} onEditMode={changeEditMode} onToggleSelection={toggleNodeSelection} onSelectAll={selectNodeIds} onClearSelection={clearNodeSelection} onBatchTags={() => setBatchTagsOpen(true)} onBatchFavorites={() => setFavoriteAssignmentNodeIds([...selectedNodeIds])} onBatchMenu={openBatchMenu} onRematch={() => void matchExisting([...selectedNodeIds], true)} onRemoveSelected={() => void removeSelectedFromFavorite()} />}
           {page === "library" && !selectedRoot && <EmptyState eyebrow={t("app.emptyEyebrow")} title={t("app.emptyTitle")} description={desktopAvailable ? t("app.emptyDesktop") : t("app.emptyWeb")} action={<button className="button primary" disabled={!desktopAvailable} onClick={() => void addRoot()} type="button"><Icon name="plus" />{t("app.addMediaDirectory")}</button>} />}
-          {page === "library" && selectedRoot && !detail && <BrowsePage data={browseData} currentNode={currentNode} loading={contentLoading} viewMode={viewMode} onViewMode={setViewMode} filter={browseFilter} onFilter={setBrowseFilter} tagFilterId={browseTagFilterId} onTagFilter={setBrowseTagFilterId} sort={browseSort} onSort={changeBrowseSort} onRoot={goRoot} onBreadcrumb={(id) => void openBreadcrumb(id)} onOpenNode={openNode} onMenu={openNodeMenu} onBangumi={requestBangumi} onRetryCover={retryCover} onPlay={(file) => void play(file)} onRevealMedia={(file) => void revealMedia(file)} onOpenResource={(file) => void openResource(file)} onRevealResource={(file) => void revealResource(file)} onScan={() => void startScan(selectedRoot.id, currentNode?.id)} onAddRoot={() => void addRoot()} onSearch={(query) => openSearch(query, selectedRoot.id)} coverRevision={coverRevision} editMode={editMode} selectedNodeIds={selectedNodeIds} matchBusy={matchBusy || favoriteBusy || Boolean(scan)} onEditMode={changeEditMode} onToggleSelection={toggleNodeSelection} onSelectAll={selectNodeIds} onClearSelection={clearNodeSelection} onBatchTags={() => setBatchTagsOpen(true)} onBatchFavorites={() => setFavoriteAssignmentNodeIds([...selectedNodeIds])} onBatchMenu={openBatchMenu} onMatch={(nodeIds, rematch) => void matchExisting(nodeIds, rematch)} />}
-          {page === "library" && selectedRoot && detail && <WorkDetailPage onOpenBangumi={() => { void api.openBangumiSubject(detail.node.id).catch(error => toast(errorMessage(error), "error")); }} detail={detail} loading={contentLoading} rootLabel={selectedRoot.displayName} onRoot={goRoot} onBreadcrumb={(id) => void openBreadcrumb(id)} onBack={goBack} onBangumi={() => requestBangumi(detail.node)} onRetryCover={(failed) => void retryCover(detail.node, failed)} onRetryCoverNode={(node, failed) => void retryCover(node, failed)} onClearBangumi={() => void nodeAction("clear-bangumi", detail.node)} onReveal={() => void nodeAction("explorer", detail.node)} onPlay={(file) => void play(file)} onRevealMedia={(file) => void revealMedia(file)} onOpenResource={(file) => void openResource(file)} onRevealResource={(file) => void revealResource(file)} onOpenChild={(node) => void openNode(node)} onBangumiNode={requestBangumi} onMenu={(event, node) => setContext({ node, x: event.clientX, y: event.clientY })} coverRevision={coverRevision} />}
+          {page === "library" && selectedRoot && !detail && <BrowsePage onReadComic={openComic} data={browseData} currentNode={currentNode} loading={contentLoading} viewMode={viewMode} onViewMode={setViewMode} filter={browseFilter} onFilter={setBrowseFilter} tagFilterId={browseTagFilterId} onTagFilter={setBrowseTagFilterId} sort={browseSort} onSort={changeBrowseSort} onRoot={goRoot} onBreadcrumb={(id) => void openBreadcrumb(id)} onOpenNode={openNode} onMenu={openNodeMenu} onBangumi={requestBangumi} onRetryCover={retryCover} onPlay={(file) => void play(file)} onRevealMedia={(file) => void revealMedia(file)} onOpenResource={(file) => void openResource(file)} onRevealResource={(file) => void revealResource(file)} onScan={() => void startScan(selectedRoot.id, currentNode?.id)} onAddRoot={() => void addRoot()} onSearch={(query) => openSearch(query, selectedRoot.id)} coverRevision={coverRevision} editMode={editMode} selectedNodeIds={selectedNodeIds} matchBusy={matchBusy || favoriteBusy || Boolean(scan)} onEditMode={changeEditMode} onToggleSelection={toggleNodeSelection} onSelectAll={selectNodeIds} onClearSelection={clearNodeSelection} onBatchTags={() => setBatchTagsOpen(true)} onBatchFavorites={() => setFavoriteAssignmentNodeIds([...selectedNodeIds])} onBatchMenu={openBatchMenu} onMatch={(nodeIds, rematch) => void matchExisting(nodeIds, rematch)} />}
+          {page === "library" && selectedRoot && detail && <ActiveDetailPage onReadComic={openComic} onOpenBangumi={() => { void api.openBangumiSubject(detail.node.id).catch(error => toast(errorMessage(error), "error")); }} detail={detail} loading={contentLoading} rootLabel={selectedRoot.displayName} onRoot={goRoot} onBreadcrumb={(id) => void openBreadcrumb(id)} onBack={goBack} onBangumi={() => requestBangumi(detail.node)} onRetryCover={(failed) => void retryCover(detail.node, failed)} onRetryCoverNode={(node, failed) => void retryCover(node, failed)} onClearBangumi={() => void nodeAction("clear-bangumi", detail.node)} onReveal={() => void nodeAction("explorer", detail.node)} onPlay={(file) => void play(file)} onRevealMedia={(file) => void revealMedia(file)} onOpenResource={(file) => void openResource(file)} onRevealResource={(file) => void revealResource(file)} onOpenChild={(node) => void openNode(node)} onBangumiNode={requestBangumi} onMenu={(event, node) => setContext({ node, x: event.clientX, y: event.clientY })} coverRevision={coverRevision} />}
           {page === "search" && <SearchPage initialQuery={searchQuery} rootId={searchRootId} roots={roots} onRootChange={setSearchRootId} onQueryChange={setSearchQuery} onOpen={(hit: SearchHit) => void openNode(hit.node)} onError={(message) => toast(message, "error")} onResultsReady={applyPendingScroll} coverRevision={coverRevision} />}
-          {page === "settings" && <SettingsPage onHiddenNodes={() => setHiddenNodesOpen(true)} roots={roots} bootstrap={bootstrap} onAddRoot={() => void addRoot()} onRemoveRoot={removeRoot} onScanRoot={(root) => void startScan(root.id)} onAppearanceChange={applySettingsAppearance} onPersistenceFailure={handleSettingsPersistenceFailure} updateDownloadStatus={updateDownloadStatus} onCheckForUpdate={() => { if (updateCheckResult?.update && updateDownloadStatus.phase !== "CHECKING" && updateDownloadStatus.phase !== "DOWNLOADING" && updateDownloadStatus.phase !== "APPLYING") { setUpdateDialogOpen(true); setUpdateInstallRequest(0); } else { void checkForUpdate(true); } }} onError={(message) => toast(message, "error")} onSuccess={(message) => toast(message, "success")} />}
+          {page === "settings" && <SettingsPage onIgnoreScanWarnings={root=>{void api.setLibraryScanWarningsIgnored(root.id,!root.scanHealth?.warningsIgnored).then(()=>loadRoots()).catch(e=>toast(errorMessage(e),'error'));}} onHiddenNodes={() => setHiddenNodesOpen(true)} roots={roots} bootstrap={bootstrap} onAddRoot={() => void addRoot()} onRemoveRoot={removeRoot} onScanRoot={(root) => void startScan(root.id)} onAppearanceChange={applySettingsAppearance} onPersistenceFailure={handleSettingsPersistenceFailure} updateDownloadStatus={updateDownloadStatus} onCheckForUpdate={() => { if (updateCheckResult?.update && updateDownloadStatus.phase !== "CHECKING" && updateDownloadStatus.phase !== "DOWNLOADING" && updateDownloadStatus.phase !== "APPLYING") { setUpdateDialogOpen(true); setUpdateInstallRequest(0); } else { void checkForUpdate(true); } }} onError={(message) => toast(message, "error")} onSuccess={(message) => toast(message, "success")} />}
         </div>
         <footer className="app-footer"><span>{bootstrap ? `${t("brand.name")} ${bootstrap.version}` : t("brand.name")}</span><span className="footer-separator" /><span><Icon name="shield" />{t("common.readOnly")}</span><span className="footer-separator" /><span>{t("app.projectCount", { count: number(projectCount) })}</span>{(page === "library" || (page === "search" && searchRootId != null)) && selectedRoot && <><span className="footer-separator" /><span title={selectedRoot.path}>{selectedRoot.displayName}</span></>}</footer>
       </main>

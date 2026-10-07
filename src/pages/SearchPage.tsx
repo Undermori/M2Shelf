@@ -5,7 +5,7 @@ import { Icon } from "../components/Icon";
 import { LoadingState } from "../components/LoadingState";
 import { PosterImage } from "../components/PosterImage";
 import { api } from "../lib/api";
-import { compactPath, errorMessage, formatBytes, nodeDisplayTitle, nodeTypeLabel } from "../lib/format";
+import { compactPath, errorMessage, formatBytes, nodeDisplayTitle, mediaBadge } from "../lib/format";
 import { useI18n } from "../lib/i18n";
 import { useCoverDataUrl } from "../hooks/useCoverDataUrl";
 import { usePosterViewportLifecycle } from "../hooks/usePosterViewportLifecycle";
@@ -51,7 +51,7 @@ function SearchResult({ hit, index, coverRevision, onOpen }: { hit: SearchHit; i
           ? <PosterImage active={coverVisible} alt={t("card.coverAlt", { title: nodeTitle })} cacheKey={coverCacheKey} onError={() => setImageFailed(true)} src={coverUrl} />
           : <Icon name={placeholderIcon} />}
       </span>
-      <span className="search-hit-copy"><small>{hit.kind === "MEDIA_FILE" ? t("search.videoFile") : nodeTypeLabel(hit.node.nodeType)}</small><strong>{title}</strong><em>{compactPath(hit.mediaFile?.absolutePath ?? hit.node.absolutePath, 96)}</em></span>
+      <span className="search-hit-copy"><small>{hit.kind === "MEDIA_FILE" ? t("search.videoFile") : mediaBadge(hit.node)}</small><strong>{title}</strong><em>{compactPath(hit.mediaFile?.absolutePath ?? hit.node.absolutePath, 96)}</em></span>
       {hit.mediaFile && <span className="search-hit-meta">{formatBytes(hit.mediaFile.fileSize)}<small>{hit.mediaFile.extension.replace(/^\./, "").toUpperCase()}</small></span>}
       <Icon className="search-hit-chevron" name="chevron" />
     </button>
@@ -106,12 +106,12 @@ export function SearchPage({ initialQuery = "", rootId, roots = [], onRootChange
         <div className="toolbar-topline"><span className="all-resources-location"><Icon name="search" />{t("search.eyebrow")}</span></div>
         <div className="page-title-row">
           <div><h1>{t("common.search")}</h1><p>{t("search.description")}</p></div>
-          <form className="browse-controls search-controls" onSubmit={event => { event.preventDefault(); void search(query); }}>
+        </div>
+        <form className="search-controls" onSubmit={event => { event.preventDefault(); void search(query); }}>
             <label className="search-field"><Icon name="search" /><input aria-label={t("common.search")} ref={inputRef} onChange={event => { setQuery(event.target.value); onQueryChange?.(event.target.value); }} value={query} /></label>
             <label className="sort-field"><select aria-label={t("search.scope")} value={rootId ?? "all"} onChange={event => onRootChange?.(event.target.value === "all" ? null : Number(event.target.value))}><option value="all">{t("search.allLibraries")}</option>{roots.map(root => <option key={root.id} value={root.id}>{root.displayName}</option>)}</select></label>
             <button className="button primary" disabled={!query.trim() || loading} type="submit">{t("common.search")}</button>
-          </form>
-        </div>
+        </form>
       </header>
       <div className="search-content">
         {loading && <LoadingState label={t("search.loading")} />}

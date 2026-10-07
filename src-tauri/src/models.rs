@@ -153,6 +153,49 @@ pub enum LibraryRecognitionMode {
     VideoFile,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum LibraryMediaKind {
+    #[default]
+    Video,
+    Animation,
+    LiveAction,
+    Comic,
+    Ebook,
+}
+
+impl LibraryMediaKind {
+    pub fn as_db(self) -> &'static str {
+        match self {
+            Self::Video => "VIDEO",
+            Self::Animation => "ANIMATION",
+            Self::LiveAction => "LIVE_ACTION",
+            Self::Comic => "COMIC",
+            Self::Ebook => "EBOOK",
+        }
+    }
+    pub fn from_db(value: &str) -> Self {
+        match value {
+            "COMIC" => Self::Comic,
+            "EBOOK" => Self::Ebook,
+            "ANIMATION" => Self::Animation,
+            "LIVE_ACTION" => Self::LiveAction,
+            _ => Self::Video,
+        }
+    }
+    pub fn is_book(self) -> bool {
+        matches!(self, Self::Comic | Self::Ebook)
+    }
+    pub fn accepts_subject(self, subject_type: i64) -> bool {
+        match self {
+            Self::Video => matches!(subject_type, 2 | 6),
+            Self::Animation => subject_type == 2,
+            Self::LiveAction => subject_type == 6,
+            Self::Comic | Self::Ebook => subject_type == 1,
+        }
+    }
+}
+
 impl LibraryRecognitionMode {
     pub fn as_db(&self) -> &'static str {
         match self {
@@ -172,6 +215,7 @@ impl LibraryRecognitionMode {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LibraryRoot {
+    pub media_kind: LibraryMediaKind,
     pub scan_health: Option<ScanHealth>,
     pub id: i64,
     pub path: String,
@@ -188,6 +232,8 @@ pub struct LibraryRoot {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ScanHealth {
+    #[serde(default)]
+    pub warnings_ignored: bool,
     pub last_auto_attempt_at: Option<String>,
     pub last_success_at: Option<String>,
     pub outcome: String,
@@ -258,6 +304,14 @@ pub struct BatchMutationResult {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MediaNode {
+    #[serde(default)]
+    pub media_kind: LibraryMediaKind,
+    #[serde(default)]
+    pub direct_comic_book_count: i64,
+    #[serde(default)]
+    pub child_comic_branch_count: i64,
+    #[serde(default)]
+    pub total_comic_book_count: i64,
     /// Latest source-file modification in this visible subtree, derived from the existing index.
     #[serde(default)]
     pub latest_file_modified_at: Option<String>,
@@ -288,7 +342,8 @@ pub struct MediaNode {
 impl MediaNode {
     pub fn can_bind_bangumi(&self) -> bool {
         self.node_type.is_work()
-            || (self.node_type == NodeType::Container && self.total_video_count > 0)
+            || (self.node_type == NodeType::Container
+                && (self.total_video_count > 0 || self.total_comic_book_count > 0))
     }
 }
 
@@ -387,6 +442,7 @@ pub struct BreadcrumbItem {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BrowseResult {
+    pub comic_books: Vec<crate::comics::ComicBook>,
     pub root: LibraryRoot,
     pub breadcrumbs: Vec<BreadcrumbItem>,
     pub nodes: Vec<MediaNode>,
@@ -397,6 +453,7 @@ pub struct BrowseResult {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AllResourcesResult {
+    pub comic_nodes: Vec<MediaNode>,
     pub recognition_warnings: Vec<MediaNode>,
     pub nodes: Vec<MediaNode>,
     pub total_count: i64,
@@ -430,6 +487,7 @@ pub struct NestedMediaFile {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RecentlyWatchedEntry {
+    pub comic_book_id: Option<i64>,
     pub node: MediaNode,
     pub watched_at: String,
 }
@@ -437,6 +495,8 @@ pub struct RecentlyWatchedEntry {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NodeDetail {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub comic_books: Option<Vec<crate::comics::ComicBook>>,
     pub node: MediaNode,
     pub children: Vec<MediaNode>,
     pub media_files: Vec<MediaFile>,
@@ -542,6 +602,8 @@ pub struct ScanProgress {
     pub current_path: String,
     pub folders_scanned: u64,
     pub videos_found: u64,
+    #[serde(default)]
+    pub comic_books_found: u64,
     pub status: ScanStatus,
     pub errors: u64,
     pub message: Option<String>,
@@ -572,6 +634,8 @@ pub type RebuildResult = ScanStarted;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppSettings {
+    #[serde(default)]
+    pub comic_reader: ComicReaderSettings,
     pub mpv_path: Option<String>,
     pub default_view_mode: ViewMode,
     pub video_extensions: Vec<String>,
@@ -585,12 +649,42 @@ pub struct AppSettings {
     pub auto_check_updates: bool,
     #[serde(default = "default_auto_check_updates")]
     pub auto_scan_on_startup: bool,
+    #[serde(default)]
+    pub all_resources_flattened: bool,
 }
 
 pub const MAX_SETTINGS_PATH_CHARS: usize = 32_767;
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ComicReaderSettings {
+    pub direction: String,
+    pub layout: String,
+    pub mode: String,
+    pub wide_page_alone: bool,
+}
+impl Default for ComicReaderSettings {
+    fn default() -> Self {
+        Self {
+            direction: "LTR".into(),
+            layout: "DOUBLE".into(),
+            mode: "PAGED".into(),
+            wide_page_alone: true,
+        }
+    }
+}
+
 impl AppSettings {
     pub fn validate_path_lengths(&self) -> Result<(), String> {
+        if !matches!(self.comic_reader.direction.as_str(), "RTL" | "LTR")
+            || !matches!(self.comic_reader.layout.as_str(), "SINGLE" | "DOUBLE")
+            || !matches!(
+                self.comic_reader.mode.as_str(),
+                "PAGED" | "SCROLL" | "WEBTOON"
+            )
+        {
+            return Err("COMIC_INVALID_SETTINGS".into());
+        }
         if self
             .mpv_path
             .as_deref()

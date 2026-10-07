@@ -36,7 +36,7 @@ export function Sidebar({ page, roots, selectedRootId, loading, onNavigate, onSe
           <Icon name="search" /><span>{t("sidebar.search")}</span>
         </button>
         <button className={`nav-item ${page === "recent" ? "is-active" : ""}`} onClick={() => onNavigate("recent")} type="button">
-          <Icon name="clock" /><span>{t("sidebar.recentlyWatched")}</span>
+          <Icon name="clock" /><span>{t('comic.recentTitle')}</span>
         </button>
         <button className={`nav-item ${page === "favorites" ? "is-active" : ""}`} onClick={() => onNavigate("favorites")} type="button">
           <Icon name="bookmark" /><span>{t("sidebar.favorites")}</span>
@@ -65,7 +65,7 @@ export function Sidebar({ page, roots, selectedRootId, loading, onNavigate, onSe
             >
               <Icon name="folder" />
               <span><strong>{root.displayName}</strong><small>{compactPath(root.path, 28)}</small></span>
-            </button>{root.scanHealth && ["PARTIAL", "FAILED"].includes(root.scanHealth.outcome) && <button className="root-scan-warning" onClick={() => onNavigate("settings")} title={`${root.displayName}: ${t("health.showDetails")}`} aria-label={`${root.displayName}: ${t("health.showDetails")}`} type="button"><Icon name="warning" /></button>}</div>
+            </button>{root.scanHealth && !root.scanHealth.warningsIgnored && ["PARTIAL", "FAILED"].includes(root.scanHealth.outcome) && <button className="root-scan-warning" onClick={() => onNavigate("settings")} title={`${root.displayName}: ${t("health.showDetails")}`} aria-label={`${root.displayName}: ${t("health.showDetails")}`} type="button"><Icon name="warning" /></button>}</div>
           ))}
         </div>
       </nav>

@@ -30,10 +30,11 @@ export function BatchTagDialog({ nodeIds, onClose, onApplied }: BatchTagDialogPr
   useEffect(() => { void load(); }, [load]);
   useEffect(() => { if (tags) inputRef.current?.focus(); }, [tags]);
   useEffect(() => {
+    if (nodeIds.length === 0) return;
     const key = (event: KeyboardEvent) => event.key === "Escape" && !busy && onClose();
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
-  }, [busy, onClose]);
+  }, [busy, nodeIds.length, onClose]);
 
   if (nodeIds.length === 0) return null;
 

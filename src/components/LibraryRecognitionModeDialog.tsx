@@ -1,5 +1,5 @@
-import { useEffect, useRef } from "react";
-import type { LibraryRecognitionMode } from "../types/media";
+import { useEffect, useRef, useState } from "react";
+import type { LibraryRecognitionMode, LibraryMediaKind } from "../types/media";
 import { basename } from "../lib/format";
 import { useI18n } from "../lib/i18n";
 import { isolateModalSiblings } from "../lib/modalA11y";
@@ -8,12 +8,14 @@ import { Icon } from "./Icon";
 interface LibraryRecognitionModeDialogProps {
   path: string | null;
   busy: boolean;
-  onChoose: (mode: LibraryRecognitionMode) => void;
+  onChoose: (mode: LibraryRecognitionMode,kind:LibraryMediaKind) => void;
   onClose: () => void;
 }
 
 export function LibraryRecognitionModeDialog({ path, busy, onChoose, onClose }: LibraryRecognitionModeDialogProps) {
   const { t } = useI18n();
+  const [kind,setKind]=useState<LibraryMediaKind>('ANIMATION');
+  useEffect(()=>setKind('ANIMATION'),[path]);
   const backdropRef = useRef<HTMLDivElement>(null);
   const dialogRef = useRef<HTMLElement>(null);
   const busyRef = useRef(busy);
@@ -54,18 +56,23 @@ export function LibraryRecognitionModeDialog({ path, busy, onChoose, onClose }: 
     <div className="modal-backdrop" onPointerDown={(event) => { if (event.currentTarget === event.target && !busy) onClose(); }} ref={backdropRef} role="presentation">
       <section aria-describedby="root-mode-description" aria-labelledby="root-mode-title" aria-modal="true" className="root-mode-dialog" ref={dialogRef} role="dialog" tabIndex={-1}>
         <header className="modal-header">
-          <span className="modal-heading-icon"><Icon name="database" /></span>
-          <div><p className="eyebrow">{t("rootMode.eyebrow")}</p><h2 id="root-mode-title">{t("rootMode.title")}</h2><p id="root-mode-description">{t("rootMode.description")}</p></div>
+          <div><h2 id="root-mode-title">{t("comic.rootTitle")}</h2><p id="root-mode-description">{t("comic.rootDescription")}</p></div>
           <button aria-label={t("common.close")} className="modal-close" disabled={busy} onClick={onClose} type="button"><Icon name="close" /></button>
         </header>
         <div className="root-mode-body">
           <p className="root-mode-path" title={path}>{basename(path)}</p>
+          <div className="media-kind-choice" role="group" aria-label={t('comic.kind')}>
+            <button className="button secondary" aria-pressed={kind==='ANIMATION'} disabled={busy} onClick={()=>setKind('ANIMATION')} type="button">{t('comic.animation')}</button>
+            <button className="button secondary" aria-pressed={kind==='LIVE_ACTION'} disabled={busy} onClick={()=>setKind('LIVE_ACTION')} type="button">{t('library.liveAction')}</button>
+            <button className="button secondary" aria-pressed={kind==='COMIC'} disabled={busy} onClick={()=>setKind('COMIC')} type="button">{t('comic.name')}</button>
+            <button className="button secondary" aria-pressed={kind==='EBOOK'} disabled={busy} onClick={()=>setKind('EBOOK')} type="button">{t('ebook.name')}</button>
+          </div>
           <div className="root-mode-options">
-            <button disabled={busy} onClick={() => onChoose("FOLDER")} type="button">
-              <span><Icon name="folder-open" /></span><strong>{t("rootMode.folderTitle")}</strong><small>{t("rootMode.folderDescription")}</small>
+            <button disabled={busy} onClick={() => onChoose("FOLDER",kind)} type="button">
+              <span><Icon name="folder-open" /></span><strong>{t("rootMode.folderTitle")}</strong><small>{t(kind==='COMIC'||kind==='EBOOK'?'bookMode.folderDescription':'rootMode.folderDescription')}</small>
             </button>
-            <button disabled={busy} onClick={() => onChoose("VIDEO_FILE")} type="button">
-              <span><Icon name="file" /></span><strong>{t("rootMode.videoFileTitle")}</strong><small>{t("rootMode.videoFileDescription")}</small>
+            <button disabled={busy} onClick={() => onChoose("VIDEO_FILE",kind)} type="button">
+              <span><Icon name="file" /></span><strong>{t(kind==='COMIC'||kind==='EBOOK'?'bookMode.fileTitle':'rootMode.videoFileTitle')}</strong><small>{t(kind==='COMIC'||kind==='EBOOK'?'bookMode.fileDescription':'rootMode.videoFileDescription')}</small>
             </button>
           </div>
           <p className="root-mode-safety"><Icon name="shield" />{t("rootMode.readOnly")}</p>

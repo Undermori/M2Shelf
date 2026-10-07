@@ -12,7 +12,8 @@ import { useCoverDataUrl } from "../hooks/useCoverDataUrl";
 import { useI18n } from "../lib/i18n";
 import { PosterImage } from "../components/PosterImage";
 
-interface WorkDetailPageProps {
+export interface WorkDetailPageProps {
+  onReadComic?: (book:import('../types/comic').ComicBook)=>void;
   detail: NodeDetail | null;
   loading: boolean;
   rootLabel: string;

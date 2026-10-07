@@ -11,8 +11,8 @@ import { compareMediaNodes, nodeMatchesQuery } from "../lib/format";
 import { useI18n } from "../lib/i18n";
 
 interface AllResourcesPageProps {
+  mediaKind?:'ALL'|'VIDEO'|'COMIC'|'EBOOK';onMediaKind?:(kind:'ALL'|'VIDEO'|'COMIC'|'EBOOK')=>void;
   grouping: "works" | "folders";
-  onGrouping: (value: "works" | "folders") => void;
   data: AllResourcesResult | null;
   loading: boolean;
   viewMode: ViewMode;
@@ -44,11 +44,11 @@ interface AllResourcesPageProps {
   onMatch: (nodeIds: number[] | null, rematchExisting: boolean) => void;
 }
 
-export function AllResourcesPage({ grouping, onGrouping, data, loading, viewMode, onViewMode, filter, onFilter, tagFilterId, onTagFilter, sort, onSort, onOpenNode, onMenu, onBangumi, onRetryCover, onScan, onAddRoot, onSearch, coverRevision, editMode, selectedNodeIds, matchBusy, onEditMode, onToggleSelection, onSelectAll, onClearSelection, onBatchTags, onBatchFavorites, onBatchMenu, onMatch }: AllResourcesPageProps) {
+export function AllResourcesPage({ mediaKind='ALL',onMediaKind,grouping, data, loading, viewMode, onViewMode, filter, onFilter, tagFilterId, onTagFilter, sort, onSort, onOpenNode, onMenu, onBangumi, onRetryCover, onScan, onAddRoot, onSearch, coverRevision, editMode, selectedNodeIds, matchBusy, onEditMode, onToggleSelection, onSelectAll, onClearSelection, onBatchTags, onBatchFavorites, onBatchMenu, onMatch }: AllResourcesPageProps) {
   const { language, number, t } = useI18n();
   const sourceNodes = useMemo(() => grouping === "works"
-    ? editMode ? (data?.works ?? []).flatMap((work) => work.sources)
-      : (data?.works ?? []).map((work) => ({ ...work.node, workView: true, workTarget: work.target }))
+    ? editMode ? [...(data?.works ?? []).flatMap((work) => work.sources),...(data?.comicNodes??[])]
+      : [...(data?.works ?? []).map((work) => ({ ...work.node, workView: true, workTarget: work.target })),...(data?.comicNodes??[])]
     : data?.nodes ?? [], [data, editMode, grouping]);
   const effectiveTagFilterId = tagFilterId != null && sourceNodes.some((node) => node.userTags.some((tag) => tag.id === tagFilterId))
     ? tagFilterId
@@ -56,12 +56,13 @@ export function AllResourcesPage({ grouping, onGrouping, data, loading, viewMode
   const nodes = useMemo(() => {
     const query = filter.trim().toLocaleLowerCase();
     return [...sourceNodes]
+      .filter(node=>mediaKind==='ALL'||(mediaKind==='VIDEO'?!['COMIC','EBOOK'].includes(node.mediaKind??'VIDEO'):(node.mediaKind??'VIDEO')===mediaKind))
       .filter((node) => nodeMatchesQuery(node, query, language)
         || (node.workView && data?.works.find(work => work.node.id === node.id)?.sources.some(source => nodeMatchesQuery(source, query, language))))
       .filter((node) => effectiveTagFilterId == null || node.userTags.some((tag) => tag.id === effectiveTagFilterId))
       .sort((a, b) => compareMediaNodes(a, b, sort, language));
-  }, [data?.works, sourceNodes, effectiveTagFilterId, filter, language, sort]);
-  const hasActiveFilter = Boolean(filter.trim()) || effectiveTagFilterId != null;
+  }, [mediaKind,data?.works, sourceNodes, effectiveTagFilterId, filter, language, sort]);
+  const hasActiveFilter = Boolean(filter.trim()) || effectiveTagFilterId != null || mediaKind!=='ALL';
 
   if (loading && !data) return <LoadingState label={t("all.loading")} />;
   if (!data) return <EmptyState eyebrow={t("all.eyebrow")} title={t("all.emptyTitle")} description={t("all.emptyDescription")} action={<button className="button primary" onClick={onAddRoot} type="button"><Icon name="plus" />{t("app.addMediaDirectory")}</button>} />;
@@ -71,7 +72,6 @@ export function AllResourcesPage({ grouping, onGrouping, data, loading, viewMode
       {(data.recognitionWarnings?.length ?? 0) > 0 && <div className="preview-banner"><Icon name="warning" /><span>{t("works.recognitionWarning")} {data.recognitionWarnings?.map(node => <button type="button" className="button ghost" key={node.id} onClick={() => onOpenNode(node)}>{node.folderName}</button>)}</span></div>}
       <header className="page-toolbar">
         <div className="toolbar-topline">
-          <span className="all-resources-location"><Icon name="archive" />{t("all.crossLibrary")}</span>
           <div className="toolbar-actions">
             <button aria-pressed={editMode} className={`button secondary edit-mode-button ${editMode ? "is-active" : ""}`} onClick={() => onEditMode(!editMode)} type="button"><Icon name="edit" />{editMode ? t("selection.exit") : t("selection.editMode")}</button>
             <button className="button secondary scan-button" disabled={matchBusy || (editMode && selectedNodeIds.size === 0)} onClick={() => onMatch(editMode ? [...selectedNodeIds] : null, editMode)} type="button"><Icon name="bangumi" />{matchBusy ? t("selection.matching") : editMode ? t("selection.rematchSelectedCount", { count: number(selectedNodeIds.size) }) : t("all.matchExisting")}</button>
@@ -81,7 +81,7 @@ export function AllResourcesPage({ grouping, onGrouping, data, loading, viewMode
         <div className="page-title-row">
           <div><h1>{t(grouping === "works" ? "works.title" : "all.title")}</h1><p>{t(editMode && grouping === "works" ? "works.editHelp" : grouping === "works" ? "works.description" : "all.description")}</p></div>
           <div className="browse-controls">
-            <label className="sort-field"><select aria-label={t("works.grouping")} value={grouping} onChange={event => onGrouping(event.target.value as "works" | "folders")}><option value="works">{t("works.byWork")}</option><option value="folders">{t("works.byFolder")}</option></select></label>
+            <label className="sort-field tag-filter-field media-kind-filter"><Icon name="archive"/><select aria-label={t('comic.kind')} value={mediaKind} onChange={e=>onMediaKind?.(e.target.value as 'ALL'|'VIDEO'|'COMIC'|'EBOOK')}><option value="ALL">{t('comic.all')}</option><option value="VIDEO">{t('comic.video')}</option><option value="COMIC">{t('comic.name')}</option><option value="EBOOK">{t('ebook.name')}</option></select></label>
             <label className="search-field"><Icon name="search" /><input aria-label={t("all.filterAria")} onChange={(event) => onFilter(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && filter.trim()) onSearch(filter.trim()); }} placeholder={t("all.filterPlaceholder")} value={filter} />{filter && <button aria-label={t("all.clearFilter")} onClick={() => onFilter("")} type="button"><Icon name="close" /></button>}</label>
             <TagFilter nodes={sourceNodes} value={tagFilterId} onChange={onTagFilter} />
             <CollectionSortControl value={sort} onChange={onSort} />

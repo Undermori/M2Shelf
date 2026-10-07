@@ -350,9 +350,14 @@ fn validate_manual_cover(bytes: &[u8], expected_format: CoverFormat) -> AppResul
 /// This catches tiny compressed files with maliciously large declared dimensions without loading
 /// their pixel buffer.
 pub(crate) fn validate_cover_payload(bytes: &[u8]) -> AppResult<()> {
+    cover_payload_dimensions(bytes).map(|_| ())
+}
+
+pub(crate) fn cover_payload_dimensions(bytes: &[u8]) -> AppResult<(u32, u32)> {
     let detected_format = detect_cover_format(bytes)
         .ok_or_else(|| "封面不是支持的 JPG、PNG 或 WEBP 图片。".to_string())?;
-    validate_cover_dimensions(bytes, detected_format)
+    validate_cover_dimensions(bytes, detected_format)?;
+    image_dimensions(bytes, detected_format)
 }
 
 fn validate_cover_dimensions(bytes: &[u8], detected_format: CoverFormat) -> AppResult<()> {

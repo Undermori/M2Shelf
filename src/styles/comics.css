@@ -1,0 +1,86 @@
+/* Comic browsing extends the existing workspace; reader controls share semantic surfaces. */
+.media-kind-choice {display:flex;flex-wrap:wrap;gap:12px;margin-bottom:20px;}
+.media-kind-choice [aria-pressed="true"] {border-color:var(--accent-strong);background:var(--accent-soft);}
+.comic-root-description {display:grid;gap:16px;justify-items:start;}
+.comic-root-description p {line-height:1.7;color:var(--text-muted);}
+.comic-book-row.is-unreadable {cursor:default;}
+.comic-book-row:focus-visible {outline:2px solid var(--focus-ring);outline-offset:-2px;}
+.comic-reader {position:fixed;inset:var(--window-caption-height) 0 0;display:flex;flex-direction:column;z-index:40;isolation:isolate;background:#202124;color:var(--text-normal);}
+.reader-bg-black {background:#000;}.reader-bg-gray {background:#202124;}.reader-bg-white {background:#fff;}
+.reader-topbar,.reader-bottombar {position:relative;flex-shrink:0;z-index:3;display:flex;align-items:center;gap:12px;padding:12px 20px;background:var(--surface-panel);border-color:var(--border-normal);opacity:1;visibility:visible;}
+.reader-topbar {top:0;border-bottom:1px solid var(--border-normal);}.reader-bottombar {bottom:0;justify-content:center;border-top:1px solid var(--border-normal);}
+.reader-topbar strong {flex:1;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;}
+.reader-bottombar input {width:74px;padding:6px;min-width:0;}
+.reader-bottombar input {border:1px solid var(--border-normal);border-radius:5px;background:var(--surface-input);color:var(--text-normal);}
+.comic-book-row:not(.is-unreadable) {cursor:default;}
+.comic-book-row:hover:not(.is-unreadable),.comic-book-row:focus-visible {background:var(--surface-hover);}
+.comic-book-row:focus-visible {outline:2px solid var(--focus-ring);outline-offset:-2px;}
+.comic-reader:fullscreen {inset:0;}
+body:has(.comic-reader:fullscreen) .window-titlebar {display:none;}
+.controls-visible .reader-topbar,.controls-visible .reader-bottombar,.reader-topbar:focus-within,.reader-bottombar:focus-within {opacity:1;visibility:visible;}
+.reader-viewport {flex:1;min-height:0;overflow:auto;position:relative;overscroll-behavior:contain;outline-offset:-3px;}
+.reader-spread {display:flex;align-items:center;justify-content:center;width:100%;height:100%;padding:0;}
+.reader-spread figure {margin:0;min-width:0;flex-shrink:0;display:flex;align-items:center;justify-content:center;}
+.reader-spread img {display:block;object-fit:contain;}
+.reader-spread img {max-height:none;max-width:none;}
+.fit-page .reader-spread figure {max-height:none;}
+.fit-page .reader-spread {align-items:center;}
+.fit-width .reader-spread {height:auto;min-height:100%;align-items:flex-start;}
+.fit-width .reader-spread figure {max-width:none;}
+.fit-native .reader-spread {height:auto;min-height:100%;width:max-content;min-width:100%;justify-content:center;align-items:flex-start;}
+.fit-native .reader-spread figure {max-width:none;}
+.reader-scroll-pages {position:relative;width:100%;}
+.reader-scroll-pages figure {position:absolute;width:100%;margin:0;display:flex;justify-content:center;padding-bottom:16px;}
+.reader-scroll-pages.is-webtoon figure {padding-bottom:0;}
+.reader-scroll-pages img {display:block;max-width:none;object-fit:contain;}
+.reader-loading {position:absolute;inset:0;display:grid;place-items:center;color:#aeb3bc;}
+.reader-spread figure>span {color:#aeb3bc;}
+.reader-panel {position:absolute;z-index:5;right:16px;top:76px;bottom:76px;width:300px;max-width:calc(100% - 32px);overflow:auto;padding:20px;background:var(--surface-panel);border:1px solid var(--border-normal);border-radius:8px;box-shadow:0 8px 30px #0004;display:flex;flex-direction:column;gap:16px;}
+.reader-panel label {display:grid;gap:8px;}.reader-panel select {width:100%;}.reader-panel .switch-field {display:flex;}
+.reader-panel-heading,.reader-bookmark {display:flex;align-items:center;justify-content:space-between;gap:12px;}
+.reader-error {position:absolute;z-index:7;left:50%;top:50%;transform:translate(-50%,-50%);max-width:480px;width:calc(100% - 48px);padding:24px;background:var(--surface-panel);border:1px solid var(--border-normal);border-radius:8px;}
+.reader-error p {line-height:1.6;margin:0 0 16px;}
+@media(max-width:1000px){.reader-topbar,.reader-bottombar{gap:8px;padding:10px 12px;}.comic-book-row{flex-wrap:wrap;}.reader-topbar .button{white-space:nowrap;}.reader-bottombar span{font-size:12px;}}
+@media(prefers-reduced-motion:reduce){.reader-topbar,.reader-bottombar{transition:none;}}
+.document-viewport {background:var(--surface-app);padding:24px;}
+.document-viewport canvas {display:block;margin:0 auto;background:white;max-width:none;}
+.epub-chapter {max-width:800px;min-height:100%;margin:0 auto;padding:28px 36px;background:var(--surface-panel);color:var(--text-normal);line-height:1.9;overflow-wrap:anywhere;}
+.epub-chapter p {white-space:pre-wrap;margin:0 0 1em;}
+.epub-chapter img {display:block;max-width:100%;height:auto;margin:16px auto;}
+.document-zoom {display:flex;gap:8px;align-items:center;}
+.document-zoom input {width:110px;}
+.document-reader .reader-bottombar select {max-width:180px;}
+.comic-reader .reader-bottombar .icon-button[aria-pressed="true"] {color:var(--bookmark-active);background:color-mix(in srgb,var(--bookmark-active) 14%,var(--surface-panel));}
+.comic-reader .reader-bottombar .icon-button[aria-pressed="true"] svg {fill:currentColor;}
+.reader-topbar .icon-button[aria-pressed="true"],.reader-topbar .icon-button[aria-expanded="true"] {color:var(--accent-strong);background:var(--accent-soft);}
+.reader-bg-black .reader-viewport {background:#000;}
+.reader-bg-gray .reader-viewport {background:#202124;}
+.reader-bg-white .reader-viewport {background:#fff;}
+.toolbar-topline .toolbar-actions {margin-left:auto;justify-content:flex-end;}
+.root-mode-dialog .modal-header {grid-template-columns:minmax(0,1fr) auto;align-items:start;}
+.root-mode-dialog .modal-header > div {min-width:0;}
+.root-mode-dialog .modal-header p:last-child {margin-right:0;}
+.root-mode-dialog {max-height:calc(100dvh - 48px);overflow:auto;}
+.media-kind-filter {min-width:148px;}
+.media-kind-filter select {width:100%;}
+.settings-page {width:100%;}
+.settings-header,.settings-layout {margin-inline:auto;}
+.about-author-links button {font-weight:650;}
+.book-support-help {margin:18px 0 8px;color:var(--text-muted);line-height:1.6;}
+.book-list-error {padding:12px 16px;color:var(--danger);}
+.reader-bookmark-select {max-width:190px;min-width:110px;min-height:36px;}
+.reader-bottombar {flex-wrap:wrap;}
+.epub-chapter {width:min(100%,760px);padding:clamp(16px,3vw,40px);min-height:100%;line-height:1.8;}
+.epub-chapter p {white-space:pre-line;text-indent:2em;line-height:1.8;margin:0 0 .7em;}
+.epub-chapter h1,.epub-chapter h2,.epub-chapter h3,.epub-chapter h4,.epub-chapter h5,.epub-chapter h6 {line-height:1.4;margin:1.4em 0 1em;color:inherit;}
+.epub-chapter h1,.epub-chapter h2 {text-align:center;}
+.epub-chapter blockquote {margin:1em 1.5em;line-height:1.8;}
+.epub-chapter pre {white-space:pre-wrap;}
+.epub-chapter .epub-list-item {text-indent:0;margin-left:1.5em;}
+.epub-chapter .epub-list-item::before {content:'•';margin-right:.6em;}
+.epub-chapter.is-illustration {padding:0;display:flex;flex-direction:column;align-items:center;justify-content:center;background:transparent;}
+.epub-chapter.is-illustration img {object-fit:contain;max-height:calc(var(--reading-height) - 48px);width:auto;max-width:100%;margin:0 auto;}
+.reader-bg-black .epub-chapter {background:#0c0c0c;color:#ededed;}
+.reader-bg-gray .epub-chapter {background:#202124;color:#e7e7e7;}
+.reader-bg-white .epub-chapter {background:#fff;color:#202124;}
+@media(max-width:1000px){.toolbar-topline .toolbar-actions {justify-content:flex-end;width:auto;}.toolbar-topline .toolbar-actions .button{flex:0 1 auto;}.document-viewport {padding:16px;}.reader-bookmark-select {max-width:155px;}}

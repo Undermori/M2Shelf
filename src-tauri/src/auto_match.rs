@@ -84,6 +84,7 @@ pub enum StrongConflict {
     Season,
     MissingSeason,
     Edition,
+    BookEdition,
 }
 
 #[derive(Debug, Clone)]
@@ -384,6 +385,24 @@ where
             }
         }
         run_cache.owned_file_names = Some(names);
+        let mut statement = connection
+            .prepare("SELECT node_id,display_name FROM comic_books ORDER BY node_id,id")
+            .map_err(|e| e.to_string())?;
+        let rows = statement
+            .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))
+            .map_err(|e| e.to_string())?;
+        for row in rows {
+            let (id, name) = row.map_err(|e| e.to_string())?;
+            let list = run_cache
+                .owned_file_names
+                .as_mut()
+                .unwrap()
+                .entry(id)
+                .or_default();
+            if list.len() < 32 {
+                list.push(name);
+            }
+        }
     }
     let media_file_names = run_cache
         .owned_file_names
@@ -395,20 +414,30 @@ where
         .parent_node_id
         .and_then(|parent_id| database.get_node(parent_id).ok())
         .map(|parent| parent.display_name);
-    let evidence = title_extractor::build_match_evidence(
-        &node.folder_name,
-        &node.display_name,
-        parent_name.as_deref(),
-        &media_file_names,
-    );
+    let evidence = if node.media_kind.is_book() {
+        crate::comics::match_evidence_with_books(
+            &node.folder_name,
+            &node.display_name,
+            parent_name.as_deref(),
+            &media_file_names,
+        )
+    } else {
+        title_extractor::build_match_evidence(
+            &node.folder_name,
+            &node.display_name,
+            parent_name.as_deref(),
+            &media_file_names,
+        )
+    };
     let confirmed_alias = database
         .resolve_confirmed_title_alias(&title_extractor::confirmed_alias_candidates(&evidence))?;
-    let decision = match assess_evidence_online(
+    let decision = match assess_evidence_online_for_kind(
         &evidence,
-        node.node_type == NodeType::Container,
+        node.node_type == NodeType::Container && !node.media_kind.is_book(),
         confirmed_alias,
         run_cache,
         is_cancelled,
+        node.media_kind,
     )? {
         OnlineAssessment::Decision(decision) => *decision,
         OnlineAssessment::Cancelled => return Ok(AutoMatchNodeResult::Cancelled),
@@ -644,12 +673,30 @@ enum OnlineAssessment {
     Cancelled,
 }
 
-fn assess_evidence_online<C>(
+#[cfg(test)]
+fn assess_evidence_online<C: Fn() -> bool>(
     evidence: &MatchEvidence,
     is_container: bool,
     confirmed_alias: Option<ConfirmedTitleAliasMatch>,
     run_cache: &mut MatchRunCache,
     is_cancelled: &C,
+) -> AppResult<OnlineAssessment> {
+    assess_evidence_online_for_kind(
+        evidence,
+        is_container,
+        confirmed_alias,
+        run_cache,
+        is_cancelled,
+        crate::models::LibraryMediaKind::Video,
+    )
+}
+fn assess_evidence_online_for_kind<C>(
+    evidence: &MatchEvidence,
+    is_container: bool,
+    confirmed_alias: Option<ConfirmedTitleAliasMatch>,
+    run_cache: &mut MatchRunCache,
+    is_cancelled: &C,
+    kind: crate::models::LibraryMediaKind,
 ) -> AppResult<OnlineAssessment>
 where
     C: Fn() -> bool,
@@ -673,11 +720,16 @@ where
         if is_cancelled() {
             return Ok(OnlineAssessment::Cancelled);
         }
-        let cache_key = title_extractor::normalize_title_for_match(&query);
+        let normalized = title_extractor::normalize_title_for_match(&query);
+        let cache_key = if kind == crate::models::LibraryMediaKind::Video {
+            normalized
+        } else {
+            format!("{}:{normalized}", kind.as_db())
+        };
         let result = run_cache
             .searches
             .entry(cache_key)
-            .or_insert_with(|| bangumi::search(&query, AUTO_SEARCH_LIMIT))
+            .or_insert_with(|| bangumi::search_for_kind(&query, AUTO_SEARCH_LIMIT, kind))
             .clone();
         let results = match result {
             Ok(results) => results,
@@ -692,11 +744,11 @@ where
         }
         search_results.push(results.into_iter().take(AUTO_SEARCH_LIMIT).collect());
     }
-    let mut recalled = merge_search_results_fair(&search_results, primary_query_index);
+    let mut recalled = merge_search_results_for_kind(&search_results, primary_query_index, kind);
     let confirmed_subject_id = confirmed_alias.as_ref().map(|alias| alias.subject_id);
     if let Some(alias) = confirmed_alias {
         let exactness = confirmed_alias_exactness(evidence, &alias.matched_alias);
-        recall_confirmed_alias(&mut recalled, alias, exactness);
+        recall_confirmed_alias_for_kind(&mut recalled, alias, exactness, kind);
     }
 
     if recalled.is_empty() {
@@ -716,7 +768,7 @@ where
     let weights = MatchWeights::default();
     let mut preliminary = recalled
         .iter()
-        .map(|candidate| score_recalled_candidate(evidence, candidate, &weights))
+        .map(|candidate| score_recalled_candidate_for_kind(evidence, candidate, &weights, kind))
         .collect::<Vec<_>>();
     sort_scores(&mut preliminary);
     let preliminary_decision = decide_scores(preliminary.clone(), is_container, &weights);
@@ -797,7 +849,7 @@ where
     discard_unvalidated_confirmed_aliases(&mut recalled);
     let scored = recalled
         .into_iter()
-        .map(|candidate| score_recalled_candidate(evidence, &candidate, &weights))
+        .map(|candidate| score_recalled_candidate_for_kind(evidence, &candidate, &weights, kind))
         .collect::<Vec<_>>();
     finish_online_assessment(
         decide_scores(scored, is_container, &weights),
@@ -853,9 +905,21 @@ fn detail_candidate_ids(
 /// Merges provider results by rank round instead of allowing the earliest query to fill the
 /// bounded candidate pool first. Query order remains the deterministic tie-breaker within a
 /// rank, while each query gets an equal opportunity to contribute candidates.
+#[cfg(test)]
 fn merge_search_results_fair(
     search_results: &[Vec<BangumiSubject>],
     primary_query_index: Option<usize>,
+) -> Vec<RecalledCandidate> {
+    merge_search_results_for_kind(
+        search_results,
+        primary_query_index,
+        crate::models::LibraryMediaKind::Video,
+    )
+}
+fn merge_search_results_for_kind(
+    search_results: &[Vec<BangumiSubject>],
+    primary_query_index: Option<usize>,
+    kind: crate::models::LibraryMediaKind,
 ) -> Vec<RecalledCandidate> {
     let max_rank = search_results
         .iter()
@@ -870,7 +934,7 @@ fn merge_search_results_fair(
             let Some(subject) = results.get(rank) else {
                 continue;
             };
-            if !bangumi::is_supported_subject_type(subject.subject_type) {
+            if !kind.accepts_subject(subject.subject_type) {
                 continue;
             }
             if let Some(existing_index) = subject_indexes.get(&subject.subject_id).copied() {
@@ -902,12 +966,26 @@ fn merge_search_results_fair(
     recalled
 }
 
+#[cfg(test)]
 fn recall_confirmed_alias(
     recalled: &mut Vec<RecalledCandidate>,
     alias: ConfirmedTitleAliasMatch,
     exactness: ConfirmedAliasExactness,
 ) {
-    if !bangumi::is_supported_subject_type(alias.subject_type) {
+    recall_confirmed_alias_for_kind(
+        recalled,
+        alias,
+        exactness,
+        crate::models::LibraryMediaKind::Video,
+    )
+}
+fn recall_confirmed_alias_for_kind(
+    recalled: &mut Vec<RecalledCandidate>,
+    alias: ConfirmedTitleAliasMatch,
+    exactness: ConfirmedAliasExactness,
+    kind: crate::models::LibraryMediaKind,
+) {
+    if !kind.accepts_subject(alias.subject_type) {
         return;
     }
     if let Some(candidate) = recalled
@@ -941,16 +1019,31 @@ fn recall_confirmed_alias(
     });
 }
 
+#[cfg(test)]
 fn score_recalled_candidate(
     evidence: &MatchEvidence,
     candidate: &RecalledCandidate,
     weights: &MatchWeights,
 ) -> CandidateScore {
-    let mut score = score_candidate(
+    score_recalled_candidate_for_kind(
+        evidence,
+        candidate,
+        weights,
+        crate::models::LibraryMediaKind::Video,
+    )
+}
+fn score_recalled_candidate_for_kind(
+    evidence: &MatchEvidence,
+    candidate: &RecalledCandidate,
+    weights: &MatchWeights,
+    kind: crate::models::LibraryMediaKind,
+) -> CandidateScore {
+    let mut score = score_candidate_for_kind(
         evidence,
         &candidate.subject,
         candidate.official_rank,
         weights,
+        kind,
     );
     if let Some(exactness) = candidate.confirmed_alias_exactness {
         let primary_exact = exactness == ConfirmedAliasExactness::Primary;
@@ -1094,11 +1187,27 @@ fn push_distinct_query(queries: &mut Vec<String>, candidate: &str) -> bool {
 
 /// Pure first/final-stage scorer. Provider order contributes at most five points and can never
 /// turn an otherwise unrelated title into an automatic match.
+#[cfg(test)]
 pub fn score_candidate(
     evidence: &MatchEvidence,
     subject: &BangumiSubject,
     official_rank: usize,
     weights: &MatchWeights,
+) -> CandidateScore {
+    score_candidate_for_kind(
+        evidence,
+        subject,
+        official_rank,
+        weights,
+        crate::models::LibraryMediaKind::Video,
+    )
+}
+fn score_candidate_for_kind(
+    evidence: &MatchEvidence,
+    subject: &BangumiSubject,
+    official_rank: usize,
+    weights: &MatchWeights,
+    kind: crate::models::LibraryMediaKind,
 ) -> CandidateScore {
     let titles = subject_titles(subject);
     let provider_season = detect_provider_season(&titles, evidence.season_number);
@@ -1152,7 +1261,21 @@ pub fn score_candidate(
     score += similarity_score;
 
     let mut strong_conflicts = Vec::new();
-    if !bangumi::is_supported_subject_type(subject.subject_type) {
+    if kind.is_book() {
+        let local_volume = crate::comics::book_volume(&evidence.primary_title);
+        let local_re = crate::comics::book_is_re(&evidence.primary_title);
+        let provider_re = titles.iter().any(|title| crate::comics::book_is_re(title));
+        let volume_conflict = local_volume.is_some_and(|volume| {
+            !titles
+                .iter()
+                .any(|title| crate::comics::book_volume(title) == Some(volume))
+        });
+        if local_re != provider_re || volume_conflict {
+            strong_conflicts.push(StrongConflict::BookEdition);
+            score += weights.edition_conflict;
+        }
+    }
+    if !kind.accepts_subject(subject.subject_type) {
         score += weights.edition_conflict;
         strong_conflicts.push(StrongConflict::UnsupportedSubjectType);
     }
@@ -1173,7 +1296,14 @@ pub fn score_candidate(
         }
     }
 
-    match (evidence.season_number, provider_season) {
+    match (
+        evidence.season_number,
+        if kind.is_book() {
+            None
+        } else {
+            provider_season
+        },
+    ) {
         (Some(local), Some(provider)) if local == provider => score += weights.season_match,
         (Some(_), Some(_)) => {
             score += weights.season_conflict;
@@ -1451,6 +1581,42 @@ mod tests {
         }
     }
 
+    #[test]
+    fn comic_matching_scopes_pool_and_preserves_type_conflicts() {
+        use crate::models::LibraryMediaKind::{Comic, Video};
+        let evidence = crate::comics::match_evidence("作品 第2卷", "作品 第2卷", None);
+        let manga = subject_with_type(1, "作品 (2)", None, 1);
+        let animation = subject_with_type(2, "作品", None, 2);
+        let live = subject_with_type(3, "作品", None, 6);
+        let results = vec![vec![animation.clone(), manga.clone(), live.clone()]];
+        let comic = merge_search_results_for_kind(&results, Some(0), Comic);
+        assert_eq!(
+            comic
+                .iter()
+                .map(|s| s.subject.subject_id)
+                .collect::<Vec<_>>(),
+            vec![1]
+        );
+        assert_eq!(
+            merge_search_results_for_kind(&results, Some(0), Video).len(),
+            2
+        );
+        let weights = MatchWeights::default();
+        let score = score_candidate_for_kind(&evidence, &manga, 0, &weights, Comic);
+        assert!(score.strong_conflicts.is_empty());
+        assert!(score.score >= weights.direct_threshold);
+        assert!(
+            !score_candidate_for_kind(&evidence, &animation, 0, &weights, Comic)
+                .strong_conflicts
+                .is_empty()
+        );
+        assert!(
+            !score_candidate_for_kind(&evidence, &manga, 0, &weights, Video)
+                .strong_conflicts
+                .is_empty()
+        );
+    }
+
     fn evidence(title: &str) -> MatchEvidence {
         title_extractor::build_match_evidence(title, title, None, &[])
     }
@@ -1479,6 +1645,10 @@ mod tests {
 
     fn ineligible_progress_node(id: i64) -> MediaNode {
         MediaNode {
+            media_kind: crate::models::LibraryMediaKind::Video,
+            direct_comic_book_count: 0,
+            child_comic_branch_count: 0,
+            total_comic_book_count: 0,
             latest_file_modified_at: None,
             last_watched_at: None,
             id,
@@ -1557,6 +1727,57 @@ mod tests {
         assert!(exact.score > ranked_first.score);
         assert!(exact.primary_exact);
         assert!(ranked_first.score < weights.direct_threshold);
+    }
+    #[test]
+    fn book_volume_and_rejecting_parent_continuation_conflicts() {
+        let weights = MatchWeights::default();
+        let re = crate::comics::match_evidence("东京喰种re", "东京喰种re", Some("东京喰种"));
+        let mut main = subject(1, "東京喰種トーキョーグール", Some("东京喰种"));
+        main.subject_type = 1;
+        let mut sequel = subject(2, "東京喰種トーキョーグール:re", Some("东京喰种re"));
+        sequel.subject_type = 1;
+        assert!(score_candidate_for_kind(
+            &re,
+            &main,
+            0,
+            &weights,
+            crate::models::LibraryMediaKind::Comic
+        )
+        .strong_conflicts
+        .contains(&StrongConflict::BookEdition));
+        assert!(score_candidate_for_kind(
+            &re,
+            &sequel,
+            0,
+            &weights,
+            crate::models::LibraryMediaKind::Comic
+        )
+        .strong_conflicts
+        .is_empty());
+        let volume = crate::comics::match_evidence("第02卷", "第02卷", Some("东京喰种"));
+        assert_eq!(volume.primary_title, "东京喰种 (2)");
+        main.title = "东京喰种 (1)".into();
+        main.title_cn = None;
+        sequel.title = "东京喰种 (2)".into();
+        sequel.title_cn = None;
+        assert!(score_candidate_for_kind(
+            &volume,
+            &main,
+            0,
+            &weights,
+            crate::models::LibraryMediaKind::Comic
+        )
+        .strong_conflicts
+        .contains(&StrongConflict::BookEdition));
+        assert!(score_candidate_for_kind(
+            &volume,
+            &sequel,
+            1,
+            &weights,
+            crate::models::LibraryMediaKind::Comic
+        )
+        .strong_conflicts
+        .is_empty());
     }
 
     #[test]

@@ -20,11 +20,12 @@
         "minHeight": 640,
         "center": true,
         "visible": false,
+        "decorations": false,
         "resizable": true
       }
     ],
     "security": {
-      "csp": "default-src 'self'; img-src 'self' data: asset: http://asset.localhost https://lain.bgm.tv; style-src 'self' 'unsafe-inline'; connect-src 'self' ipc: http://ipc.localhost",
+      "csp": "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; font-src 'self' blob:; img-src 'self' data: blob: asset: http://asset.localhost https://lain.bgm.tv; style-src 'self' 'unsafe-inline'; connect-src 'self' ipc: http://ipc.localhost",
       "assetProtocol": {
         "enable": true,
         "scope": ["$APPDATA/cache/covers/**/*"]

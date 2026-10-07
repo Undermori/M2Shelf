@@ -3,5 +3,5 @@
   "identifier": "main-capability",
   "description": "M²Shelf desktop window with user-triggered file pickers only.",
   "windows": ["main"],
-  "permissions": ["core:default", "dialog:allow-open"]
+  "permissions": ["core:default", "dialog:allow-open", "core:window:allow-close", "core:window:allow-minimize", "core:window:allow-toggle-maximize", "core:window:allow-start-dragging"]
 }

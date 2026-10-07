@@ -125,7 +125,13 @@ export function nodeHasVideo(node: MediaNode): boolean {
 
 export function canBindBangumi(node: MediaNode): boolean {
   const work = node.nodeType === "WORK" || node.nodeType === "AUTO_WORK";
-  return work || (node.nodeType === "CONTAINER" && nodeHasVideo(node));
+  return work || (node.nodeType === "CONTAINER" && (nodeHasVideo(node) || (node.totalComicBookCount??0)>0));
+}
+
+export function mediaBadge(node:MediaNode):string {
+  const media=node.mediaKind==='EBOOK'?'ebook.name':node.mediaKind==='COMIC'?'comic.name':node.mediaKind==='ANIMATION'||node.binding?.providerSubjectType===2?'comic.animation':node.mediaKind==='LIVE_ACTION'||node.binding?.providerSubjectType===6?'comic.liveAction':'comic.unboundVideo';
+  const structure=node.nodeType==='CONTAINER'?'card.systemSeries':node.nodeType==='MIXED'?'card.systemOtherResources':'card.systemWork';
+  return translateActive('comic.badge',{media:translateActive(media),structure:translateActive(structure)});
 }
 
 export function resourceTypeLabel(type: ResourceType, extension: string): string {

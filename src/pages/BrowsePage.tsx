@@ -12,8 +12,10 @@ import { OtherResourceList } from "../components/OtherResourceList";
 import { SelectionToolbar } from "../components/SelectionToolbar";
 import { compareMediaNodes, nodeMatchesQuery, nodeDisplayTitle, nodeTypeLabel } from "../lib/format";
 import { useI18n } from "../lib/i18n";
+import {ComicBookList} from '../components/ComicBookList';
 
 interface BrowsePageProps {
+  onReadComic?:(book:import('../types/comic').ComicBook)=>void;
   data: BrowseResult | null;
   currentNode: MediaNode | null;
   loading: boolean;
@@ -52,7 +54,7 @@ interface BrowsePageProps {
   onMatch: (nodeIds: number[] | null, rematchExisting: boolean) => void;
 }
 
-export function BrowsePage({ data, currentNode, loading, viewMode, onViewMode, filter, onFilter, tagFilterId, onTagFilter, sort, onSort, onRoot, onBreadcrumb, onOpenNode, onMenu, onBangumi, onRetryCover, onPlay, onRevealMedia, onOpenResource, onRevealResource, onScan, onAddRoot, onSearch, coverRevision, editMode, selectedNodeIds, matchBusy, onEditMode, onToggleSelection, onSelectAll, onClearSelection, onBatchTags, onBatchFavorites, onBatchMenu, onMatch }: BrowsePageProps) {
+export function BrowsePage({ onReadComic,data, currentNode, loading, viewMode, onViewMode, filter, onFilter, tagFilterId, onTagFilter, sort, onSort, onRoot, onBreadcrumb, onOpenNode, onMenu, onBangumi, onRetryCover, onPlay, onRevealMedia, onOpenResource, onRevealResource, onScan, onAddRoot, onSearch, coverRevision, editMode, selectedNodeIds, matchBusy, onEditMode, onToggleSelection, onSelectAll, onClearSelection, onBatchTags, onBatchFavorites, onBatchMenu, onMatch }: BrowsePageProps) {
   const { language, number, t } = useI18n();
   const effectiveTagFilterId = tagFilterId != null && data?.nodes.some((node) => node.userTags.some((tag) => tag.id === tagFilterId))
     ? tagFilterId
@@ -95,11 +97,12 @@ export function BrowsePage({ data, currentNode, loading, viewMode, onViewMode, f
       </header>
 
       <div className="page-content">
+        {!!data.comicBooks?.length&&<section className="content-section"><div className="section-heading"><div><p className="eyebrow">{t(data.root.mediaKind==='EBOOK'?'ebook.files':'comic.files')}</p><h2>{t('comic.doubleClickRead')}</h2></div><span>{t('comic.books',{count:data.comicBooks.length})}</span></div><ComicBookList books={data.comicBooks} onRead={b=>onReadComic?.(b)}/></section>}
         {editMode && <SelectionToolbar selectedCount={selectedNodeIds.size} visibleCount={nodes.length} busy={matchBusy} onSelectAll={() => onSelectAll(nodes.map((node) => node.id))} onClear={onClearSelection} onTags={onBatchTags} onFavorites={onBatchFavorites} onMore={onBatchMenu} onRematch={() => onMatch([...selectedNodeIds], true)} onExit={() => onEditMode(false)} />}
         {mediaFiles.length > 0 && <section className="content-section"><div className="section-heading"><div><p className="eyebrow">{t("browse.directVideos")}</p><h2>{t("browse.doubleClickPlay")}</h2></div><span>{t("browse.videoCount", { count: mediaFiles.length })}</span></div><MediaFileList modifiedSort={sort.startsWith("modified-") ? sort : undefined} files={mediaFiles} onPlay={onPlay} onReveal={onRevealMedia} /></section>}
         {nodes.length > 0 && <section className="content-section"><div className="section-heading"><div><p className="eyebrow">{t("browse.children")}</p><h2>{t("browse.continue")}</h2></div><span>{t("browse.nodeCount", { count: nodes.length })}</span></div><PosterGrid showModifiedTime={sort.startsWith("modified-")} nodes={nodes} viewMode={viewMode} onOpen={onOpenNode} onMenu={onMenu} onBangumi={onBangumi} onRetryCover={onRetryCover} coverRevision={coverRevision} editMode={editMode} selectedNodeIds={selectedNodeIds} onSelect={onToggleSelection} /></section>}
         {resourceFiles.length > 0 && <section className="content-section"><div className="section-heading"><div><p className="eyebrow">{t("browse.otherResources")}</p><h2>{t("browse.nonVideoFiles")}</h2></div><span>{t("browse.fileCount", { count: resourceFiles.length })}</span></div><OtherResourceList modifiedSort={sort.startsWith("modified-") ? sort : undefined} files={resourceFiles} folders={[]} onOpenFile={onOpenResource} onRevealFile={onRevealResource} onOpenFolder={onOpenNode} onFolderMenu={onMenu} /></section>}
-        {nodes.length === 0 && mediaFiles.length === 0 && resourceFiles.length === 0 && <EmptyState compact icon={hasActiveFilter ? "search" : "folder"} title={hasActiveFilter ? t("browse.noMatch") : t("browse.empty")} description={hasActiveFilter ? t("browse.noMatchDescription") : t("browse.emptyFolderDescription")} />}
+        {nodes.length === 0 && mediaFiles.length === 0 && resourceFiles.length === 0 && !data.comicBooks?.length && <EmptyState compact icon={hasActiveFilter ? "search" : "folder"} title={hasActiveFilter ? t("browse.noMatch") : t("browse.empty")} description={hasActiveFilter ? t("browse.noMatchDescription") : t("browse.emptyFolderDescription")} />}
       </div>
     </section>
   );

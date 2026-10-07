@@ -140,7 +140,16 @@ fn client() -> AppResult<Client> {
     Ok(HTTP_CLIENT.get().cloned().unwrap_or(built))
 }
 
+#[cfg(test)]
 pub fn search(keyword: &str, limit: usize) -> AppResult<Vec<BangumiSubject>> {
+    search_for_kind(keyword, limit, crate::models::LibraryMediaKind::Video)
+}
+
+pub fn search_for_kind(
+    keyword: &str,
+    limit: usize,
+    kind: crate::models::LibraryMediaKind,
+) -> AppResult<Vec<BangumiSubject>> {
     let keyword = keyword.trim();
     if keyword.is_empty() {
         return Err("请输入 Bangumi 搜索词。".into());
@@ -151,14 +160,14 @@ pub fn search(keyword: &str, limit: usize) -> AppResult<Vec<BangumiSubject>> {
         ));
     }
     let client = client()?;
-    let response = search_with_retry(&client, keyword, limit)?;
+    let response = search_with_retry(&client, keyword, limit, kind)?;
 
     Ok(response
         .data
         .into_iter()
         // Type 2 is animation and type 6 is live action. Keep a defensive filter even when the
         // API honors the multi-value filter so unrelated books/music/games never enter matching.
-        .filter(|subject| is_supported_subject_type(subject.subject_type))
+        .filter(|subject| kind.accepts_subject(subject.subject_type))
         .take(limit.clamp(1, 50))
         .map(api_subject_to_model)
         .collect())
@@ -195,7 +204,7 @@ fn api_subject_to_model(subject: ApiSubject) -> BangumiSubject {
 }
 
 pub fn enrich_subject(subject: &BangumiSubject) -> AppResult<BangumiSubject> {
-    if subject.subject_id <= 0 || !is_supported_subject_type(subject.subject_type) {
+    if subject.subject_id <= 0 || !matches!(subject.subject_type, 1 | 2 | 6) {
         return Err("只能读取有效的 Bangumi 动画或真人影视条目。".into());
     }
     let client = client()?;
@@ -209,7 +218,7 @@ fn merge_subject_detail(
 ) -> AppResult<BangumiSubject> {
     if detail.id != subject.subject_id
         || detail.subject_type != subject.subject_type
-        || !is_supported_subject_type(detail.subject_type)
+        || !matches!(detail.subject_type, 1 | 2 | 6)
     {
         return Err("Bangumi 条目详情与所选作品不匹配。".into());
     }
@@ -490,10 +499,15 @@ fn non_empty(value: String) -> Option<String> {
     (!value.is_empty()).then(|| value.to_string())
 }
 
-fn search_with_retry(client: &Client, keyword: &str, limit: usize) -> AppResult<SearchResponse> {
+fn search_with_retry(
+    client: &Client,
+    keyword: &str,
+    limit: usize,
+    kind: crate::models::LibraryMediaKind,
+) -> AppResult<SearchResponse> {
     let mut failures = Vec::new();
     for attempt in 0..2 {
-        match search_endpoint(client, SEARCH_URL, keyword, limit) {
+        match search_endpoint(client, SEARCH_URL, keyword, limit, kind) {
             Ok(response) => return Ok(response),
             Err(error) => {
                 failures.push(provider_endpoint_failure_label(SEARCH_URL, &error));
@@ -517,22 +531,50 @@ fn search_endpoint(
     endpoint: &str,
     keyword: &str,
     limit: usize,
+    kind: crate::models::LibraryMediaKind,
 ) -> Result<SearchResponse, ProviderRequestError> {
     let response = checked_response(
         client
             .post(endpoint)
             .query(&[("limit", limit.clamp(1, 50)), ("offset", 0_usize)])
-            .json(&search_request_body(keyword))
+            .json(&search_request_body_for_kind(keyword, kind))
             .send(),
     )?;
     decode_bounded_json(response, MAX_SEARCH_RESPONSE_BYTES)
 }
 
+#[cfg(test)]
 fn search_request_body(keyword: &str) -> Value {
+    search_request_body_for_kind(keyword, crate::models::LibraryMediaKind::Video)
+}
+#[cfg(test)]
+#[test]
+fn new_library_searches_use_only_their_subject_type() {
+    use crate::models::LibraryMediaKind;
+    for (kind, expected) in [
+        (LibraryMediaKind::Animation, 2),
+        (LibraryMediaKind::LiveAction, 6),
+        (LibraryMediaKind::Comic, 1),
+        (LibraryMediaKind::Ebook, 1),
+    ] {
+        assert_eq!(
+            search_request_body_for_kind("fixture", kind)["filter"]["type"],
+            json!([expected])
+        );
+    }
+}
+
+fn search_request_body_for_kind(keyword: &str, kind: crate::models::LibraryMediaKind) -> Value {
+    let types: &[i64] = match kind {
+        crate::models::LibraryMediaKind::Comic | crate::models::LibraryMediaKind::Ebook => &[1],
+        crate::models::LibraryMediaKind::Animation => &[2],
+        crate::models::LibraryMediaKind::LiveAction => &[6],
+        crate::models::LibraryMediaKind::Video => &SUPPORTED_SUBJECT_TYPES,
+    };
     json!({
         "keyword": keyword,
         "sort": "match",
-        "filter": { "type": SUPPORTED_SUBJECT_TYPES, "nsfw": false }
+        "filter": { "type": types, "nsfw": false }
     })
 }
 
@@ -928,6 +970,11 @@ mod tests {
     fn search_requests_only_animation_and_live_action_subjects() {
         let body = search_request_body("奥本海默");
         assert_eq!(body["filter"]["type"], json!([2, 6]));
+        assert_eq!(
+            search_request_body_for_kind("漫画作品", crate::models::LibraryMediaKind::Comic)
+                ["filter"]["type"],
+            json!([1])
+        );
         assert!(is_supported_subject_type(SUBJECT_TYPE_ANIME));
         assert!(is_supported_subject_type(SUBJECT_TYPE_LIVE_ACTION));
         for unsupported in [1, 3, 4, 5, 7] {

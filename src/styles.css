@@ -31,6 +31,7 @@
   --accent-soft: #f2ddd4;
   --accent-hover: #f5e3dc;
   --accent-strong: #c96245;
+  --bookmark-active: #a42e35;
   --green-soft: #e2ebe8;
   --nav-background: #182127;
   --font-ui: system-ui, "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
@@ -73,6 +74,7 @@
   --accent-soft: #49342f;
   --accent-hover: #54382f;
   --accent-strong: #ed8b6e;
+  --bookmark-active: #ef6a73;
   --green-soft: #293c38;
   --nav-background: #111619;
 }
@@ -559,12 +561,11 @@ img { display: block; }
 .about-grid > div { display: grid; grid-template-columns: 105px minmax(0,1fr); align-items: center; min-height: 38px; border-bottom: 1px solid #ebe7e0; }
 .about-grid dt { color: #929793; font-size: var(--text-caption); }
 .about-grid dd { margin: 0; color: #4c5657; font-size: var(--text-body); font-weight: 650; }
-.about-grid button, .created-by button { display: inline-flex; align-items: center; gap: 5px; padding: 0; border: 0; color: #b95d45; background: transparent; cursor: pointer; font-weight: 700; }
-.about-grid button:hover:not(:disabled), .created-by button:hover:not(:disabled) { color: #8f3f2b; text-decoration: underline; }
-.about-grid button:disabled, .created-by button:disabled { cursor: default; opacity: .6; }
+.about-grid button { display: inline-flex; align-items: center; gap: 5px; padding: 0; border: 0; color: #b95d45; background: transparent; cursor: pointer; font-weight: 700; }
+.about-grid button:hover:not(:disabled) { color: #8f3f2b; text-decoration: underline; }
+.about-grid button:disabled { cursor: default; opacity: .6; }
 .about-grid button svg { width: 13px; }
 .about-author-links { display: grid; justify-items: start; gap: 8px; padding-block: 8px; }
-.created-by { margin: 17px 0 0; color: #7e8683; font-size: var(--text-small); }
 .update-preferences { margin: 16px 0 12px; }
 .settings-switch-row, .update-manual-check { min-height: 58px; padding: 11px 2px; border-bottom: 1px solid var(--border-normal); }
 .settings-columns .settings-switch-row { border-bottom: 0; }
@@ -931,7 +932,7 @@ html, body, #root { color: var(--text-normal); background: var(--surface-app); }
 .detail-path, .detail-stats, .section-heading > span, .generic-empty > p:not(.eyebrow),
 .loading-state, .search-hero > p:last-of-type, .settings-header > p:last-child,
 .settings-section-heading p, .settings-root p, .settings-root small, .maintenance-grid p,
-.maintenance-grid small, .about-grid dt, .created-by, .resource-copy small,
+.maintenance-grid small, .about-grid dt, .resource-copy small,
 .resource-copy em, .resource-hint, .bangumi-result-copy p,
 .bangumi-result-copy small, .modal-header p:last-child, .confirm-dialog > p,
 .rename-dialog > p:not(.eyebrow), .search-hit-copy em, .search-hit-meta,
