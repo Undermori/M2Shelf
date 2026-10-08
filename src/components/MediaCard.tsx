@@ -37,11 +37,6 @@ function MediaCardComponent({ node, viewMode, onOpen, onMenu, onBangumi, onRetry
   useEffect(() => setImageFailed(false), [cover]);
   const videos = node.totalVideoCount ?? node.directVideoCount ?? 0;
   const container = node.nodeType === "CONTAINER" || node.nodeType === "MIXED";
-  const systemTag = node.nodeType === "CONTAINER"
-    ? { icon: "folder" as const, label: t("card.systemSeries") }
-    : node.nodeType === "MIXED"
-      ? { icon: "archive" as const, label: t("card.systemOtherResources") }
-      : { icon: "work" as const, label: t("card.systemWork") };
   const bindable = canBindBangumi(node);
   const title = nodeDisplayTitle(node);
   const coverFailed = coverReadFailed || imageFailed;
@@ -61,16 +56,18 @@ function MediaCardComponent({ node, viewMode, onOpen, onMenu, onBangumi, onRetry
               <small>{coverError ? t("card.coverFailed") : container ? t("card.resourceContainer") : t("card.noCover")}</small>
             </span>
           )}
-          <span className="type-pill system-tag"><Icon name={systemTag.icon} />{mediaBadge(node)}</span>
           {editMode && <span aria-hidden="true" className="selection-indicator"><Icon name={selected ? "check" : "plus"} /></span>}
         </span>
         <span className="media-card-copy">
           <strong title={title}>{title}</strong>
           {watchedAt && <time className="media-card-watch-time" dateTime={watchedAt}>{t("comic.openedAt", { time: formatDate(watchedAt) })}</time>}
           {showModifiedTime && <FileModifiedTime value={node.latestFileModifiedAt} />}
-          <small>
-            {(node.mediaKind==='COMIC'||node.mediaKind==='EBOOK')?t('comic.books',{count:node.totalComicBookCount??0}):videos > 0 ? t("card.videoCount", { count: videos }) : container ? t("card.childCount", { count: node.childMediaBranchCount ?? 0 }) : t("card.awaitingScan")}
-          </small>
+          <span className="media-card-meta">
+            <span className="type-pill system-tag">{mediaBadge(node)}</span>
+            <small>
+              {(node.mediaKind==='COMIC'||node.mediaKind==='EBOOK')?t('comic.books',{count:node.totalComicBookCount??0}):videos > 0 ? t("card.videoCount", { count: videos }) : container ? t("card.childCount", { count: node.childMediaBranchCount ?? 0 }) : t("card.awaitingScan")}
+            </small>
+          </span>
           {viewMode === "list" && !node.binding && <span className="card-path">{node.absolutePath}</span>}
           {(node.userTags?.length ?? 0) > 0 && (
             <span aria-label={t("card.customTags")} className="media-card-tags">

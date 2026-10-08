@@ -2879,14 +2879,22 @@ def check_ui_windows_interaction_contract() -> None:
         'import "./styles/workspace.css"' in read("src/main.tsx"),
         '--surface-app: #f5f6f8' in workspace_css,
         '--surface-app: #18191d' in workspace_css,
-        'flex-basis: 272px' in workspace_css,
-        'flex-basis: 248px' in workspace_css,
+        'flex-basis: 288px' in workspace_css,
+        'flex-basis: 256px' in workspace_css,
         '.content-scroll.is-settings' in workspace_css,
         'align-self: flex-start; min-height: 100%' in workspace_css,
         '.search-toolbar .search-controls' in workspace_css,
-        'max-width: 880px; margin: 24px auto 0' in workspace_css,
+        'max-width: none; margin: 24px 0 0' in workspace_css,
         '.search-field input:focus-visible' in workspace_css,
-        re.search(r'\.settings-layout\s*\{[^}]*max-width:\s*980px;[^}]*margin:\s*0(?:\s+auto)?;', workspace_css) is not None,
+        re.search(r'\.settings-layout\s*\{[^}]*max-width:\s*1120px;[^}]*margin:\s*0(?:\s+auto)?;', workspace_css) is not None,
+        'grid-template-columns: 200px minmax(0, 1fr)' in workspace_css,
+        read("src/pages/SettingsPage.tsx").count('className="settings-section-body"') == 7,
+        'minmax(164px, 1fr)' in workspace_css,
+        '--poster-aspect-ratio: 2 / 3' in workspace_css,
+        '-webkit-line-clamp: 2' in workspace_css,
+        'className="media-card-meta"' in media_card,
+        'position: static; padding: 0; border: 0' in workspace_css,
+        'grid-row: 4' in workspace_css,
         'settings-savebar' not in read("src/pages/SettingsPage.tsx"),
         'role="status"' in read("src/pages/SettingsPage.tsx"),
         ':root[data-theme="dark"]' in workspace_css,
@@ -2978,7 +2986,11 @@ def check_ui_windows_interaction_contract() -> None:
         fail("poster still renders a circular binding/manual check badge")
     elif "nodeTypeLabel" in media_card:
         fail("poster still renders the full automatic node-type label set")
-    elif not all(key in media_card for key in ("card.systemWork", "card.systemSeries", "card.systemOtherResources")):
+    elif not (
+        '{mediaBadge(node)}' in media_card
+        and 'className="type-pill system-tag"' in media_card
+        and all(key in read("src/lib/format.ts") for key in ("card.systemWork", "card.systemSeries", "card.systemOtherResources"))
+    ):
         fail("poster system labels are not limited to Work/Series/Other resources")
     else:
         passed("three structural poster labels retained beneath composed media-kind badges")

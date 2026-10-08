@@ -203,51 +203,64 @@ export function SettingsPage({ roots, bootstrap, onAddRoot, onHiddenNodes, onRem
       <div className="settings-layout">
         <section className="settings-section">
           <div className="settings-section-heading"><span className="settings-symbol coral"><Icon name="folder" /></span><div><h2>{t("settings.rootsTitle")}</h2><p>{t("settings.rootsDescription")}</p></div><button className="button secondary" disabled={!desktopAvailable} onClick={onAddRoot} type="button"><Icon name="plus" />{t("settings.addDirectory")}</button></div>
+          <div className="settings-section-body">
           {roots.length === 0 ? <EmptyState compact icon="folder" title={t("settings.noDirectory")} description={t("settings.noDirectoryDescription")} /> : <div className="settings-root-list">{roots.map((root) => (
             <article className="settings-root" key={root.id}><span><Icon name="folder-open" /></span><div><strong>{root.displayName}</strong><p title={root.path}>{compactPath(root.path, 74)}</p><small>{t(root.mediaKind==='ANIMATION'?'comic.animation':root.mediaKind==='LIVE_ACTION'?'library.liveAction':root.mediaKind==='EBOOK'?'ebook.name':root.mediaKind==='COMIC'?'comic.name':'comic.unboundVideo')} · {t(root.recognitionMode==='VIDEO_FILE'?(root.mediaKind==='COMIC'||root.mediaKind==='EBOOK'?'bookMode.fileTitle':'rootMode.videoFileTitle'):'rootMode.folderTitle')}</small><small>{t("settings.lastScan", { date: formatDate(root.lastScanAt) })}</small><LibraryScanHealth health={root.scanHealth} /></div><div className="settings-root-actions">{root.scanHealth && root.scanHealth.outcome !== 'SUCCESS' && <button className="icon-button" aria-pressed={!!root.scanHealth.warningsIgnored} aria-label={t(root.scanHealth.warningsIgnored?'comic.restoreWarnings':'comic.ignoreWarnings')} title={t(root.scanHealth.warningsIgnored?'comic.restoreWarnings':'comic.ignoreWarnings')} disabled={!onIgnoreScanWarnings} onClick={()=>onIgnoreScanWarnings?.(root)} type="button"><Icon name={root.scanHealth.warningsIgnored?'warning':'close'}/></button>}<button aria-label={t("settings.scanNamed", { name: root.displayName })} onClick={() => onScanRoot(root)} title={t("settings.scanLibrary")} type="button"><Icon name="refresh" /></button><button className="danger-icon" aria-label={t("settings.removeNamed", { name: root.displayName })} onClick={() => onRemoveRoot(root)} title={t("settings.removeIndexOnly")} type="button"><Icon name="trash" /></button></div></article>
           ))}</div>}
           <div className="settings-hidden-entry"><div><strong>{t("hidden.title")}</strong><p>{t("settings.hiddenDescription")}</p></div><button className="button secondary" disabled={!desktopAvailable} onClick={onHiddenNodes} type="button" aria-haspopup="dialog"><Icon name="eye-off" />{t("hidden.title")}</button></div>
           <p className="safety-copy"><Icon name="shield" />{t("settings.removeSafety")}</p>
+          </div>
         </section>
 
         <section className="settings-section">
           <div className="settings-section-heading"><span className="settings-symbol navy"><Icon name="play" /></span><div><h2>{t("settings.playerTitle")}</h2><p>{t("settings.playerDescription")}</p></div></div>
+          <div className="settings-section-body">
           <div className="setting-form-row"><label><span>{t("settings.playerPath")}</span><div className="path-input"><input disabled={!settings} onChange={(event) => changeSettings((current) => ({ ...current, mpvPath: event.target.value || null }))} placeholder={t("settings.playerPlaceholder")} value={settings?.mpvPath ?? ""} /><button disabled={!desktopAvailable} onClick={() => void choosePlayer()} type="button">{t("common.chooseEllipsis")}</button></div></label><button className="button secondary" disabled={!settings?.mpvPath || testing} onClick={() => void testMpv()} type="button">{testing ? t("settings.testing") : t("settings.testPlayer")}</button></div>
+          </div>
         </section>
 
         <section className="settings-section">
           <div className="settings-section-heading"><span className="settings-symbol gold"><Icon name="settings" /></span><div><h2>{t("settings.browseScanTitle")}</h2><p>{t("settings.browseScanDescription")}</p></div></div>
+          <div className="settings-section-body">
           <div className="settings-preference-list"><label className="field-label"><span>{t("settings.defaultView")}</span><select disabled={!settings} onChange={(event) => changeSettings((current) => ({ ...current, defaultViewMode: event.target.value as "GRID" | "LIST" }))} value={settings?.defaultViewMode ?? "GRID"}><option value="GRID">{t("settings.posterGrid")}</option><option value="LIST">{t("settings.compactList")}</option></select></label><label className="switch-field settings-switch-row"><span><strong>{t("settings.enableBangumi")}</strong><small>{t("settings.bangumiNetwork")}</small></span><input aria-label={t("settings.enableBangumi")} checked={settings?.bangumiSearchEnabled ?? false} disabled={!settings} onChange={(event) => changeSettings((current) => ({ ...current, bangumiSearchEnabled: event.target.checked }))} type="checkbox" /><i /></label>
           <label className="switch-field settings-switch-row"><span><strong>{t("settings.autoScanOnStartup")}</strong><small>{t("settings.autoScanOnStartupDescription")}</small></span><input aria-label={t("settings.autoScanOnStartup")} checked={settings?.autoScanOnStartup ?? true} disabled={!settings} onChange={(event) => changeSettings((current) => ({ ...current, autoScanOnStartup: event.target.checked }))} type="checkbox" /><i /></label>
           <label className="switch-field settings-switch-row"><span><strong>{t("settings.allResourcesFlattened")}</strong><small>{t("settings.allResourcesFlattenedDescription")}</small></span><input aria-label={t("settings.allResourcesFlattened")} checked={settings?.allResourcesFlattened ?? false} disabled={!settings} onChange={(event) => changeSettings((current) => ({ ...current, allResourcesFlattened: event.target.checked }))} type="checkbox" /><i /></label>
           </div>
           <div className="extension-editor"><span>{t("settings.videoExtensions")}</span><div className="extension-chips">{settings?.videoExtensions.map((extension) => <button disabled={settings.videoExtensions.length <= 1} key={extension} onClick={() => changeSettings((current) => ({ ...current, videoExtensions: current.videoExtensions.filter((item) => item !== extension) }))} title={t("settings.removeExtension")} type="button">{extension}<Icon name="close" /></button>)}</div><div className="extension-add"><input onChange={(event) => setExtensionDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); addExtension(); } }} placeholder={t("settings.extensionPlaceholder")} value={extensionDraft} /><button onClick={addExtension} type="button">{t("common.add")}</button></div></div>
+          </div>
         </section>
 
         <section className="settings-section comic-settings">
           <div className="settings-section-heading"><span className="settings-symbol navy"><Icon name="work"/></span><div><h2>{t('comic.defaults')}</h2><p>{t('comic.defaultsHelp')}</p></div></div>
+          <div className="settings-section-body">
           <div className="settings-columns">
             <label className="field-label"><span>{t('comic.direction')}</span><select disabled={!settings} value={reader.direction} onChange={e=>changeSettings(s=>({...s,comicReader:{...(s.comicReader??defaultComicReaderSettings),direction:e.target.value as ComicReaderSettings['direction']}}))}><option value="RTL">{t('comic.rtl')}</option><option value="LTR">{t('comic.ltr')}</option></select></label>
             <label className="field-label"><span>{t('comic.layout')}</span><select disabled={!settings} value={reader.layout} onChange={e=>changeSettings(s=>({...s,comicReader:{...(s.comicReader??defaultComicReaderSettings),layout:e.target.value as ComicReaderSettings['layout']}}))}><option value="DOUBLE">{t('comic.double')}</option><option value="SINGLE">{t('comic.single')}</option></select></label>
             <label className="field-label"><span>{t('comic.mode')}</span><select disabled={!settings} value={reader.mode} onChange={e=>changeSettings(s=>({...s,comicReader:{...(s.comicReader??defaultComicReaderSettings),mode:e.target.value as ComicReaderSettings['mode']}}))}><option value="PAGED">{t('comic.paged')}</option><option value="SCROLL">{t('comic.scroll')}</option><option value="WEBTOON">{t('comic.webtoon')}</option></select></label>
           </div><label className="switch-field settings-switch-row"><span><strong>{t('comic.wideAlone')}</strong></span><input disabled={!settings} type="checkbox" checked={reader.widePageAlone} onChange={e=>changeSettings(s=>({...s,comicReader:{...(s.comicReader??defaultComicReaderSettings),widePageAlone:e.target.checked}}))}/><i/></label>
+          </div>
         </section>
         <section className="settings-section">
           <div className="settings-section-heading"><span className="settings-symbol coral"><Icon name="globe" /></span><div><h2>{t("settings.appearanceTitle")}</h2><p>{t("settings.appearanceDescription")}</p></div></div>
+          <div className="settings-section-body">
           <div className="settings-columns">
             <label className="field-label"><span>{t("settings.language")}</span><select disabled={!settings} onChange={(event) => changeSettings((current) => ({ ...current, language: event.target.value as AppLanguage }))} value={settings?.language ?? "zh-CN"}><option value="zh-CN">{t("settings.languageZh")}</option><option value="en-US">{t("settings.languageEn")}</option><option value="ja-JP">{t("settings.languageJa")}</option><option value="ko-KR">{t("settings.languageKo")}</option></select></label>
             <label className="field-label"><span>{t("settings.theme")}</span><select disabled={!settings} onChange={(event) => changeSettings((current) => ({ ...current, theme: event.target.value as AppTheme }))} value={settings?.theme ?? "system"}><option value="system">{t("settings.themeSystem")}</option><option value="light">{t("settings.themeLight")}</option><option value="dark">{t("settings.themeDark")}</option></select></label>
+          </div>
           </div>
         </section>
 
         <section className="settings-section">
           <div className="settings-section-heading"><span className="settings-symbol green"><Icon name="database" /></span><div><h2>{t("settings.cacheTitle")}</h2><p>{t("settings.cacheDescription")}</p></div></div>
+          <div className="settings-section-body">
           <label className="field-label cache-directory-field"><span>{t("settings.cacheDirectory")}</span><div className="path-input"><input disabled={!settings} readOnly title={settings?.coverCacheDirectory} value={settings?.coverCacheDirectory ?? ""} /><button disabled={!desktopAvailable || !settings} onClick={() => void chooseCacheDirectory()} type="button">{t("settings.change")}</button><button disabled={!desktopAvailable} onClick={() => void openCache()} type="button">{t("common.open")}</button></div><small>{t("settings.cachePathHelp")}</small></label>
           <div className="maintenance-grid"><article><Icon name="image" /><div><strong>{t("settings.coverCache")}</strong><p>{cache ? t("settings.cacheFileSummary", { count: cache.fileCount, size: formatBytes(cache.totalBytes) }) : t("common.unknown")}</p><small title={cache?.cacheDirectory}>{cache ? compactPath(cache.cacheDirectory, 55) : t("common.notAvailable")}</small></div><span className="maintenance-actions"><button disabled={!desktopAvailable} onClick={() => void openCache()} type="button">{t("common.open")}</button><button disabled={!desktopAvailable} onClick={() => void clearCache()} type="button">{t("common.clean")}</button></span></article><article><Icon name="refresh" /><div><strong>{t("settings.rebuildIndex")}</strong><p>{t("settings.rebuildDescription")}</p><small>{t("settings.noMediaChanges")}</small></div><button disabled={!desktopAvailable || roots.length === 0} onClick={() => void rebuild()} type="button">{t("common.rebuild")}</button></article></div>
+          </div>
         </section>
 
         <section className="settings-section about-section">
           <div className="settings-section-heading"><span className="settings-symbol coral"><Icon name="info" /></span><div><h2>{t("settings.aboutTitle")}</h2><p>{t("settings.aboutDescription")}</p></div></div>
+          <div className="settings-section-body">
           <div className="about-brand"><strong>{t("brand.name")}</strong><span>{t("brand.subtitle")}</span></div>
           <div className="update-preferences">
             <label className="switch-field settings-switch-row"><span><strong>{t("settings.autoCheckUpdates")}</strong><small>{t("settings.autoCheckUpdatesDescription")}</small></span><input aria-label={t("settings.autoCheckUpdates")} checked={settings?.autoCheckUpdates ?? false} disabled={!settings || !desktopAvailable} onChange={(event) => changeSettings((current) => ({ ...current, autoCheckUpdates: event.target.checked }))} type="checkbox" /><i /></label>
@@ -260,6 +273,7 @@ export function SettingsPage({ roots, bootstrap, onAddRoot, onHiddenNodes, onRem
             <div><dt>{t("settings.website")}</dt><dd className="about-author-links"><button disabled={!bootstrap?.websiteUrl || !desktopAvailable} onClick={() => void openAuthorLink(bootstrap?.websiteUrl)} type="button">{t("settings.websiteLabel")} <Icon name="external" /></button></dd></div>
             <div className="about-credit"><dt>{t("settings.specialThanks")}</dt><dd>Juvenile_A</dd></div>
           </dl>
+          </div>
         </section>
       </div>
     </section>
