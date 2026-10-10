@@ -37,7 +37,9 @@ MOBI/AZW3는 암호화되지 않은 MOBI6/KF8을 지원합니다. DRM, 일반 ZI
 
 Portable은 전체 압축을 푼 다음 `M2Shelf.exe`를 실행하세요. 데이터베이스·설정·기본 캐시는 Windows 앱 데이터에 저장됩니다. 이전 5개 파일 Portable도 새 ZIP 전체로 업데이트하세요.
 
-Microsoft Edge WebView2 Runtime이 필요합니다. 업데이트의 Ed25519 검증은 Windows Authenticode와 별개이며 SmartScreen 경고가 표시될 수 있습니다.
+0.5.13은 직접 다운로드하여 업데이트하세요. 이번 버전은 앱 내 업데이트를 제공하지 않습니다.
+
+Microsoft Edge WebView2 Runtime이 필요합니다. SmartScreen 경고가 표시될 수 있습니다.
 
 ## 로컬 데이터
 

@@ -37,7 +37,9 @@ MOBI/AZW3 supports unencrypted MOBI6/KF8. DRM, ordinary ZIP, RAR and 7Z are not 
 
 Extract the complete Portable ZIP before running `M2Shelf.exe`. The database, settings and default cache use Windows application data. Replace the complete payload when upgrading an older five-file Portable build.
 
-Microsoft Edge WebView2 Runtime is required. Update packages use Ed25519 verification, which is separate from Windows Authenticode; SmartScreen may still warn about an unknown publisher.
+Download 0.5.13 manually; in-app updates are not available for this release.
+
+Microsoft Edge WebView2 Runtime is required. SmartScreen may warn about an unknown publisher.
 
 ## Local data
 

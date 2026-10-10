@@ -37,7 +37,9 @@ MOBI/AZW3 は暗号化されていない MOBI6/KF8 に対応。DRM、通常の Z
 
 Portable は全体を解凍して `M2Shelf.exe` を起動してください。データベース・設定・既定キャッシュは Windows のアプリデータに保存されます。旧五ファイル構成からの更新も ZIP 全体を解凍してください。
 
-Microsoft Edge WebView2 Runtime が必要です。更新パッケージの Ed25519 検証は Windows Authenticode とは別で、SmartScreen の警告が出る場合があります。
+0.5.13 は手動でダウンロードして更新してください。このバージョンはアプリ内更新に対応していません。
+
+Microsoft Edge WebView2 Runtime が必要です。SmartScreen の警告が出る場合があります。
 
 ## ローカルデータ
 

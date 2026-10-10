@@ -37,7 +37,9 @@ MOBI/AZW3 支持未加密的 MOBI6/KF8，不支持 DRM；普通 ZIP、RAR、7Z �
 
 Portable 请完整解压后运行 `M2Shelf.exe`，不要直接在压缩包内运行。数据库、设置和默认缓存保存在 Windows 应用数据目录。旧五文件 Portable 请完整解压新版升级。
 
-运行需要 Microsoft Edge WebView2 Runtime。更新包使用 Ed25519 验证；这不等同于 Windows Authenticode，SmartScreen 仍可能提示未知发布者。
+0.5.13 请手动下载更新，暂不提供应用内更新。
+
+运行需要 Microsoft Edge WebView2 Runtime。SmartScreen 可能提示未知发布者。
 
 ## 本地数据
 

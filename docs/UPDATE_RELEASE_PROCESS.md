@@ -2,6 +2,10 @@
 
 本文记录 `0.5.11` 起的 Windows 稳定更新发布契约。它只包含可公开的操作规则；生产私钥、DPAPI 文件、独立指纹、个人路径和账号凭据不得写入仓库、Issue、Actions、Release 或日志。
 
+### 0.5.13 手动下载例外
+
+0.5.13 按用户明确授权仅发布安装包和 Portable，未生成生产更新签名或 latest.json；本次必须手动下载更新。发布前核对完整 CI、官方 artifact attestation、固定 tag/commit、包大小和 SHA-256，草稿上传后核对远端 digest，公开后重新下载复核。此流程不调用或放宽下述签名发布器，不改变生产密钥、公钥或客户端更新验证。已公开 v0.5.13 不再追加清单或替换资产，后续恢复签名发布需使用新版本。
+
 ## 1. 信任模型
 
 - 客户端只读取 `https://github.com/Undermori/M2Shelf/releases/latest/download/latest.json`；
