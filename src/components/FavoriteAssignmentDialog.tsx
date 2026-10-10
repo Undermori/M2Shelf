@@ -89,7 +89,6 @@ export function FavoriteAssignmentDialog({ nodeIds, onClose, onApplied, onFolder
           {folders?.length === 0 && <p className="tag-empty"><Icon name="bookmark" />{t("favorites.noFolders")}</p>}
           {folders?.map((folder) => <button className="batch-tag-option" disabled={busy} key={folder.id} onClick={() => void assign(folder)} type="button"><span><Icon name="bookmark" /></span><strong>{folder.name}</strong><small>{t("favorites.itemCount", { count: number(folder.itemCount) })}</small><Icon name="chevron" /></button>)}
         </div>
-        <footer className="modal-footer"><Icon name="shield" />{t("favorites.footer")}</footer>
       </section>
     </div>
   );

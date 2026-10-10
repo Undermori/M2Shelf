@@ -1,0 +1,73 @@
+{
+  "id": 37,
+  "title": "Repeat same snapshot exactly",
+  "input": {
+    "root_id": "fixture-root",
+    "media_kind": "COMIC",
+    "complete": true,
+    "entries": [
+      {
+        "path": "重复执行",
+        "kind": "DIRECTORY",
+        "hint": null
+      },
+      {
+        "path": "重复执行/第01卷.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "重复执行/第02卷.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      }
+    ]
+  },
+  "expected": {
+    "units": [
+      {
+        "path": "重复执行/第01卷.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "重复执行/第02卷.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      }
+    ],
+    "root_paths": [
+      "重复执行"
+    ],
+    "series": [
+      {
+        "directory": "重复执行",
+        "title": "重复执行",
+        "members": [
+          {
+            "path": "重复执行/第01卷.pdf",
+            "volume": 1,
+            "chapter": null,
+            "role": "VOLUME",
+            "decision": "APPLY"
+          },
+          {
+            "path": "重复执行/第02卷.pdf",
+            "volume": 2,
+            "chapter": null,
+            "role": "VOLUME",
+            "decision": "APPLY"
+          }
+        ],
+        "decision": "APPLY"
+      }
+    ],
+    "directory_roles": {},
+    "diagnostics": [],
+    "editions": 0,
+    "retained_prior": 0
+  },
+  "negative_assertion": "Repeat property separately compares entire serialized plan"
+}

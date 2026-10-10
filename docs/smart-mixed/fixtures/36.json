@@ -1,0 +1,73 @@
+{
+  "id": 36,
+  "title": "Shuffled traversal supported MOBI AZW3",
+  "input": {
+    "root_id": "fixture-root",
+    "media_kind": "EBOOK",
+    "complete": true,
+    "entries": [
+      {
+        "path": "顺序作品/第02卷.azw3",
+        "kind": "FILE",
+        "format": "AZW3",
+        "verified": true
+      },
+      {
+        "path": "顺序作品/第01卷.mobi",
+        "kind": "FILE",
+        "format": "MOBI",
+        "verified": true
+      },
+      {
+        "path": "顺序作品",
+        "kind": "DIRECTORY",
+        "hint": null
+      }
+    ]
+  },
+  "expected": {
+    "units": [
+      {
+        "path": "顺序作品/第01卷.mobi",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "顺序作品/第02卷.azw3",
+        "kind": "FILE_BOOK",
+        "pages": []
+      }
+    ],
+    "root_paths": [
+      "顺序作品"
+    ],
+    "series": [
+      {
+        "directory": "顺序作品",
+        "title": "顺序作品",
+        "members": [
+          {
+            "path": "顺序作品/第01卷.mobi",
+            "volume": 1,
+            "chapter": null,
+            "role": "VOLUME",
+            "decision": "APPLY"
+          },
+          {
+            "path": "顺序作品/第02卷.azw3",
+            "volume": 2,
+            "chapter": null,
+            "role": "VOLUME",
+            "decision": "APPLY"
+          }
+        ],
+        "decision": "APPLY"
+      }
+    ],
+    "directory_roles": {},
+    "diagnostics": [],
+    "editions": 0,
+    "retained_prior": 0
+  },
+  "negative_assertion": "Permutation property separately compares entire structured result"
+}

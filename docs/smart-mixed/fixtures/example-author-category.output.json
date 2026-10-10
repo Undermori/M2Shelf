@@ -1,0 +1,207 @@
+{
+  "schema_version": 1,
+  "rules_version": "smart-mixed-lab-1",
+  "mode": "SMART_MIXED",
+  "root_id": "fixture-root",
+  "physical_tree": [
+    {
+      "path": "",
+      "parent": null,
+      "kind": "DIRECTORY",
+      "state": "AVAILABLE"
+    },
+    {
+      "path": "藤本树",
+      "parent": "",
+      "kind": "DIRECTORY",
+      "state": "AVAILABLE"
+    },
+    {
+      "path": "藤本树/再见绘梨.pdf",
+      "parent": "藤本树",
+      "kind": "FILE",
+      "state": "AVAILABLE"
+    },
+    {
+      "path": "藤本树/蓦然回首.pdf",
+      "parent": "藤本树",
+      "kind": "FILE",
+      "state": "AVAILABLE"
+    }
+  ],
+  "directories": [
+    {
+      "path": "",
+      "role": "ROOT",
+      "decision": "KEEP_SEPARATE",
+      "evidence": [
+        {
+          "rule_id": "D01",
+          "facts": [
+            "",
+            "role=Root"
+          ],
+          "explanation": "Root is fixed; explicit category/extra/container signals are kept separate from reading units. Other directories stay conservative until local membership evidence is evaluated."
+        }
+      ]
+    },
+    {
+      "path": "藤本树",
+      "role": "CATEGORY",
+      "decision": "KEEP_SEPARATE",
+      "evidence": [
+        {
+          "rule_id": "D01",
+          "facts": [
+            "藤本树",
+            "role=Category"
+          ],
+          "explanation": "Root is fixed; explicit category/extra/container signals are kept separate from reading units. Other directories stay conservative until local membership evidence is evaluated."
+        }
+      ]
+    }
+  ],
+  "reading_units": [
+    {
+      "source_ref": "[\"fixture-root\",\"FILE\",\"藤本树/再见绘梨.pdf\"]",
+      "path": "藤本树/再见绘梨.pdf",
+      "aliases": [],
+      "kind": "FILE_BOOK",
+      "format": "PDF",
+      "pages": [],
+      "decision": "APPLY",
+      "evidence": [
+        {
+          "rule_id": "B01",
+          "facts": [
+            "藤本树/再见绘梨.pdf",
+            "Some(Pdf)"
+          ],
+          "explanation": "A caller-validated supported book is a reading unit independently of grouping."
+        }
+      ]
+    },
+    {
+      "source_ref": "[\"fixture-root\",\"FILE\",\"藤本树/蓦然回首.pdf\"]",
+      "path": "藤本树/蓦然回首.pdf",
+      "aliases": [],
+      "kind": "FILE_BOOK",
+      "format": "PDF",
+      "pages": [],
+      "decision": "APPLY",
+      "evidence": [
+        {
+          "rule_id": "B01",
+          "facts": [
+            "藤本树/蓦然回首.pdf",
+            "Some(Pdf)"
+          ],
+          "explanation": "A caller-validated supported book is a reading unit independently of grouping."
+        }
+      ]
+    }
+  ],
+  "groups": [
+    {
+      "proposal_ref": "[\"fixture-root\",\"WORK\",\"[\\\"fixture-root\\\",\\\"FILE\\\",\\\"藤本树/再见绘梨.pdf\\\"]\"]",
+      "title": "再见绘梨",
+      "kind": "WORK",
+      "directory": null,
+      "members": [
+        {
+          "source_ref": "[\"fixture-root\",\"FILE\",\"藤本树/再见绘梨.pdf\"]",
+          "role": "MAIN",
+          "volume": null,
+          "chapter": null,
+          "decision": "APPLY",
+          "evidence": [
+            {
+              "rule_id": "N01",
+              "facts": [
+                "藤本树/再见绘梨.pdf",
+                "role=Main; volume=None; chapter=None"
+              ],
+              "explanation": "Only explicit markers or trusted metadata establish numbering; bare digits need explicit work context and review. Extras and collections are not numbered main volumes."
+            }
+          ]
+        }
+      ],
+      "decision": "KEEP_SEPARATE",
+      "evidence": [
+        {
+          "rule_id": "W01",
+          "facts": [
+            "藤本树/再见绘梨.pdf"
+          ],
+          "explanation": "Keep this independently readable source as a work when series evidence is insufficient or grouping is blocked."
+        }
+      ]
+    },
+    {
+      "proposal_ref": "[\"fixture-root\",\"WORK\",\"[\\\"fixture-root\\\",\\\"FILE\\\",\\\"藤本树/蓦然回首.pdf\\\"]\"]",
+      "title": "蓦然回首",
+      "kind": "WORK",
+      "directory": null,
+      "members": [
+        {
+          "source_ref": "[\"fixture-root\",\"FILE\",\"藤本树/蓦然回首.pdf\"]",
+          "role": "MAIN",
+          "volume": null,
+          "chapter": null,
+          "decision": "APPLY",
+          "evidence": [
+            {
+              "rule_id": "N01",
+              "facts": [
+                "藤本树/蓦然回首.pdf",
+                "role=Main; volume=None; chapter=None"
+              ],
+              "explanation": "Only explicit markers or trusted metadata establish numbering; bare digits need explicit work context and review. Extras and collections are not numbered main volumes."
+            }
+          ]
+        }
+      ],
+      "decision": "KEEP_SEPARATE",
+      "evidence": [
+        {
+          "rule_id": "W01",
+          "facts": [
+            "藤本树/蓦然回首.pdf"
+          ],
+          "explanation": "Keep this independently readable source as a work when series evidence is insufficient or grouping is blocked."
+        }
+      ]
+    }
+  ],
+  "editions": [],
+  "root_items": [
+    {
+      "target_ref": "[\"fixture-root\",\"PHYSICAL\",\"藤本树\"]",
+      "path": "藤本树",
+      "title": "藤本树",
+      "kind": "CATEGORY",
+      "decision": "KEEP_SEPARATE"
+    }
+  ],
+  "details": [
+    {
+      "group_ref": "[\"fixture-root\",\"WORK\",\"[\\\"fixture-root\\\",\\\"FILE\\\",\\\"藤本树/再见绘梨.pdf\\\"]\"]",
+      "reading_sources": [
+        "[\"fixture-root\",\"FILE\",\"藤本树/再见绘梨.pdf\"]"
+      ],
+      "transparent_directories": [],
+      "remaining_directories": []
+    },
+    {
+      "group_ref": "[\"fixture-root\",\"WORK\",\"[\\\"fixture-root\\\",\\\"FILE\\\",\\\"藤本树/蓦然回首.pdf\\\"]\"]",
+      "reading_sources": [
+        "[\"fixture-root\",\"FILE\",\"藤本树/蓦然回首.pdf\"]"
+      ],
+      "transparent_directories": [],
+      "remaining_directories": []
+    }
+  ],
+  "retained_prior": [],
+  "diagnostics": [],
+  "retention_policy": "PROPOSAL_ONLY_NO_DELETIONS_OR_PERSISTENT_MUTATIONS"
+}

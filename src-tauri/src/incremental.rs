@@ -159,7 +159,7 @@ fn prepare_root(
     extensions.sort();
     let configuration = serde_json::to_string(&(
         if target.root.media_kind.is_book() {
-            3
+            5
         } else {
             2
         },

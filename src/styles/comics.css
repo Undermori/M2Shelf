@@ -66,7 +66,6 @@ body:has(.comic-reader:fullscreen) .window-titlebar {display:none;}
 .settings-page {width:100%;}
 .settings-header,.settings-layout {margin-inline:auto;}
 .about-author-links button {font-weight:650;}
-.book-support-help {margin:18px 0 8px;color:var(--text-muted);line-height:1.6;}
 .book-list-error {padding:12px 16px;color:var(--danger);}
 .reader-bookmark-select {max-width:190px;min-width:110px;min-height:36px;}
 .reader-bottombar {flex-wrap:wrap;}
@@ -102,7 +101,6 @@ body:has(.comic-reader:fullscreen) .window-titlebar {display:none;}
 .reader-panel select { min-height: 36px; padding: 0 10px; border: 1px solid var(--border-normal); border-radius: var(--radius-control); background: var(--surface-input); color: var(--text-normal); font-family: var(--font-ui); font-size: 13px; }
 .reader-panel input[type="range"] { width: 100%; accent-color: var(--accent-strong); }
 .reader-bookmark { padding: 8px 0; border-bottom: 1px solid var(--border-subtle); }
-.book-support-help { margin-top: 24px; }
 .comic-detail .detail-stats { margin-top: 12px; color: var(--text-strong); font-size: 24px; font-weight: 550; }
 @media (max-width: 1000px) {
   .reader-topbar, .reader-bottombar { padding: 8px 12px; gap: 8px; }

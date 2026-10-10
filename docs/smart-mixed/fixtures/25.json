@@ -1,0 +1,67 @@
+{
+  "id": 25,
+  "title": "Cover exclusion and direct page order",
+  "input": {
+    "root_id": "fixture-root",
+    "media_kind": "COMIC",
+    "complete": true,
+    "entries": [
+      {
+        "path": "图片书",
+        "kind": "DIRECTORY",
+        "hint": null
+      },
+      {
+        "path": "图片书/cover.jpg",
+        "kind": "FILE",
+        "format": "JPEG",
+        "verified": true
+      },
+      {
+        "path": "图片书/001.jpg",
+        "kind": "FILE",
+        "format": "JPEG",
+        "verified": true
+      },
+      {
+        "path": "图片书/002.jpg",
+        "kind": "FILE",
+        "format": "JPEG",
+        "verified": true
+      }
+    ],
+    "page_orders": [
+      {
+        "directory": "图片书",
+        "pages": [
+          "图片书/001.jpg",
+          "图片书/002.jpg"
+        ],
+        "basis": "EXISTING_INDEXED_NATURAL_ORDER"
+      }
+    ]
+  },
+  "expected": {
+    "units": [
+      {
+        "path": "图片书",
+        "kind": "DIRECT_PAGES",
+        "pages": [
+          "图片书/001.jpg",
+          "图片书/002.jpg"
+        ]
+      }
+    ],
+    "root_paths": [
+      "图片书"
+    ],
+    "series": [],
+    "directory_roles": {},
+    "diagnostics": [
+      "COVER_EXCLUDED"
+    ],
+    "editions": 0,
+    "retained_prior": 0
+  },
+  "negative_assertion": "Cover excluded once; no per-image reading units"
+}

@@ -8,8 +8,8 @@ export function LibraryScanHealth({ health }: { health?: ScanHealth | null }) {
   const { t } = useI18n();
   if (!health) return null;
   if (health.warningsIgnored) return <small>{t('comic.warningsIgnored')}</small>;
-  return <div className={`library-scan-health ${health.outcome === "SUCCESS" ? "" : "has-warning"}`}>
-    <small>{t("health.lastAttempt", { date: formatDate(health.lastAutoAttemptAt) })} · {t(outcomeKeys[health.outcome])}</small>
+  return <div className={`library-scan-health is-${health.outcome.toLowerCase()} ${health.outcome === "SUCCESS" ? "" : "has-warning"}`}>
+    <small>{t("health.lastAttempt", { date: formatDate(health.lastAutoAttemptAt) })} · <span className="scan-outcome">{t(outcomeKeys[health.outcome])}</span></small>
     <small>{t("health.lastSuccess", { date: formatDate(health.lastSuccessAt) })}</small>
     {health.outcome !== "SUCCESS" && health.outcome !== "CANCELLED" && <small>{t("health.failureHelp", { count: health.errorCount })}</small>}
     {health.detail && <details><summary>{t("health.viewError")}</summary><p>{health.detail === 'COMIC_NO_PAGES' ? t('comic.noPages') : health.detail}</p></details>}

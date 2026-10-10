@@ -1,0 +1,98 @@
+{
+  "id": 8,
+  "title": "Bare numbered books through range container",
+  "input": {
+    "root_id": "fixture-root",
+    "media_kind": "COMIC",
+    "complete": true,
+    "entries": [
+      {
+        "path": "作品A",
+        "kind": "DIRECTORY",
+        "hint": "WORK"
+      },
+      {
+        "path": "作品A/第04-06卷",
+        "kind": "DIRECTORY",
+        "hint": null
+      },
+      {
+        "path": "作品A/第04-06卷/04.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "作品A/第04-06卷/05.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "作品A/第04-06卷/06.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      }
+    ]
+  },
+  "expected": {
+    "units": [
+      {
+        "path": "作品A/第04-06卷/04.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "作品A/第04-06卷/05.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "作品A/第04-06卷/06.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      }
+    ],
+    "root_paths": [
+      "作品A"
+    ],
+    "series": [
+      {
+        "directory": "作品A",
+        "title": "作品A",
+        "members": [
+          {
+            "path": "作品A/第04-06卷/04.pdf",
+            "volume": 4,
+            "chapter": null,
+            "role": "VOLUME",
+            "decision": "REVIEW"
+          },
+          {
+            "path": "作品A/第04-06卷/05.pdf",
+            "volume": 5,
+            "chapter": null,
+            "role": "VOLUME",
+            "decision": "REVIEW"
+          },
+          {
+            "path": "作品A/第04-06卷/06.pdf",
+            "volume": 6,
+            "chapter": null,
+            "role": "VOLUME",
+            "decision": "REVIEW"
+          }
+        ],
+        "decision": "REVIEW"
+      }
+    ],
+    "directory_roles": {
+      "作品A/第04-06卷": "INTERMEDIATE_CONTAINER"
+    },
+    "diagnostics": [],
+    "editions": 0,
+    "retained_prior": 0
+  },
+  "negative_assertion": "Range is not volume 6; no invented volume"
+}

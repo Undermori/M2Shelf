@@ -1,0 +1,53 @@
+{
+  "id": 11,
+  "title": "Doujin artist category",
+  "input": {
+    "root_id": "fixture-root",
+    "media_kind": "DOUJIN",
+    "complete": true,
+    "entries": [
+      {
+        "path": "某画师",
+        "kind": "DIRECTORY",
+        "hint": "ARTIST"
+      },
+      {
+        "path": "某画师/本A.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "某画师/本B.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      }
+    ]
+  },
+  "expected": {
+    "units": [
+      {
+        "path": "某画师/本A.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "某画师/本B.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      }
+    ],
+    "root_paths": [
+      "某画师"
+    ],
+    "series": [],
+    "directory_roles": {
+      "某画师": "CATEGORY"
+    },
+    "diagnostics": [],
+    "editions": 0,
+    "retained_prior": 0
+  },
+  "negative_assertion": "No Bangumi or artist-wide merge"
+}

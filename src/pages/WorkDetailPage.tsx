@@ -1,3 +1,4 @@
+import {api} from "../lib/api";
 import { useEffect, useState } from "react";
 import type { MediaFile, NodeDetail, ResourceFile } from "../types/media";
 import { Breadcrumb } from "../components/Breadcrumb";
@@ -11,8 +12,12 @@ import { bindingDisplayTitle, canBindBangumi, nodeDisplayTitle, nodeHasVideo, no
 import { useCoverDataUrl } from "../hooks/useCoverDataUrl";
 import { useI18n } from "../lib/i18n";
 import { PosterImage } from "../components/PosterImage";
+import {ComicBookList} from '../components/ComicBookList';
+import {readingFiles} from '../lib/readingFiles';
+import {MetadataBindingPanel} from '../components/MetadataBindingPanel';
 
 export interface WorkDetailPageProps {
+  onBookMenu?:(event:React.MouseEvent,book:import('../types/comic').ComicBook)=>void;
   onReadComic?: (book:import('../types/comic').ComicBook)=>void;
   detail: NodeDetail | null;
   loading: boolean;
@@ -36,14 +41,17 @@ export interface WorkDetailPageProps {
   coverRevision: number;
 }
 
-export function WorkDetailPage({ detail, loading, rootLabel, onRoot, onBreadcrumb, onBack, onBangumi, onOpenBangumi, onRetryCover, onRetryCoverNode, onClearBangumi, onReveal, onPlay, onRevealMedia, onOpenResource, onRevealResource, onOpenChild, onBangumiNode, onMenu, coverRevision }: WorkDetailPageProps) {
+export function WorkDetailPage({ detail, loading, rootLabel, onRoot, onBreadcrumb, onBack, onBangumi, onOpenBangumi, onRetryCover, onRetryCoverNode, onClearBangumi, onReveal, onPlay, onRevealMedia, onOpenResource, onRevealResource, onOpenChild, onBangumiNode, onMenu, coverRevision, onReadComic }: WorkDetailPageProps) {
   const { t } = useI18n();
   const coverNode = detail ? { ...detail.node, binding: detail.binding } : null;
-  const { coverCacheKey, coverUrl: cover, coverFailed: coverReadFailed, coverLoading } = useCoverDataUrl(coverNode, coverRevision);
+  const { coverFrameRef, coverCacheKey, coverUrl: cover, coverFailed: coverReadFailed, coverLoading } = useCoverDataUrl(coverNode, coverRevision);
+  const [metadataError,setMetadataError]=useState('');
   const [imageFailed, setImageFailed] = useState(false);
   useEffect(() => setImageFailed(false), [cover]);
   if (loading || !detail) return <LoadingState label={t("detail.loading")} />;
-  const { node, binding, mediaFiles, resourceFiles, children, workSources } = detail;
+  const { node, binding, mediaFiles, children, workSources } = detail;
+  const reading = readingFiles(detail.comicBooks ?? [], detail.resourceFiles);
+  const resourceFiles = reading.other;
   const nested = detail.nestedMediaFiles ?? [];
   const directPaths = workSources && workSources.length > 1 ? Object.fromEntries(mediaFiles.map(file => [file.id, workSources.find(source => source.id === file.nodeId)?.folderName ?? ""])) : undefined;
   const directorySortKeys = Object.fromEntries(nested.map(entry => [entry.file.id, entry.relativeDirectory]));
@@ -59,24 +67,30 @@ export function WorkDetailPage({ detail, loading, rootLabel, onRoot, onBreadcrum
     <section className="detail-page">
       <header className="detail-toolbar"><button className="back-button" onClick={onBack} type="button"><Icon name="arrow-left" />{t("detail.back")}</button><Breadcrumb rootLabel={rootLabel} items={detail.breadcrumbs} currentNodeId={node.id} onRoot={onRoot} onNode={onBreadcrumb} /></header>
       <div className="detail-content">
+        {metadataError&&<p className="inline-error" role="alert">{metadataError}</p>}
         <section className="detail-hero">
-          <div className={`detail-cover ${cover && !coverFailed ? "has-cover" : ""}`}>{cover && !coverFailed ? <PosterImage alt={t("detail.coverAlt", { title })} cacheKey={coverCacheKey} onError={() => setImageFailed(true)} src={cover} /> : <><Icon name={isContainer ? "folder-open" : "work"} /><span>{coverError ? t("detail.coverFailed") : isContainer ? t("detail.resourceContainer") : t("detail.noCover")}</span>{bindable && (coverError ? <button onClick={() => onRetryCover(imageFailed)} type="button"><Icon name="refresh" />{t("detail.retrieveAgain")}</button> : <button onClick={onBangumi} type="button"><Icon name="plus" />{t("provider.bangumi")}</button>)}</>}</div>
+          <div ref={coverFrameRef} className={`detail-cover ${cover && !coverFailed ? "has-cover" : ""}`}>{cover && !coverFailed ? <PosterImage alt={t("detail.coverAlt", { title })} cacheKey={coverCacheKey} onError={() => setImageFailed(true)} src={cover} /> : <><Icon name={isContainer ? "folder-open" : "work"} /><span>{coverError ? t("detail.coverFailed") : isContainer ? t("detail.resourceContainer") : t("detail.noCover")}</span>{bindable && (coverError ? <button onClick={() => onRetryCover(imageFailed)} type="button"><Icon name="refresh" />{t("detail.retrieveAgain")}</button> : <button onClick={onBangumi} type="button"><Icon name="plus" />{t("provider.bangumi")}</button>)}</>}</div>
           <div className="detail-copy">
             <p className="eyebrow">{nodeTypeLabel(node.nodeType)}{node.manualTypeOverride && ` · ${t("node.manual")}`}</p>
             <h1>{title}</h1>
             {!workSources && <p className="detail-folder-name">{node.folderName}</p>}
             {!workSources && <p className="detail-path" title={node.absolutePath}>{node.absolutePath}</p>}
-            <div className="detail-stats"><span><strong>{mediaFiles.length + nested.length}</strong> {t("detail.totalWorkVideos")}</span><span><strong>{resourceFiles.length}</strong> {t("detail.otherFileCount", { count: "" }).trim()}</span><span><strong>{children.length}</strong> {t("detail.childDirectoryCount", { count: "" }).trim()}</span></div>
-            {bindable && <div className="binding-panel">
-              <span className="binding-logo"><Icon name="bangumi" /></span>
-              {binding ? <div><small>{t("detail.bound", { id: binding.providerSubjectId })}</small><button className="binding-subject-link" type="button" onClick={onOpenBangumi} title={t("detail.openBangumi")} aria-label={t("detail.openBangumi")}><strong>{bindingDisplayTitle(displayNode) ?? title}</strong><span>{t("detail.openBangumi")}</span></button>{coverError && <em><Icon name="warning" />{t("detail.bindingCoverFailed")}</em>}</div> : <div><small>{t("provider.bangumi")}</small><strong>{t("detail.unbound")}</strong></div>}
+            <div className="detail-stats"><span><strong>{mediaFiles.length + nested.length}</strong> {t("detail.totalWorkVideos")}</span>{reading.count>0&&<span>{t('comic.readableCount',{count:reading.count})}</span>}<span><strong>{resourceFiles.length}</strong> {t("detail.otherFileCount", { count: "" }).trim()}</span><span><strong>{children.length}</strong> {t("detail.childDirectoryCount", { count: "" }).trim()}</span></div>
+            {bindable && !node.tmdbBinding?.active && <MetadataBindingPanel provider="Bangumi" label={binding?t("detail.bound", {id:binding.providerSubjectId}):t("provider.bangumi")} title={binding?bindingDisplayTitle(displayNode)??title:t("detail.unbound")} openLabel={t("detail.openBangumi")} onOpen={binding?onOpenBangumi:undefined} error={coverError?<><Icon name="warning"/>{t("detail.bindingCoverFailed")}</>:undefined}>
               <button className="button secondary" onClick={onBangumi} type="button">{binding ? t("detail.changeBinding") : t("detail.searchAdd")}</button>
               {binding && coverError && <button className="icon-button" aria-label={t("detail.retryCoverAria")} onClick={() => onRetryCover(imageFailed)} title={t("detail.retryCover")} type="button"><Icon name="refresh" /></button>}
               {binding && <button className="icon-button" aria-label={t("detail.clearBindingAria")} onClick={onClearBangumi} title={t("detail.clearBinding")} type="button"><Icon name="trash" /></button>}
-            </div>}
+            </MetadataBindingPanel>}
+            {node.tmdbBinding?.active&&<MetadataBindingPanel provider="TMDb" label={t('tmdb.bound',{id:node.tmdbBinding.movie.id})} title={node.tmdbBinding.movie.title} openLabel={t('tmdb.openMovie')} onOpen={()=>void api.tmdbOpenPage(node.id).catch(()=>setMetadataError(t('tmdb.error')))} error={node.tmdbBinding.coverError?t('detail.bindingCoverFailed'):undefined}>
+              <button className="button secondary" onClick={onBangumi} type="button">{t('detail.changeBinding')}</button>
+              {node.tmdbBinding.coverError&&<button className="icon-button" aria-label={t('detail.retryCover')} title={t('detail.retryCover')} type="button" onClick={()=>void api.tmdbRetryCover(node.id).then(()=>window.dispatchEvent(new CustomEvent('m2shelf-metadata-changed'))).catch(()=>setMetadataError(t('tmdb.error')))}><Icon name="refresh"/></button>}
+              <button className="icon-button" aria-label={t('tmdb.clear')} title={t('tmdb.clear')} onClick={()=>void api.tmdbClear(node.id).then(()=>window.dispatchEvent(new CustomEvent('m2shelf-metadata-changed'))).catch(()=>setMetadataError(t('tmdb.error')))} type="button"><Icon name="trash"/></button>
+            </MetadataBindingPanel>}
             <div className="detail-actions"><button className="button secondary" onClick={onReveal} type="button"><Icon name="external" />{t("detail.openExplorer")}</button><button className="button ghost" onClick={(event) => onMenu(event, node)} type="button"><Icon name="more" />{t("detail.organize")}</button></div>
           </div>
         </section>
+
+        {reading.count>0&&<section className="content-section comic-reading-section"><div className="section-heading"><div><p className="eyebrow">{t('book.readableFiles')}</p><h2>{t('comic.doubleClickRead')}</h2></div><span>{t('comic.books',{count:reading.count})}</span></div><ComicBookList books={reading.books} resources={reading.readable} onRead={book=>onReadComic?.(book)} onReadResource={onOpenResource} onRevealResource={onRevealResource}/></section>}
 
         {(mediaFiles.length > 0 || !isContainer) && <section className="content-section">
           <div className="section-heading"><div><p className="eyebrow">{t("detail.videoFiles")}</p><h2>{mediaFiles.length ? t("detail.doubleClickReady") : t("detail.noDirectVideo")}</h2></div><span>{t("browse.videoCount", { count: mediaFiles.length })}</span></div>

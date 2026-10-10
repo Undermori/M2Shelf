@@ -40,3 +40,37 @@ it("reports its original source when the WebView cannot decode the cached image"
   fireEvent.click(document.querySelector(".quick-bind.is-retry")!);
   expect(retry).toHaveBeenCalledWith(node, true);
 });
+
+it("keeps quantity and a bounded tag summary in one row, without an empty tag spacer", () => {
+  const props = {viewMode: 'grid' as const, coverRevision: 0, onOpen: vi.fn(), onMenu: vi.fn(), onBangumi: vi.fn(), onRetryCover: vi.fn()};
+  const result = render(<I18nProvider><MediaCard {...props} node={node}/></I18nProvider>);
+  expect(result.container.querySelector('.media-card-tags')).toBeNull();
+  expect(result.container.querySelector('.cover-frame > .system-tag')).not.toBeNull();
+  expect(result.container.querySelector('.media-card-meta .system-tag')).toBeNull();
+  const tagged = {...node, userTags: [{id: 1, name: 'Favorite', createdAt: '2026-01-01', updatedAt: '2026-01-01'}]};
+  result.rerender(<I18nProvider><MediaCard {...props} node={tagged}/></I18nProvider>);
+  const slot = result.container.querySelector('.media-card-tags')!;
+  expect(slot.parentElement?.className).toBe('media-card-meta');
+  expect(slot.previousElementSibling?.tagName).toBe('SMALL');
+  expect(slot.textContent).toBe('Favorite');
+  const tags = ['A very long tag'.repeat(12), 'Second', 'Third'].map((name, id) => ({id, name, createdAt:'2026-01-01', updatedAt:'2026-01-01'}));
+  result.rerender(<I18nProvider><MediaCard {...props} node={{...node, userTags:tags}}/></I18nProvider>);
+  expect(result.container.querySelectorAll('.user-tag-pill')).toHaveLength(1);
+  expect(result.container.querySelector('.media-card-tag-overflow')?.textContent).toBe('+2');
+  expect(result.container.querySelector('.media-card-tags')?.getAttribute('title')).toContain('Second · Third');
+  fireEvent.click(result.container.querySelector('.user-tag-pill')!);
+  expect(props.onOpen).toHaveBeenCalledTimes(1);
+  result.rerender(<I18nProvider><MediaCard {...props} node={node}/></I18nProvider>);
+  expect(result.container.querySelector('.media-card-tags')).toBeNull();
+  expect(result.container.querySelector('.media-card-meta > small')?.textContent).toBeTruthy();
+});
+
+it("keeps list badges and tag summary; clicking tags in edit mode selects the original Node", () => {
+  const onOpen=vi.fn(), onSelect=vi.fn();
+  const tagged={...node,userTags:[{id:1,name:'One',createdAt:'',updatedAt:''},{id:2,name:'Two',createdAt:'',updatedAt:''}]};
+  const result=render(<I18nProvider><MediaCard node={tagged} viewMode="list" editMode onOpen={onOpen} onSelect={onSelect} onMenu={vi.fn()} onBangumi={vi.fn()} onRetryCover={vi.fn()} coverRevision={0}/></I18nProvider>);
+  expect(result.container.querySelector('.media-card-meta .system-tag')).not.toBeNull();
+  fireEvent.click(result.container.querySelector('.media-card-tags')!);
+  expect(onSelect).toHaveBeenCalledWith(tagged);
+  expect(onOpen).not.toHaveBeenCalled();
+});

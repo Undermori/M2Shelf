@@ -1,3 +1,5 @@
+import type {BookCatalogue,BookCorrection} from '../types/catalogue';
+import type {TmdbMovie,TmdbBinding,TmdbSearch} from '../types/tmdb';
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -10,6 +12,8 @@ import type {
   BatchMutationResult,
   BrowseResult,
   CacheStats,
+  PosterCacheStatus,
+  PosterCacheFailure,
   CollectionSort,
   CollectionSortPreferences,
   CollectionSortScope,
@@ -33,7 +37,8 @@ import type {
   UpdateRecoveryNotice,
 } from "../types/media";
 import { translateActive } from "./i18n";
-import type { ComicBook, ComicOpenResult } from '../types/comic';
+import {bookErrorKey} from './bookMessages';
+import type { ComicBook, ComicOpenResult, TextPosition } from '../types/comic';
 import type { LibraryMediaKind } from '../types/media';
 
 export class DesktopOnlyError extends Error {
@@ -93,9 +98,14 @@ const commandErrorKeys = {
   open_resource_in_explorer: "error.fileFailed",
   get_settings: "error.settingsFailed",
   update_settings: "error.settingsFailed",
+  get_text_reader_settings: "error.settingsFailed",
+  update_text_reader_settings: "error.settingsFailed",
   get_collection_sort_preferences: "error.settingsFailed",
   update_collection_sort_preference: "error.settingsFailed",
   get_cache_stats: "error.cacheFailed",
+  get_poster_cache_status: "error.cacheFailed",
+  get_poster_cache_failures: "error.cacheFailed",
+  retry_poster_cache: "error.cacheFailed",
   open_cover_cache_directory: "error.cacheFailed",
   clear_cover_cache: "error.cacheFailed",
   open_bangumi_subject: "error.externalLinkFailed",
@@ -135,9 +145,8 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     return await invoke<T>(command, args);
   } catch (error) {
     if (isScanBusyError(error)) throw new M2ShelfError(translateActive("app.scanAlreadyRunning"), error, command);
-    if (String(error).includes('COMIC_')) {
-      const text=String(error);
-      const key=text.includes('ENCRYPTED')?'comic.encrypted':text.includes('LIMIT')?'comic.limit':text.includes('OUTSIDE_ROOT')?'comic.outside':'comic.error';
+    if (String(error).includes('COMIC_') || String(error).includes('BOOK_KINDLE_') || String(error).includes('EPUB_')) {
+      const key=bookErrorKey(error);
       throw new M2ShelfError(translateActive(key),error,command);
     }
     // Rust keeps precise diagnostics for logs/tests. UI receives stable localized copy instead
@@ -149,15 +158,28 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
 export const desktopAvailable = isTauri();
 
 export const api = {
+  getBookCatalogue:(rootId:number)=>call<BookCatalogue>('get_book_catalogue',{rootId}),
+  correctBookOrganization:(rootId:number,relativePath:string,action:BookCorrection,target:string|null,expectedRevision:number)=>call<void>('correct_book_organization',{rootId,relativePath,action,target,expectedRevision}),
+  tmdbStatus:()=>call<boolean>('tmdb_status'),
+  tmdbMatchDiagnostics:()=>call<import('../types/tmdb').TmdbMatchDiagnostic[]>('tmdb_match_diagnostics'),
+  tmdbOpenPage:(nodeId:number)=>call<void>('tmdb_open_page',{nodeId}),
+  tmdbCancel:()=>call<void>('tmdb_cancel'),
+  tmdbConfigure:(title:string,message:string)=>call<boolean>('tmdb_configure',{title,message}),
+  tmdbSearch:(nodeId:number,query:string,year:number|null,language:string)=>call<TmdbSearch>('tmdb_search',{nodeId,query,year,language}),
+  tmdbDetail:(movieId:number,language:string)=>call<TmdbMovie>('tmdb_detail',{movieId,language}),
+  tmdbBind:(nodeId:number,movieId:number,language:string,expectedSnapshot:string)=>call<TmdbBinding>('tmdb_bind',{nodeId,movieId,language,expectedSnapshot}),
+  tmdbClear:(nodeId:number)=>call<void>('tmdb_clear',{nodeId}),
+  tmdbRetryCover:(nodeId:number)=>call<TmdbBinding>('tmdb_retry_cover',{nodeId}),
   revealComicBook: (comicBookId:number)=>call<void>('open_comic_in_explorer',{comicBookId}),
   comicDetail: (nodeId:number)=>call<ComicBook[]>('get_comic_detail',{nodeId}),
   openComicBook: (comicBookId:number)=>call<ComicOpenResult>('open_comic_book',{comicBookId}),
   readBookDocument: (comicBookId:number,pageIndex:number,expectedRevision:string)=>call<ArrayBuffer>('read_book_document',{comicBookId,pageIndex,expectedRevision}),
+  readEpubIllustration: (comicBookId:number,pageIndex:number,expectedRevision:string,blockIndex:number)=>call<ArrayBuffer>('read_epub_illustration',{comicBookId,pageIndex,expectedRevision,blockIndex}),
   readPdfRange: (comicBookId:number,begin:number,end:number,expectedRevision:string)=>call<ArrayBuffer>('read_pdf_range',{comicBookId,begin,end,expectedRevision}),
   readComicPage: (comicBookId:number,pageIndex:number,expectedRevision?:string)=>call<ArrayBuffer>('read_comic_page',{comicBookId,pageIndex,expectedRevision:expectedRevision??null}),
-  updateComicProgress: (comicBookId:number,pageIndex:number,expectedRevision?:string)=>call<void>('update_comic_progress',{comicBookId,pageIndex,expectedRevision:expectedRevision??null}),
+  updateComicProgress: (comicBookId:number,pageIndex:number,expectedRevision?:string,textPosition?:TextPosition)=>call<void>('update_comic_progress',{comicBookId,pageIndex,expectedRevision:expectedRevision??null,textPosition:textPosition??null}),
   comicBookmarks: (comicBookId:number)=>call<number[]>('list_comic_bookmarks',{comicBookId}),
-  addComicBookmark: (comicBookId:number,pageIndex:number,expectedRevision?:string)=>call<number[]>('add_comic_bookmark',{comicBookId,pageIndex,expectedRevision:expectedRevision??null}),
+  addComicBookmark: (comicBookId:number,pageIndex:number,expectedRevision?:string,textPosition?:TextPosition)=>call<number[]>('add_comic_bookmark',{comicBookId,pageIndex,expectedRevision:expectedRevision??null,textPosition:textPosition??null}),
   removeComicBookmark: (comicBookId:number,pageIndex:number,expectedRevision?:string)=>call<number[]>('remove_comic_bookmark',{comicBookId,pageIndex,expectedRevision:expectedRevision??null}),
   bindWorkBangumi: (target: WorkTarget, subject: BangumiSubject) => call<MetadataBinding>("bind_work_bangumi", { target, subject }),
   retryWorkBangumiCover: (target: WorkTarget, failedSourceNodeIds: number[] = []) => call<MetadataBinding>("retry_work_bangumi_cover", { target, failedSourceNodeIds }),
@@ -168,8 +190,9 @@ export const api = {
   showMainWindow: () => call<void>("show_main_window"),
   listRoots: () => call<LibraryRoot[]>("list_library_roots"),
   setLibraryScanWarningsIgnored: (rootId: number, ignored: boolean) => call<LibraryRoot>("set_library_scan_warnings_ignored", {rootId, ignored}),
-  addRoot: (path: string, recognitionMode: LibraryRecognitionMode, mediaKind:LibraryMediaKind='VIDEO') =>
-    call<LibraryRoot>("add_library_root", { path, displayName: null, recognitionMode,mediaKind }),
+  addRoot: (path: string, recognitionMode: LibraryRecognitionMode, mediaKind:LibraryMediaKind='VIDEO', autoBangumi?: boolean, bookOrganizationStrategy: 'LEGACY'|'SMART_MIXED'='LEGACY') =>
+    call<LibraryRoot>("add_library_root", { path, displayName: null, recognitionMode,mediaKind,autoBangumi,bookOrganizationStrategy }),
+  setRootAutoBangumi: (rootId: number, enabled: boolean) => call<LibraryRoot>("set_library_auto_bangumi", {rootId,enabled}),
   removeRoot: (rootId: number) => call<void>("remove_library_root", { rootId }),
   renameRoot: (rootId: number, displayName: string) =>
     call<LibraryRoot>("update_library_root_name", { rootId, displayName }),
@@ -212,15 +235,18 @@ export const api = {
   setContainerCover: (nodeId: number, sourcePath: string) =>
     call<MediaNode>("set_container_cover", { nodeId, sourcePath }),
   clearNodeCover: (nodeId: number) => call<MediaNode>("clear_node_cover", { nodeId }),
-  getCoverDataUrl: (nodeId: number) => call<string | null>("get_cover_data_url", { nodeId }),
+  getCoverDataUrl: (nodeId: number, width = 512) => call<string | null>("get_cover_data_url", { nodeId, width }),
+  getBookCoverDataUrl: (comicBookId:number, expectedRevision:string, width=512) => call<string|null>('get_book_cover_data_url',{comicBookId,expectedRevision,width}),
   playMedia: (mediaFileId: number) => call<void>("play_media", { mediaFileId }),
   openInExplorer: (nodeId: number) => call<void>("open_node_in_explorer", { nodeId }),
   openMediaInExplorer: (mediaFileId: number) => call<void>("open_media_in_explorer", { mediaFileId }),
   openResourceFile: (resourceFileId: number) =>
-    call<void>("open_resource_file", { resourceFileId }),
+    call<ComicBook|null>("open_resource_file", { resourceFileId }),
   openResourceInExplorer: (resourceFileId: number) =>
     call<void>("open_resource_in_explorer", { resourceFileId }),
   getSettings: () => call<AppSettings>("get_settings"),
+  getTextReaderSettings: () => call<import("../types/textReader").TextReaderSettings>("get_text_reader_settings"),
+  updateTextReaderSettings: (settings: import("../types/textReader").TextReaderSettings) => call<import("../types/textReader").TextReaderSettings>("update_text_reader_settings", {settings}),
   updateSettings: (settings: AppSettings) => call<AppSettings>("update_settings", { settings }),
   getCollectionSortPreferences: () =>
     call<CollectionSortPreferences>("get_collection_sort_preferences"),
@@ -228,6 +254,9 @@ export const api = {
     call<CollectionSort>("update_collection_sort_preference", { scope, sort }),
   testMpv: (path?: string) => call<PlayerTestResult>("test_mpv", { path: path ?? null }),
   cacheStats: () => call<CacheStats>("get_cache_stats"),
+  posterCacheStatus: () => call<PosterCacheStatus>("get_poster_cache_status"),
+  posterCacheFailures: () => call<PosterCacheFailure[]>("get_poster_cache_failures"),
+  retryPosterCache: () => call<void>("retry_poster_cache"),
   openCoverCacheDirectory: () => call<void>("open_cover_cache_directory"),
   clearCoverCache: () => call<CacheStats>("clear_cover_cache"),
   rebuildIndex: () => call<RebuildResult>("rebuild_index"),

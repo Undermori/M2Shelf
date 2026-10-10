@@ -18,6 +18,8 @@ const host = process.env.TAURI_DEV_HOST;
 export default defineConfig({
   test: { include: ["src/**/*.test.{ts,tsx}"] },
   plugins: [react(),pdfResources()],
+  // Scan only the real app entry. Archived test HTML in .tmp must not enter dev prebundling.
+  optimizeDeps: { entries: ["index.html"] },
   clearScreen: false,
   server: {
     port: 1420,

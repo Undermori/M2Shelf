@@ -1,0 +1,43 @@
+{
+  "id": 46,
+  "title": "Corrupt unverified and unknown files",
+  "input": {
+    "root_id": "fixture-root",
+    "media_kind": "COMIC",
+    "complete": true,
+    "entries": [
+      {
+        "path": "损坏.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true,
+        "state": "CORRUPT"
+      },
+      {
+        "path": "未知.xyz",
+        "kind": "FILE",
+        "format": null,
+        "verified": false
+      },
+      {
+        "path": "未验证.epub",
+        "kind": "FILE",
+        "format": "EPUB",
+        "verified": false
+      }
+    ]
+  },
+  "expected": {
+    "units": [],
+    "root_paths": [],
+    "series": [],
+    "directory_roles": {},
+    "diagnostics": [
+      "SOURCE_UNAVAILABLE",
+      "UNSUPPORTED_OR_UNVERIFIED_FILE"
+    ],
+    "editions": 0,
+    "retained_prior": 0
+  },
+  "negative_assertion": "Physical entries retained with diagnostics, no readable success claim"
+}

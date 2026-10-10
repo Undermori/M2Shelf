@@ -126,7 +126,7 @@ img { display: block; }
 .sidebar-settings { flex: 0 0 auto; width: auto; margin: 4px 14px 18px; border-top: 1px solid rgba(255,255,255,.06); border-radius: 0 0 9px 9px; }
 
 .main-content { display: flex; flex: 1; flex-direction: column; min-width: 0; }
-.content-scroll { display: flex; flex: 1; min-width: 0; min-height: 0; overflow-x: hidden; overflow-y: auto; }
+.content-scroll { display: flex; flex: 1; min-width: 0; min-height: 0; overflow-x: hidden; overflow-y: auto; scrollbar-gutter: stable; }
 .content-scroll > section { width: 100%; min-width: 0; }
 .web-preview-notice { display: flex; flex: 0 0 35px; align-items: center; justify-content: center; gap: 7px; border-bottom: 1px solid #e8d5be; color: #856a48; background: #f5ead7; font-size: 10px; }
 .web-preview-notice svg { width: 14px; }
@@ -196,7 +196,7 @@ img { display: block; }
 .cover-frame img, .detail-cover img, .cover-frame .poster-image, .detail-cover .poster-image, .search-hit-cover .poster-image { position: absolute; inset: 0; }
 .cover-frame img.is-wide-artwork, .detail-cover img.is-wide-artwork { object-fit: contain; }
 .poster-image { display: block; width: 100%; height: 100%; image-rendering: auto; }
-.poster-image-preview.is-wide-artwork { object-fit: contain; }
+.poster-image.is-wide-artwork { object-fit: contain; }
 .cover-placeholder { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; gap: 10px; color: rgba(76,83,83,.58); background: radial-gradient(circle at 30% 24%, rgba(255,255,255,.58), transparent 32%), repeating-linear-gradient(135deg, transparent 0 17px, rgba(255,255,255,.1) 17px 18px); }
 .cover-frame.is-container .cover-placeholder { color: #687f80; background: radial-gradient(circle at 32% 18%, rgba(255,255,255,.45), transparent 31%), linear-gradient(145deg, #cededc, #aebfbd); }
 .cover-art { display: grid; place-items: center; width: 53px; height: 53px; border: 1px solid rgba(74,81,80,.12); border-radius: 17px; background: rgba(255,255,255,.25); }
@@ -580,6 +580,19 @@ img { display: block; }
 .update-download-progress { display: grid; gap: 7px; }
 .update-download-progress > div { display: flex; justify-content: space-between; gap: 12px; color: var(--text-normal); font-size: var(--text-small); }
 .update-download-progress progress { width: 100%; height: 8px; overflow: hidden; border: 0; border-radius: 999px; accent-color: var(--green); }
+.poster-cache-progress { display: grid; gap: 10px; margin: 22px 0; padding: 18px 0; border-top: 1px solid var(--border-normal); }
+.poster-cache-progress-heading, .poster-cache-progress-count { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 8px 20px; }
+.poster-cache-progress-heading span, .poster-cache-progress-count, .poster-cache-progress p { color: var(--text-muted); font-size: 12px; }
+.poster-cache-progress p { margin: 0; line-height: 1.7; }
+.poster-cache-progress progress { appearance: none; width: 100%; height: 6px; overflow: hidden; border: 0; border-radius: 999px; background: var(--surface-input); accent-color: var(--accent-strong); }
+.poster-cache-progress progress::-webkit-progress-bar { background: var(--surface-input); border-radius: 999px; }
+.poster-cache-progress progress::-webkit-progress-value { background: var(--accent-strong); border-radius: 999px; }
+.poster-cache-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.poster-cache-actions button { min-height: 34px; padding: 6px 12px; }
+.poster-cache-diagnostics { border-left: 2px solid var(--border-normal); padding: 4px 0 4px 14px; }
+.poster-cache-diagnostics ul { display: grid; gap: 12px; max-height: 260px; overflow-y: auto; padding: 0; list-style: none; }
+.poster-cache-diagnostics li { display: grid; gap: 3px; overflow-wrap: anywhere; }
+.poster-cache-diagnostics li span { color: var(--text-muted); font-size: 12px; }
 .update-download-progress small { color: var(--text-muted); font-size: var(--text-caption); }
 .update-error { display: grid; grid-template-columns: 24px minmax(0,1fr); align-items: start; gap: 9px; padding: 10px 11px; border: 1px solid var(--border-strong); border-radius: 9px; color: var(--coral-dark); background: var(--accent-soft); }
 .update-error > svg { width: 20px; }

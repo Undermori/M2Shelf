@@ -1,112 +1,69 @@
-<p align="center">
-  <img src="./src-tauri/icons/128x128.png" width="96" height="96" alt="M²Shelf Logo">
-</p>
+# M²Shelf
 
-<h1 align="center">M²Shelf</h1>
+**MORI MEDIA SHELF**
 
-<p align="center"><strong>MORI MEDIA SHELF</strong></p>
+[简体中文](./README.md) · [English](./README.en-US.md) · [한국어](./README.ko-KR.md)
 
-<p align="center"><a href="./README.md">简体中文</a> · <a href="./README.en-US.md">English</a> · <a href="./README.ko-KR.md">한국어</a></p>
-
-<p align="center">すべて GPT によって制作された、Windows のローカルメディアコレクション向けのローカルファースト・メディアソース読み取り専用ブラウザーです。</p>
-
-M²Shelf は、内蔵・外付けドライブや NAS のマッピングフォルダーに保存されたアニメ、映画、関連リソースを独立したインデックスとして管理し、ポスター表示、Bangumi メタデータ、タグ、お気に入り、視聴履歴、外部プレーヤーへの起動導線を提供します。
-
-簡単に言えば、エクスプローラー上で言語、エンコード、字幕グループの違いや長すぎるファイル名のため判別しにくいアニメコレクションを、ワンクリックで次のような見やすいポスター表示に変換できます。
-
-<img width="1445" height="1226" alt="M²Shelf のポスター表示" src="https://github.com/user-attachments/assets/4e1a235c-ea75-4996-b7a7-5c890e0b0803" />
-
-アニメの「作品」詳細ページでは元のファイル名も引き続き確認でき、ワンクリックでエクスプローラー上の場所を開けます。
-
-<img width="1445" height="1226" alt="M²Shelf のアニメ作品詳細ページ" src="https://github.com/user-attachments/assets/9bac84e4-af4e-4b2a-8c5f-ecd05b06b34b" />
-
-アニメの「シリーズ」詳細ページ：
-
-<img width="1445" height="1226" alt="M²Shelf のアニメシリーズ詳細ページ" src="https://github.com/user-attachments/assets/9bc04a4c-4184-4dd3-82dc-094ab32049f6" />
-
-**元のメディアファイルを移動、削除、名前変更、編集することはなく、既存のフォルダー構成を整理し直す必要もありません。**
+M²Shelf は Windows 向けのローカルメディア管理アプリです。アニメ、映画・ドラマ、漫画、電子書籍、同人誌、設定資料集に対応。内蔵・外付けドライブや NAS のマップ済みフォルダーを追加して、閲覧・検索・再生・読書ができます。
 
 ## 主な機能
 
-- 複数のメディアライブラリを管理し、任意の深さまでフォルダーを再帰スキャン。
-- すべてのリソース、個別ライブラリ、実際のフォルダー階層をポスターまたはリストで表示。
-- ローカル名、ファイル名、Bangumi の多言語タイトル、ユーザータグを検索。
-- 作品、シリーズ、その他のリソースを自動分類し、手動分類を維持。
-- 高い確度の Bangumi 項目を自動マッチングし、手動検索、修正、カバー再取得にも対応。
-- 動画と、字幕、画像、音声、文書、圧縮ファイルなどの関連リソースを表示。
-- 設定した外部プレーヤーで再生し、Windows エクスプローラーでファイルを表示。
-- タグ、1 階層の名前付きお気に入りフォルダー、編集モードによる一括整理。
-- M²Shelf が再生を正常に開始した作品を新しい順で表示。
-- 简体中文、English、日本語、한국어に対応。
-- システム設定、ライト、ダークの各テーマに対応。
-- ウィンドウサイズ、並び順、各ブラウズ領域のセッション内位置を記憶。
-- アプリ所有のカバーキャッシュ保存先を変更可能。
+- 複数ライブラリの再帰・差分スキャン。フォルダー単位とファイル単位の識別、書籍のスマート混合識別によるシリーズ・単独書籍・カテゴリー整理。
+- ポスター／リスト表示、ライブラリ横断閲覧、種類・タグの絞り込み、並べ替え。ローカル名、ファイル名、Bangumi の多言語タイトルを検索。
+- 種類に応じた Bangumi の自動・手動紐付け。実写映画は TMDb に対応し、二言語タイトル・公開年・一般的な配布名を解析。ポスターは原語版を優先。紐付け、表示名、表紙は手動修正可能。
+- タグ、名前付きお気に入り、一括編集、非表示と復元。
+- 外部プレーヤー起動、付属ファイル閲覧、エクスプローラーでの表示。
+- 漫画・文字書籍リーダー、読書進捗、しおり、最近開いた項目。
+- ローカル表紙キャッシュとバックグラウンドのサムネイル生成。設定で進捗確認・再試行。
+- ライト／ダーク／システムテーマ、中国語・英語・日本語・韓国語。ウィンドウサイズ、並べ替え、閲覧位置を記憶。
 
-## ローカルファーストとプライバシー
+## 読書
 
-メディアフォルダーは常に読み取り専用として扱われます。インデックス、表示名、Bangumi の紐付け、タグ、お気に入り、視聴履歴、設定は M²Shelf 専用の SQLite データベースに保存され、カバー画像はアプリのキャッシュに保存されます。
+画像フォルダー、CBZ、PDF、EPUB、TXT、MOBI、AZW3 に対応。画像は JPG、JPEG、PNG、WebP、GIF、AVIF、BMP。
 
-Bangumi の検索とカバー取得にはインターネット接続が必要です。ローカルインデックスの閲覧とローカルファイルの起動は Bangumi に依存しません。メディアサーバーやクラウドアカウントは不要で、メディアファイルを外部サービスへアップロードすることもありません。
+- 漫画：単ページ・見開き、横方向のページ送り、連続スクロール、Webtoon、読む方向、ズーム、フィット、背景色、全画面。
+- 文字：ページ送り・スクロール、目次、フォント・文字サイズ・太さ、行間・段落間隔、本文幅、余白、配色。
+- 読書進捗としおりを保存。起動に成功した動画と書籍を「最近開いた項目」に表示。
+
+MOBI/AZW3 は暗号化されていない MOBI6/KF8 に対応。DRM、通常の ZIP、RAR、7Z は内蔵読書の対象外です。
 
 ## ダウンロード
 
-現在のバージョン：**M²Shelf 0.5.11**（Windows x64）
+**M²Shelf 0.5.13 · Windows x64**
 
-- [Portable 版をダウンロード](https://github.com/Undermori/M2Shelf/releases/download/v0.5.11/M2Shelf-Portable-0.5.11-x64.zip)
-- [最新 Release を表示](https://github.com/Undermori/M2Shelf/releases/latest)
-- [すべての Release を表示](https://github.com/Undermori/M2Shelf/releases)
+- [インストーラー](https://github.com/Undermori/M2Shelf/releases/download/v0.5.13/M2Shelf-Setup-0.5.13-x64.exe)
+- [Portable ZIP](https://github.com/Undermori/M2Shelf/releases/download/v0.5.13/M2Shelf-Portable-0.5.13-x64.zip)
+- [最新 Release](https://github.com/Undermori/M2Shelf/releases/latest) · [全バージョン](https://github.com/Undermori/M2Shelf/releases)
 
-Portable 版の使い方：
+Portable は全体を解凍して `M2Shelf.exe` を起動してください。データベース・設定・既定キャッシュは Windows のアプリデータに保存されます。旧五ファイル構成からの更新も ZIP 全体を解凍してください。
 
-1. ZIP 全体を展開し、圧縮ファイル内から直接起動しないでください。
-2. `M2Shelf.exe` をダブルクリック。
-3. メディアフォルダーを追加してスキャン。
-4. 必要に応じて外部プレーヤーのパスを設定。
+Microsoft Edge WebView2 Runtime が必要です。更新パッケージの Ed25519 検証は Windows Authenticode とは別で、SmartScreen の警告が出る場合があります。
 
-Portable はアプリ本体のインストールが不要という意味です。データベース、設定、既定のカバーキャッシュは Windows のアプリデータフォルダーに保存されます。現在のビルドはコード署名されていないため、Windows SmartScreen が「不明な発行元」と表示する場合があります。画面表示には Microsoft Edge WebView2 Runtime が必要です。
+## ローカルデータ
 
-## 現在の範囲
+元のメディアは読み取り専用です。索引、表示名、紐付け、タグ、お気に入り、履歴、設定はアプリの SQLite、表紙はキャッシュに保存します。
 
-M²Shelf は現在、内蔵プレーヤー、オンライン動画、トランスコード、メディアサーバー、アカウント同期、自動字幕、続きから再生するための進捗管理には対応していません。メディアファイルを自動で移動または名前変更することもありません。
+Bangumi/TMDb の検索と表紙取得には通信が必要です。ローカル閲覧・読書には不要で、メディアをアップロードしません。サーバーやクラウドアカウントも不要です。動画は外部プレーヤーを使用し、オンライン配信、変換、端末間同期、動画の続き再生は提供しません。
 
-## 開発
+## 開発・資料
 
-技術スタック：Tauri 2、Rust、React 19、TypeScript、Vite、SQLite。
+Tauri 2 · Rust · React 19 · TypeScript · Vite · SQLite
 
 ```powershell
-npm install
+npm ci
 npm run tauri dev
 ```
 
-コミット前の確認：
+`npm run check` と [AGENTS.md](./AGENTS.md) の Rust 検証を実行します。Windows ビルドは `scripts/build_windows_release.ps1`。
 
-```powershell
-npm run typecheck
-npm run build
-npm run validate
-cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
-cargo test --manifest-path src-tauri/Cargo.toml --locked
-cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --locked -- -D warnings
-```
-
-Windows 向けの正式な成果物は `scripts/build_windows_release.ps1` で作成します。
-
-## プロジェクト文書
-
-- [開発ルール](./AGENTS.md)
+- [動作ガイド（中国語）](./docs/RUNTIME_GUIDE_zh-CN.md)
 - [製品仕様](./docs/PRODUCT_SPEC.md)
 - [現在の実装](./docs/PROJECT_CONTEXT.md)
-- [長期的な決定事項](./docs/DECISIONS.md)
-- [プロジェクト早見ガイド](./PROJECT_DOCUMENTATION.md)
+- [設計上の決定](./docs/DECISIONS.md)
+- [プロジェクト概要](./PROJECT_DOCUMENTATION.md)
+- [Windows 開発](./docs/WINDOWS_DEVELOPMENT.md)
+- [リリース手順](./docs/UPDATE_RELEASE_PROCESS.md)
 
 ## 作者
 
-- [森下Undermori · Bilibili](https://space.bilibili.com/2903441)
-
-## 作品ライブラリと起動時更新
-
-既定の作品ライブラリは動画を持つ作品をディレクトリ横断で表示し、同じ Bangumi 項目のソースをまとめます。シリーズはディレクトリ整理を担当し、フォルダー表示にも切り替えられます。FOLDER モードの CD1/CD2、Disc1/Disc2 などは、構造とタイトルの根拠が一致する場合だけ親作品の分巻になります。異なる紐付けと手動分類は独立した境界を維持します。作品詳細の「作品内のその他のリソース」では、所属サブフォルダーの動画を再帰的に平坦表示し、元のパス、再生、正確なファイル位置を保持します。
-
-Bangumi の紐付け、変更、解除と自動カバー再取得はソース全体に適用されます。分類、表示名、非表示、タグ、お気に入りには対象ソースを選択します。非表示項目は設定から検索・復元できます。起動時更新は新規データベースでは有効、保存済み設定のない既存データベースでは無効になり、既存の選択は保持します。初回は全ディレクトリの列挙が必要な場合があります。ライブラリ管理で結果と最終成功日時を確認でき、失敗したライブラリの未読インデックスと旧基準は保持されます。過去の別名補完はアプリの実行ごとに異なる項目を最大32件試し、失敗も予算に含め、次回起動時に順番を巡回して続行します。元のメディアは常に読み取り専用です。
-
-`npm run check` でフロントエンドとプロジェクトを検証します。独立した Windows PR workflow は Rust の整形、テスト、厳格な Clippy も検証します。[Windows ローカル開発](docs/WINDOWS_DEVELOPMENT.md)を参照してください。
+[森下Undermori · Bilibili](https://space.bilibili.com/2903441)

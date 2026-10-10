@@ -1,0 +1,37 @@
+{
+  "id": 38,
+  "title": "Partial offline snapshot retains old source",
+  "input": {
+    "root_id": "fixture-root",
+    "media_kind": "COMIC",
+    "complete": true,
+    "entries": [
+      {
+        "path": "离线",
+        "kind": "DIRECTORY",
+        "state": "OFFLINE"
+      }
+    ],
+    "prior_units": [
+      {
+        "source_ref": "prior-stable-id",
+        "path": "离线/第01卷.pdf"
+      }
+    ]
+  },
+  "expected": {
+    "units": [],
+    "root_paths": [
+      "离线"
+    ],
+    "series": [],
+    "directory_roles": {},
+    "diagnostics": [
+      "PRIOR_RETAINED_INCOMPLETE",
+      "SOURCE_UNAVAILABLE"
+    ],
+    "editions": 0,
+    "retained_prior": 1
+  },
+  "negative_assertion": "No deletion proposal even though complete flag is true and child missing"
+}

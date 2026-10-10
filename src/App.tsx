@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import type { AllResourcesResult, AppBootstrap, AppSettings, AppTheme, BatchMutationResult, BrowseResult, CollectionSort, CollectionSortPreferences, CollectionSortScope, FavoriteFolder, LibraryRecognitionMode, LibraryRoot, MediaFile, MediaNode, MetadataBinding, NodeDetail, RecentlyWatchedEntry, ResourceFile, ScanProgress, SearchHit, UpdateCheckResult, UpdateDownloadStatus, UpdateRecoveryNotice, ViewMode } from "./types/media";
 import { api, isScanBusyError, isStaleWorkError, isUnavailableNodeError, chooseCoverImage, chooseDirectory, desktopAvailable, onScanFinished, onScanProgress } from "./lib/api";
 import { canBindBangumi, errorMessage } from "./lib/format";
+import { SettingsSaveError, useAppSettings } from "./lib/settingsStore";
 import { SourceChoiceDialog } from "./components/SourceChoiceDialog";
 import { BangumiModal } from "./components/BangumiModal";
 import { BatchContextMenu, type BatchNodeAction } from "./components/BatchContextMenu";
@@ -32,11 +33,15 @@ import { SearchPage } from "./pages/SearchPage";
 import { RecentlyWatchedPage } from "./pages/RecentlyWatchedPage";
 import { FavoritesPage } from "./pages/FavoritesPage";
 import { SettingsPage } from "./pages/SettingsPage";
+import {useDirectionalHeader} from "./hooks/useDirectionalHeader";
+import {WindowTitlebar} from "./components/WindowTitlebar";
+import type {ReaderMenuActions} from "./types/readerMenu";
 import { WorkDetailPage } from "./pages/WorkDetailPage";
 import { ComicDetailPage } from './pages/ComicDetailPage';
 import { ComicReaderPage } from './pages/ComicReaderPage';
 import type {ComicBook} from './types/comic';
 import { useI18n } from "./lib/i18n";
+import {allCollectionEntries, type BookDestination, type BookCollectionEntry} from './lib/bookCollection';
 
 type ContextState = { node: MediaNode; x: number; y: number } | null;
 type RootContextState = { root: LibraryRoot; x: number; y: number } | null;
@@ -45,7 +50,7 @@ type ConfirmState = { title: string; description: string; confirmLabel?: string;
 type PendingRootAdd = { path: string; onboarding: boolean; playerPath: string | null } | null;
 type NavigationSnapshot = {
   readerBookId:number|null;
-  allMediaKind: 'ALL'|'VIDEO'|'COMIC'|'EBOOK';
+  allMediaKind: 'ALL'|'ANIMATION'|'LIVE_ACTION'|'COMIC'|'EBOOK'|'DOUJIN'|'ARTBOOK';
   page: AppPage;
   selectedRootId: number | null;
   browseData: BrowseResult | null;
@@ -136,6 +141,7 @@ function nodeWithBinding(node: MediaNode, binding: MetadataBinding): MediaNode {
   const coverCachePath = manualCover ? node.coverCachePath : binding.coverCachePath;
   return {
     ...node,
+    tmdbBinding:node.tmdbBinding?{...node.tmdbBinding,active:false}:null,
     binding,
     coverCachePath,
     coverSource: manualCover ? "MANUAL" : coverCachePath ? "BANGUMI" : "PLACEHOLDER",
@@ -180,6 +186,8 @@ function patchNavigationSnapshot(snapshot: NavigationSnapshot, nodeId: number, u
 
 function App() {
   const { language, setLanguage, t, number } = useI18n();
+  const { settings: sharedSettings, failure: settingsFailure, load: loadSettings, save: saveSettings, flush: flushSettings } = useAppSettings();
+  const reportedSettingsFailure = useRef(0);
   const [bootstrap, setBootstrap] = useState<AppBootstrap | null>(null);
   const [initialized, setInitialized] = useState(false);
   const [startupPresentationReady, setStartupPresentationReady] = useState(!desktopAvailable);
@@ -188,6 +196,8 @@ function App() {
   const [page, setPage] = useState<AppPage>("all");
   const [selectedRootId, setSelectedRootId] = useState<number | null>(null);
   const [browseData, setBrowseData] = useState<BrowseResult | null>(null);
+  const [logicalCounts,setLogicalCounts]=useState<Record<number,number>>({});
+  const updateLogicalCount=useCallback((rootId:number,count:number)=>setLogicalCounts(current=>current[rootId]===count?current:{...current,[rootId]:count}),[]);
   const [allResources, setAllResources] = useState<AllResourcesResult | null>(null);
   const [allResourcesLoading, setAllResourcesLoading] = useState(desktopAvailable);
   const [recentlyWatched, setRecentlyWatched] = useState<RecentlyWatchedEntry[] | null>(null);
@@ -200,8 +210,10 @@ function App() {
   const [favoriteSort, setFavoriteSort] = useState<CollectionSort>("title-asc");
   const [currentNode, setCurrentNode] = useState<MediaNode | null>(null);
   const [detail, setDetail] = useState<NodeDetail | null>(null);
+  const [aboutRequest,setAboutRequest]=useState(0);
   const [readerBookId,setReaderBookId]=useState<number|null>(null);
-  const [allMediaKind,setAllMediaKind]=useState<'ALL'|'VIDEO'|'COMIC'|'EBOOK'>('ALL');
+  const [readerMenuActions,setReaderMenuActions]=useState<ReaderMenuActions|null>(null);
+  const [allMediaKind,setAllMediaKind]=useState<'ALL'|'ANIMATION'|'LIVE_ACTION'|'COMIC'|'EBOOK'|'DOUJIN'|'ARTBOOK'>('ALL');
   const [contentLoading, setContentLoading] = useState(false);
   const [viewMode, setViewMode] = useState<ViewMode>("grid");
   const [allFilter, setAllFilter] = useState("");
@@ -264,7 +276,6 @@ function App() {
   const autoUpdateCheckStarted = useRef(false);
   const updateBannerDismissedRef = useRef(false);
   const settingsAppearanceRef = useRef({ language, theme, autoCheckUpdates, allResourcesFlattened });
-  const settingsAppearanceRevision = useRef(0);
   settingsAppearanceRef.current = { language, theme, autoCheckUpdates, allResourcesFlattened };
   const mainWindowShowRequested = useRef(false);
   const contentScrollRef = useRef<HTMLDivElement>(null);
@@ -468,6 +479,23 @@ function App() {
   }, [theme]);
 
   useEffect(() => {
+    // Chromium also matches text inputs against :focus-visible after a mouse click.
+    // Track navigation modality so typing does not inherit the keyboard outline.
+    const pointer = () => { document.documentElement.dataset.inputModality = 'pointer'; };
+    const keyboard = (event: KeyboardEvent) => {
+      if (event.key === 'Tab' || event.key.startsWith('Arrow')) {
+        document.documentElement.dataset.inputModality = 'keyboard';
+      }
+    };
+    document.addEventListener('pointerdown', pointer, true);
+    document.addEventListener('keydown', keyboard, true);
+    return () => {
+      document.removeEventListener('pointerdown', pointer, true);
+      document.removeEventListener('keydown', keyboard, true);
+    };
+  }, []);
+
+  useEffect(() => {
     if (!desktopAvailable || !startupPresentationReady || mainWindowShowRequested.current) return;
     mainWindowShowRequested.current = true;
     // Passive effects run after React has committed the shell, and the layout effect above has
@@ -485,12 +513,11 @@ function App() {
     window.setTimeout(() => setToasts((items) => items.filter((item) => item.id !== id)), 5000);
   }, []);
 
-  const applySettingsAppearance = useCallback((settings: AppSettings): number => {
+  const applySettingsAppearance = useCallback((settings: AppSettings) => {
     if (settingsAppearanceRef.current.allResourcesFlattened !== settings.allResourcesFlattened) {
       setEditMode(false);
       setSelectedNodeIds(new Set());
     }
-    settingsAppearanceRevision.current += 1;
     settingsAppearanceRef.current = {
       language: settings.language,
       theme: settings.theme,
@@ -501,19 +528,17 @@ function App() {
     setTheme(settings.theme);
     setAutoCheckUpdates(settings.autoCheckUpdates);
     setAllResourcesFlattened(settings.allResourcesFlattened);
-    return settingsAppearanceRevision.current;
   }, [setLanguage]);
 
-  const handleSettingsPersistenceFailure = useCallback((failed: AppSettings, rollback: AppSettings | null, message: string, appearanceRevision: number) => {
-    const current = settingsAppearanceRef.current;
-    const failedAppearanceIsCurrent = current.language === failed.language
-      && current.theme === failed.theme
-      && current.autoCheckUpdates === failed.autoCheckUpdates
-      && current.allResourcesFlattened === failed.allResourcesFlattened
-      && settingsAppearanceRevision.current === appearanceRevision;
-    if (rollback && failedAppearanceIsCurrent) applySettingsAppearance(rollback);
-    toast(message, "error");
-  }, [applySettingsAppearance, toast]);
+  useLayoutEffect(() => {
+    if (sharedSettings) applySettingsAppearance(sharedSettings);
+  }, [sharedSettings, applySettingsAppearance]);
+
+  useEffect(() => {
+    if (!settingsFailure || settingsFailure.sequence === reportedSettingsFailure.current) return;
+    reportedSettingsFailure.current = settingsFailure.sequence;
+    toast(settingsFailure.message, "error");
+  }, [settingsFailure, toast]);
 
   const acknowledgeUpdateRecoveryNotice = useCallback(async (notice: UpdateRecoveryNotice) => {
     if (updateRecoveryAcknowledgeInFlight.current) return;
@@ -781,7 +806,8 @@ function App() {
       if (!current) return current;
       const nodes = patchNodeList(current.nodes, nodeId, update);
       const comicNodes=current.comicNodes?patchNodeList(current.comicNodes,nodeId,update):undefined;
-      return nodes === current.nodes && comicNodes===current.comicNodes ? current : { ...current, nodes,comicNodes };
+      const bookLibraries=current.bookLibraries?.map(library=>({...library,catalogue:{...library.catalogue,directoryNodes:patchNodeList(library.catalogue.directoryNodes??[],nodeId,update),groups:library.catalogue.groups.map(group=>group.coverNode?.id===nodeId?{...group,coverNode:update(group.coverNode)}:group)}}));
+      return nodes === current.nodes && comicNodes===current.comicNodes && !bookLibraries ? current : { ...current, nodes,comicNodes,bookLibraries };
     });
     setBrowseData((current) => {
       if (!current) return current;
@@ -951,7 +977,7 @@ function App() {
       setInitialized(true);
       return;
     }
-    const settingsPromise = api.getSettings();
+    const settingsPromise = loadSettings();
     const bootstrapPromise = api.bootstrap();
     // Recovery notices are durable until explicit acknowledgement. Store bootstrap as soon as it
     // resolves so an unrelated index/settings request cannot suppress the warning.
@@ -965,9 +991,6 @@ function App() {
       (settings) => {
         if (!active) return;
         setViewMode(settings.defaultViewMode === "LIST" ? "list" : "grid");
-        setLanguage(settings.language ?? "zh-CN");
-        setTheme(settings.theme ?? "system");
-        setAutoCheckUpdates(settings.autoCheckUpdates ?? true);
         setStartupPresentationReady(true);
       },
       () => {
@@ -977,9 +1000,7 @@ function App() {
     void Promise.all([bootstrapPromise, api.listRoots(), settingsPromise, api.getCollectionSortPreferences(), api.scanStatus(), api.allResources(), api.listRecentlyWatched().catch((error) => { toast(errorMessage(error), "error"); return [] as RecentlyWatchedEntry[]; })])
       .then(([_app, nextRoots, settings, sortPreferences, activeScan, resources, recentEntries]) => {
         if (!active) return;
-        setAutoCheckUpdates(settings.autoCheckUpdates ?? true);
         setStartupScanEnabled(settings.autoScanOnStartup ?? true);
-        setAllResourcesFlattened(settings.allResourcesFlattened ?? false);
         setRoots(nextRoots);
         setSelectedRootId(nextRoots[0]?.id ?? null);
         persistedSortPreferences.current = sortPreferences;
@@ -1094,7 +1115,7 @@ function App() {
     const matchOnly = matchOnlyScanIds.current.delete(progress.scanId)
       || (progress.foldersScanned === 0 && progress.videosFound === 0 && progress.phase === "AUTO_MATCHING");
     const labels: Record<string, string> = { COMPLETED: t("app.scanCompleted"), CANCELLED: t("app.scanCancelled"), FAILED: t("app.scanFailed") };
-    const summaryKey=progress.comicBooksFound&&progress.videosFound?'comic.scanMixedSummary':progress.comicBooksFound||(!progress.videosFound&&['COMIC','EBOOK'].includes(roots.find(root=>root.id===progress.rootId)?.mediaKind??'VIDEO'))?'comic.scanSummary':'app.scanSummary';
+    const summaryKey=progress.comicBooksFound&&progress.videosFound?'comic.scanMixedSummary':progress.comicBooksFound||(!progress.videosFound&&['COMIC','EBOOK','DOUJIN','ARTBOOK'].includes(roots.find(root=>root.id===progress.rootId)?.mediaKind??'VIDEO'))?'comic.scanSummary':'app.scanSummary';
     const summary = matchOnly ? t(progress.status === "CANCELLED" ? "app.matchCancelled" : progress.status === "FAILED" ? "app.matchFailed" : "app.matchCompleted") : t(summaryKey, {
       status: labels[progress.status] ?? t("app.scanEnded"),
       videos: number(progress.videosFound),
@@ -1108,7 +1129,8 @@ function App() {
       unmatched: number(unmatched),
       errors: number(progress.autoMatchErrors),
     }) : null;
-    if (!progress.background) toast(autoMatchSummary ? `${summary} · ${autoMatchSummary}` : summary, progress.status === "FAILED" ? "error" : "success");
+    const completionMessage = autoMatchSummary ? `${summary} · ${autoMatchSummary}` : summary;
+    if (!progress.background) toast(progress.status === "COMPLETED" ? `${completionMessage} · ${t("poster.scanNotice")}` : completionMessage, progress.status === "FAILED" ? "error" : "success");
     void Promise.all([
       loadRoots(selectedRootId),
       refreshCurrent(),
@@ -1162,7 +1184,7 @@ function App() {
     };
   }, []);
 
-  const selectRoot = useCallback(async (rootId: number, recordHistory = true) => {
+  const selectRoot = useCallback(async (rootId: number, recordHistory = true, destination?:BookDestination) => {
     const returnSnapshot = recordHistory ? captureNavigation() : null;
     const requestGeneration = ++navigationGeneration.current;
     invalidateFavoritesLoads();
@@ -1171,6 +1193,7 @@ function App() {
       const next = await api.browse(rootId, null);
       if (requestGeneration !== navigationGeneration.current) return;
       if (returnSnapshot) rememberNavigation(returnSnapshot);
+      if(destination)window.history.replaceState({...window.history.state,smartMixed:{root:rootId,destination,depth:1,scrollTop:0}},'');
       setPage("library");
       setSelectedRootId(rootId);
       setDetail(null);
@@ -1384,6 +1407,7 @@ function App() {
 
   const goRoot = useCallback((recordHistory = true) => { if (selectedRootId) void selectRoot(selectedRootId, recordHistory); }, [selectRoot, selectedRootId]);
   const goBack = useCallback(() => {
+    if(!window.dispatchEvent(new Event('m2shelf-logical-back',{cancelable:true})))return;
     navigationGeneration.current += 1;
     invalidateFavoritesLoads();
     setContentLoading(false);
@@ -1485,26 +1509,25 @@ function App() {
     setPendingRootAdd({ path, onboarding: true, playerPath: mpvPath });
   };
 
-  const confirmRootRecognitionMode = async (mode: LibraryRecognitionMode,kind:import('./types/media').LibraryMediaKind) => {
+  const confirmRootRecognitionMode = async (mode: LibraryRecognitionMode,kind:import('./types/media').LibraryMediaKind, autoBangumi:boolean,strategy:'LEGACY'|'SMART_MIXED'='LEGACY') => {
     const request = pendingRootAdd;
     if (!request || rootAddBusy) return;
     setRootAddBusy(true);
     let rootCreated = false;
     try {
-      const root = await api.addRoot(request.path, mode,kind);
+      const root = await api.addRoot(request.path, mode,kind,autoBangumi,strategy);
       rootCreated = true;
       setPendingRootAdd(null);
       setAddedRootScanQueue(queue => [...queue, root.id]);
       if (request.playerPath) {
-        const settings = await api.getSettings();
-        await api.updateSettings({ ...settings, mpvPath: request.playerPath });
+        await saveSettings(settings => ({ ...settings, mpvPath: request.playerPath }));
       }
       await loadRoots(root.id);
       await selectRoot(root.id, !request.onboarding);
       toast(t(request.onboarding ? "app.libraryCreated" : "app.rootAdded"), "success");
     } catch (error) {
       if (rootCreated) setPendingRootAdd(null);
-      toast(errorMessage(error), "error");
+      if (!(error instanceof SettingsSaveError)) toast(errorMessage(error), "error");
     } finally {
       setRootAddBusy(false);
     }
@@ -1575,7 +1598,8 @@ function App() {
   };
 
   const openResource = async (file: ResourceFile) => {
-    try { await api.openResourceFile(file.id); }
+    const generation = navigationGeneration.current;
+    try { const book=await api.openResourceFile(file.id); if(book&&generation===navigationGeneration.current)openComic(book); }
     catch (error) { toast(t("app.fileOpenFailed", { error: errorMessage(error) }), "error"); }
   };
 
@@ -1858,9 +1882,13 @@ function App() {
   }, [bangumiNode, patchNodeEverywhere, refreshCurrentAndAllResources, t, toast]);
 
   const selectedRoot = useMemo(() => roots.find((root) => root.id === selectedRootId) ?? null, [roots, selectedRootId]);
-  const ActiveDetailPage=detail?.node.mediaKind==='COMIC'||detail?.node.mediaKind==='EBOOK'?ComicDetailPage:WorkDetailPage;
+  const ActiveDetailPage=['COMIC','EBOOK','DOUJIN','ARTBOOK'].includes(detail?.node.mediaKind??'')?ComicDetailPage:WorkDetailPage;
   const openComic=(book:ComicBook)=>{rememberNavigation(captureNavigation());setReaderBookId(book.id);};
-  const allProjectCount = (page === "all" && allGrouping === "works" ? allResources?.works.length : allResources?.totalCount)
+  const openBookEntry=(entry:BookCollectionEntry)=>{
+    if(entry.group?.kind==='WORK'&&entry.group.books.length===1)openComic(entry.group.books[0]);
+    else void selectRoot(entry.root.id,true,{category:entry.group?'':entry.path,group:entry.group?.id??null});
+  };
+  const allProjectCount = (allResources ? allCollectionEntries(allResources,allGrouping,editMode).length : undefined)
     ?? roots.reduce((sum, root) => sum + (root.nodeCount ?? 0), 0);
   const projectCount = page === "all" || (page === "search" && searchRootId == null)
     ? allProjectCount
@@ -1870,34 +1898,49 @@ function App() {
         ? selectedFavoriteFolderId != null
           ? favoriteNodes?.length ?? 0
           : favoriteFolders?.reduce((sum, folder) => sum + folder.itemCount, 0) ?? 0
-    : selectedRoot?.nodeCount ?? 0;
+    : (page==='library'&&selectedRoot?.bookOrganizationStrategy==='SMART_MIXED'?logicalCounts[selectedRoot.id]:undefined)??selectedRoot?.nodeCount??0;
   const showOnboarding = initialized && desktopAvailable && !rootsLoading && roots.length === 0;
 
+  useEffect(()=>{const refresh=()=>{void refreshCurrentAndAllResources();};window.addEventListener('m2shelf-metadata-changed',refresh);return()=>window.removeEventListener('m2shelf-metadata-changed',refresh);},[refreshCurrentAndAllResources]);
+  useDirectionalHeader(contentScrollRef,`${page}:${selectedRootId}:${detail?.node.id??currentNode?.id??''}`);
+  const readerBack=useCallback(()=>{goBack();void loadAllResources();},[goBack,loadAllResources]);
+  const readerProgress=useCallback(()=>{void loadRecentlyWatched();},[loadRecentlyWatched]);
+  const titlebar=<WindowTitlebar actions={{
+    back:goBack,canBack:initialized&&!showOnboarding&&(historyCursor.current>0||(detail?.breadcrumbs??browseData?.breadcrumbs??[]).length>1),reader:readerBookId===null?null:readerMenuActions,
+    reload:()=>{if(document.querySelector('[aria-modal="true"],[data-unsaved-edit="true"]'))return;void flushSettings().then(()=>window.location.reload()).catch(error=>toast(errorMessage(error),'error'));},
+    canReload:initialized&&readerBookId===null&&!scan&&!rootAddBusy&&!matchBusy&&!favoriteBusy&&updateDownloadStatus.phase!=='APPLYING'&&updateDownloadStatus.phase!=='DOWNLOADING',
+    addRoot:()=>void addRoot(),revealRoot:()=>{if(selectedRoot)void api.openRootInExplorer(selectedRoot.id).catch(error=>toast(errorMessage(error),'error'));},navigate,
+    about:()=>{navigate('settings');setAboutRequest(value=>value+1);},checkUpdate:()=>void checkForUpdate(true),
+    official:()=>{if(bootstrap?.websiteUrl)void api.openExternalUrl(bootstrap.websiteUrl).catch(error=>toast(errorMessage(error),'error'));},
+    setView:setViewMode,canBrowse:initialized&&!showOnboarding&&readerBookId===null,canAdd:initialized&&!rootAddBusy&&readerBookId===null,
+    canReveal:page==='library'&&!!selectedRoot&&readerBookId===null,canView:readerBookId===null&&!detail&&page!=='settings',
+    canCheck:initialized&&readerBookId===null&&updateDownloadStatus.phase!=='CHECKING'&&updateDownloadStatus.phase!=='DOWNLOADING'&&updateDownloadStatus.phase!=='APPLYING',viewMode
+  }}/>;
   const updateUi = <>
     {updateCheckResult?.update && !updateDialogOpen && !updateBannerDismissed && <UpdateBanner update={updateCheckResult.update} onOpen={() => { setUpdateDialogOpen(true); setUpdateBannerDismissed(true); }} onDismiss={() => { updateBannerDismissedRef.current = true; setUpdateBannerDismissed(true); }} />}
     <UpdateDialog open={updateDialogOpen && !bootstrap?.updateRecoveryNotice} checkResult={updateCheckResult} downloadStatus={updateDownloadStatus} failureAction={updateFailureAction} confirmInstallRequest={updateInstallRequest} onClose={closeUpdateDialog} onDownload={(version) => void downloadUpdate(version)} onInstall={(version) => void installDownloadedUpdate(version)} onRetry={retryUpdate} />
     <UpdateRecoveryDialog notice={bootstrap?.updateRecoveryNotice ?? null} busy={updateRecoveryBusy} error={updateRecoveryError} onAcknowledge={(notice) => void acknowledgeUpdateRecoveryNotice(notice)} />
   </>;
-  const rootModeUi = <LibraryRecognitionModeDialog path={pendingRootAdd?.path ?? null} busy={rootAddBusy} onChoose={(mode,kind) => void confirmRootRecognitionMode(mode,kind)} onClose={() => { if (!rootAddBusy) setPendingRootAdd(null); }} />;
+  const rootModeUi = <LibraryRecognitionModeDialog path={pendingRootAdd?.path ?? null} busy={rootAddBusy} onChoose={(mode,kind,autoBangumi,strategy) => void confirmRootRecognitionMode(mode,kind,autoBangumi,strategy)} onClose={() => { if (!rootAddBusy) setPendingRootAdd(null); }} />;
 
-  if (showOnboarding) return <><OnboardingPage onComplete={finishOnboarding} onError={(message) => toast(message, "error")} />{rootModeUi}{updateUi}<ToastStack toasts={toasts} onDismiss={(id) => setToasts((items) => items.filter((item) => item.id !== id))} /></>;
-  if(readerBookId!==null)return <><ComicReaderPage key={readerBookId} bookId={readerBookId} onBack={()=>{goBack();void loadAllResources();}} onProgress={()=>{void loadRecentlyWatched();}}/><ToastStack toasts={toasts} onDismiss={id=>setToasts(items=>items.filter(item=>item.id!==id))}/></>;
+  if (showOnboarding) return <>{titlebar}<OnboardingPage onComplete={finishOnboarding} onError={(message) => toast(message, "error")} />{rootModeUi}{updateUi}<ToastStack toasts={toasts} onDismiss={(id) => setToasts((items) => items.filter((item) => item.id !== id))} /></>;
+  if(readerBookId!==null)return <>{titlebar}<ComicReaderPage key={readerBookId} bookId={readerBookId} onBack={readerBack} onProgress={readerProgress} onMenuActions={setReaderMenuActions}/><ToastStack toasts={toasts} onDismiss={id=>setToasts(items=>items.filter(item=>item.id!==id))}/></>;
 
   return (
-    <div className="app-shell">
+    <>{titlebar}<div className="app-shell">
       <Sidebar page={page} roots={roots} selectedRootId={selectedRootId} loading={rootsLoading} onNavigate={navigate} onSelectRoot={navigateRootSection} onAddRoot={() => void addRoot()} onRootMenu={(event, root) => setRootContext({ root, x: event.clientX, y: event.clientY })} projectCount={projectCount} />
       <main className="main-content">
         {!desktopAvailable && <div className="web-preview-notice"><Icon name="info" />{t("app.previewNotice")}</div>}
         {scan && !scan.background && (scan.status === "RUNNING" || scan.status === "CANCELLING") && <ScanBanner progress={scan} mediaKind={roots.find(root=>root.id===scan.rootId)?.mediaKind} onCancel={() => void cancelScan()} />}
         <div className={`content-scroll${page === "settings" ? " is-settings" : ""}`} ref={contentScrollRef}>
-          {page === "all" && <AllResourcesPage mediaKind={allMediaKind} onMediaKind={setAllMediaKind} grouping={allGrouping} data={allResources} loading={allResourcesLoading} viewMode={viewMode} onViewMode={setViewMode} filter={allFilter} onFilter={setAllFilter} tagFilterId={allTagFilterId} onTagFilter={setAllTagFilterId} sort={allSort} onSort={changeAllSort} onOpenNode={openNode} onMenu={openNodeMenu} onBangumi={requestBangumi} onRetryCover={retryCover} onScan={() => void startScan()} onAddRoot={() => void addRoot()} onSearch={(query) => openSearch(query, null)} coverRevision={coverRevision} editMode={editMode} selectedNodeIds={selectedNodeIds} matchBusy={matchBusy || favoriteBusy || Boolean(scan)} onEditMode={changeEditMode} onToggleSelection={toggleNodeSelection} onSelectAll={selectNodeIds} onClearSelection={clearNodeSelection} onBatchTags={() => setBatchTagsOpen(true)} onBatchFavorites={() => setFavoriteAssignmentNodeIds([...selectedNodeIds])} onBatchMenu={openBatchMenu} onMatch={(nodeIds, rematch) => void matchExisting(nodeIds, rematch)} />}
-          {page === "recent" && <RecentlyWatchedPage entries={recentlyWatched} loading={recentlyWatchedLoading} viewMode={viewMode} onViewMode={setViewMode} onOpenNode={(node) => {const bookId=recentlyWatched?.find(e=>e.node.id===node.id)?.comicBookId;if(bookId)openComic({id:bookId} as ComicBook);else void openNode(node);}} onMenu={(event, node) => setContext({ node, x: event.clientX, y: event.clientY })} onBangumi={requestBangumi} onRetryCover={(node, failed) => void retryCover(node, failed)} coverRevision={coverRevision} />}
+          {page === "all" && <AllResourcesPage onOpenBookEntry={openBookEntry} onRevealBook={book=>{void api.revealComicBook(book.id).catch(error=>toast(errorMessage(error),'error'));}} mediaKind={allMediaKind} onMediaKind={setAllMediaKind} grouping={allGrouping} data={allResources} loading={allResourcesLoading} viewMode={viewMode} onViewMode={setViewMode} filter={allFilter} onFilter={setAllFilter} tagFilterId={allTagFilterId} onTagFilter={setAllTagFilterId} sort={allSort} onSort={changeAllSort} onOpenNode={openNode} onMenu={openNodeMenu} onBangumi={requestBangumi} onRetryCover={retryCover} onScan={() => void startScan()} onAddRoot={() => void addRoot()} onSearch={(query) => openSearch(query, null)} coverRevision={coverRevision} editMode={editMode} selectedNodeIds={selectedNodeIds} matchBusy={matchBusy || favoriteBusy || Boolean(scan)} onEditMode={changeEditMode} onToggleSelection={toggleNodeSelection} onSelectAll={selectNodeIds} onClearSelection={clearNodeSelection} onBatchTags={() => setBatchTagsOpen(true)} onBatchFavorites={() => setFavoriteAssignmentNodeIds([...selectedNodeIds])} onBatchMenu={openBatchMenu} onMatch={(nodeIds, rematch) => void matchExisting(nodeIds, rematch)} />}
+          {page === "recent" && <RecentlyWatchedPage onReadBook={openComic} onRevealBook={book=>{void api.revealComicBook(book.id).catch(error=>toast(errorMessage(error),'error'));}} entries={recentlyWatched} loading={recentlyWatchedLoading} viewMode={viewMode} onViewMode={setViewMode} onOpenNode={(node) => {const bookId=recentlyWatched?.find(e=>!e.comicBook&&e.node.id===node.id)?.comicBookId;if(bookId)openComic({id:bookId} as ComicBook);else void openNode(node);}} onMenu={(event, node) => setContext({ node, x: event.clientX, y: event.clientY })} onBangumi={requestBangumi} onRetryCover={(node, failed) => void retryCover(node, failed)} coverRevision={coverRevision} />}
           {page === "favorites" && <FavoritesPage folders={favoriteFolders} nodes={favoriteNodes} selectedFolderId={selectedFavoriteFolderId} loading={favoritesLoading} viewMode={viewMode} onViewMode={setViewMode} filter={favoriteFilter} onFilter={setFavoriteFilter} sort={favoriteSort} onSort={changeFavoriteSort} onOpenFolder={(folderId) => void openFavoriteFolder(folderId)} onBack={goBack} onCreate={() => setFavoriteFolderDialog("new")} onRename={setFavoriteFolderDialog} onDelete={deleteFavoriteFolder} onOpenNode={openNode} onMenu={openNodeMenu} onBangumi={requestBangumi} onRetryCover={retryCover} coverRevision={coverRevision} editMode={editMode} selectedNodeIds={selectedNodeIds} busy={favoriteBusy || matchBusy || Boolean(scan)} onEditMode={changeEditMode} onToggleSelection={toggleNodeSelection} onSelectAll={selectNodeIds} onClearSelection={clearNodeSelection} onBatchTags={() => setBatchTagsOpen(true)} onBatchFavorites={() => setFavoriteAssignmentNodeIds([...selectedNodeIds])} onBatchMenu={openBatchMenu} onRematch={() => void matchExisting([...selectedNodeIds], true)} onRemoveSelected={() => void removeSelectedFromFavorite()} />}
           {page === "library" && !selectedRoot && <EmptyState eyebrow={t("app.emptyEyebrow")} title={t("app.emptyTitle")} description={desktopAvailable ? t("app.emptyDesktop") : t("app.emptyWeb")} action={<button className="button primary" disabled={!desktopAvailable} onClick={() => void addRoot()} type="button"><Icon name="plus" />{t("app.addMediaDirectory")}</button>} />}
-          {page === "library" && selectedRoot && !detail && <BrowsePage onReadComic={openComic} data={browseData} currentNode={currentNode} loading={contentLoading} viewMode={viewMode} onViewMode={setViewMode} filter={browseFilter} onFilter={setBrowseFilter} tagFilterId={browseTagFilterId} onTagFilter={setBrowseTagFilterId} sort={browseSort} onSort={changeBrowseSort} onRoot={goRoot} onBreadcrumb={(id) => void openBreadcrumb(id)} onOpenNode={openNode} onMenu={openNodeMenu} onBangumi={requestBangumi} onRetryCover={retryCover} onPlay={(file) => void play(file)} onRevealMedia={(file) => void revealMedia(file)} onOpenResource={(file) => void openResource(file)} onRevealResource={(file) => void revealResource(file)} onScan={() => void startScan(selectedRoot.id, currentNode?.id)} onAddRoot={() => void addRoot()} onSearch={(query) => openSearch(query, selectedRoot.id)} coverRevision={coverRevision} editMode={editMode} selectedNodeIds={selectedNodeIds} matchBusy={matchBusy || favoriteBusy || Boolean(scan)} onEditMode={changeEditMode} onToggleSelection={toggleNodeSelection} onSelectAll={selectNodeIds} onClearSelection={clearNodeSelection} onBatchTags={() => setBatchTagsOpen(true)} onBatchFavorites={() => setFavoriteAssignmentNodeIds([...selectedNodeIds])} onBatchMenu={openBatchMenu} onMatch={(nodeIds, rematch) => void matchExisting(nodeIds, rematch)} />}
+          {page === "library" && selectedRoot && !detail && <BrowsePage onLogicalCount={updateLogicalCount} onReadComic={openComic} onNodeAction={(action,node)=>void nodeAction(action,node)} data={browseData} currentNode={currentNode} loading={contentLoading} viewMode={viewMode} onViewMode={setViewMode} filter={browseFilter} onFilter={setBrowseFilter} tagFilterId={browseTagFilterId} onTagFilter={setBrowseTagFilterId} sort={browseSort} onSort={changeBrowseSort} onRoot={goRoot} onBreadcrumb={(id) => void openBreadcrumb(id)} onOpenNode={openNode} onMenu={openNodeMenu} onBangumi={requestBangumi} onRetryCover={retryCover} onPlay={(file) => void play(file)} onRevealMedia={(file) => void revealMedia(file)} onOpenResource={(file) => void openResource(file)} onRevealResource={(file) => void revealResource(file)} onScan={() => void startScan(selectedRoot.id, currentNode?.id)} onAddRoot={() => void addRoot()} onSearch={(query) => openSearch(query, selectedRoot.id)} coverRevision={coverRevision} editMode={editMode} selectedNodeIds={selectedNodeIds} matchBusy={matchBusy || favoriteBusy || Boolean(scan)} onEditMode={changeEditMode} onToggleSelection={toggleNodeSelection} onSelectAll={selectNodeIds} onClearSelection={clearNodeSelection} onBatchTags={() => setBatchTagsOpen(true)} onBatchFavorites={() => setFavoriteAssignmentNodeIds([...selectedNodeIds])} onBatchMenu={openBatchMenu} onMatch={(nodeIds, rematch) => void matchExisting(nodeIds, rematch)} />}
           {page === "library" && selectedRoot && detail && <ActiveDetailPage onReadComic={openComic} onOpenBangumi={() => { void api.openBangumiSubject(detail.node.id).catch(error => toast(errorMessage(error), "error")); }} detail={detail} loading={contentLoading} rootLabel={selectedRoot.displayName} onRoot={goRoot} onBreadcrumb={(id) => void openBreadcrumb(id)} onBack={goBack} onBangumi={() => requestBangumi(detail.node)} onRetryCover={(failed) => void retryCover(detail.node, failed)} onRetryCoverNode={(node, failed) => void retryCover(node, failed)} onClearBangumi={() => void nodeAction("clear-bangumi", detail.node)} onReveal={() => void nodeAction("explorer", detail.node)} onPlay={(file) => void play(file)} onRevealMedia={(file) => void revealMedia(file)} onOpenResource={(file) => void openResource(file)} onRevealResource={(file) => void revealResource(file)} onOpenChild={(node) => void openNode(node)} onBangumiNode={requestBangumi} onMenu={(event, node) => setContext({ node, x: event.clientX, y: event.clientY })} coverRevision={coverRevision} />}
-          {page === "search" && <SearchPage initialQuery={searchQuery} rootId={searchRootId} roots={roots} onRootChange={setSearchRootId} onQueryChange={setSearchQuery} onOpen={(hit: SearchHit) => void openNode(hit.node)} onError={(message) => toast(message, "error")} onResultsReady={applyPendingScroll} coverRevision={coverRevision} />}
-          {page === "settings" && <SettingsPage onIgnoreScanWarnings={root=>{void api.setLibraryScanWarningsIgnored(root.id,!root.scanHealth?.warningsIgnored).then(()=>loadRoots()).catch(e=>toast(errorMessage(e),'error'));}} onHiddenNodes={() => setHiddenNodesOpen(true)} roots={roots} bootstrap={bootstrap} onAddRoot={() => void addRoot()} onRemoveRoot={removeRoot} onScanRoot={(root) => void startScan(root.id)} onAppearanceChange={applySettingsAppearance} onPersistenceFailure={handleSettingsPersistenceFailure} updateDownloadStatus={updateDownloadStatus} onCheckForUpdate={() => { if (updateCheckResult?.update && updateDownloadStatus.phase !== "CHECKING" && updateDownloadStatus.phase !== "DOWNLOADING" && updateDownloadStatus.phase !== "APPLYING") { setUpdateDialogOpen(true); setUpdateInstallRequest(0); } else { void checkForUpdate(true); } }} onError={(message) => toast(message, "error")} onSuccess={(message) => toast(message, "success")} />}
+          {page === "search" && <SearchPage initialQuery={searchQuery} rootId={searchRootId} roots={roots} onRootChange={setSearchRootId} onQueryChange={setSearchQuery} onOpen={(hit: SearchHit) => hit.comicBook ? openComic(hit.comicBook) : void openNode(hit.node)} onError={(message) => toast(message, "error")} onResultsReady={applyPendingScroll} coverRevision={coverRevision} />}
+          {page === "settings" && <SettingsPage aboutRequest={aboutRequest} onRootPolicy={async(root,enabled)=>{try{const updated=await api.setRootAutoBangumi(root.id,enabled);setRoots(current=>current.map(item=>item.id===root.id?{...item,autoBangumi:updated.autoBangumi}:item));toast(t('library.policySaved'),'success');}catch(error){toast(errorMessage(error),'error');}}} onIgnoreScanWarnings={root=>{void api.setLibraryScanWarningsIgnored(root.id,!root.scanHealth?.warningsIgnored).then(()=>loadRoots()).catch(e=>toast(errorMessage(e),'error'));}} onHiddenNodes={() => setHiddenNodesOpen(true)} roots={roots} bootstrap={bootstrap} onAddRoot={() => void addRoot()} onRemoveRoot={removeRoot} onScanRoot={(root) => void startScan(root.id)} updateDownloadStatus={updateDownloadStatus} onCheckForUpdate={() => { if (updateCheckResult?.update && updateDownloadStatus.phase !== "CHECKING" && updateDownloadStatus.phase !== "DOWNLOADING" && updateDownloadStatus.phase !== "APPLYING") { setUpdateDialogOpen(true); setUpdateInstallRequest(0); } else { void checkForUpdate(true); } }} onError={(message) => toast(message, "error")} onSuccess={(message) => toast(message, "success")} />}
         </div>
         <footer className="app-footer"><span>{bootstrap ? `${t("brand.name")} ${bootstrap.version}` : t("brand.name")}</span><span className="footer-separator" /><span><Icon name="shield" />{t("common.readOnly")}</span><span className="footer-separator" /><span>{t("app.projectCount", { count: number(projectCount) })}</span>{(page === "library" || (page === "search" && searchRootId != null)) && selectedRoot && <><span className="footer-separator" /><span title={selectedRoot.path}>{selectedRoot.displayName}</span></>}</footer>
       </main>
@@ -1911,14 +1954,14 @@ function App() {
       <FavoriteAssignmentDialog nodeIds={favoriteAssignmentNodeIds} onClose={() => setFavoriteAssignmentNodeIds([])} onApplied={handleFavoriteApplied} onFoldersChanged={loadFavoriteFolders} />
       <FavoriteFolderDialog folder={favoriteFolderDialog} busy={dialogBusy} onClose={() => setFavoriteFolderDialog(null)} onSave={(name) => void saveFavoriteFolder(name)} />
       {sourceChoice && <SourceChoiceDialog sources={sourceChoice.sources} onChoose={source => { const action = sourceChoice.action; setSourceChoice(null); void nodeAction(action, source); }} onClose={() => setSourceChoice(null)} />}
-      <BangumiModal node={bangumiNode} onClose={() => setBangumiNode(null)} onBound={handleBangumiBound} onStale={async () => { await refreshCurrentAndAllResources(); toast(t("works.changed"), "info"); }} />
+      <BangumiModal onMetadataChanged={async()=>{await refreshCurrentAndAllResources();toast(t("match.bound"),"success");}} node={bangumiNode} onClose={() => setBangumiNode(null)} onBound={handleBangumiBound} onStale={async () => { await refreshCurrentAndAllResources(); toast(t("works.changed"), "info"); }} />
       <RenameDialog node={renameNode} busy={dialogBusy} onClose={() => setRenameNode(null)} onSave={(name) => { if (!renameNode) return; setDialogBusy(true); void api.renameNode(renameNode.id, name).then(() => refreshCurrentAndAllResources()).then(() => { setRenameNode(null); toast(t("app.displayNameUpdated"), "success"); }).catch((error) => toast(errorMessage(error), "error")).finally(() => setDialogBusy(false)); }} />
       <LibraryRootRenameDialog root={renameRoot} busy={dialogBusy} onClose={() => setRenameRoot(null)} onSave={(name) => { if (!renameRoot) return; setDialogBusy(true); void api.renameRoot(renameRoot.id, name).then(() => Promise.all([loadRoots(renameRoot.id), refreshCurrent()])).then(() => { setRenameRoot(null); toast(t("app.rootNameUpdated"), "success"); }).catch((error) => toast(errorMessage(error), "error")).finally(() => setDialogBusy(false)); }} />
       <ConfirmDialog open={Boolean(confirm)} title={confirm?.title ?? ""} description={confirm?.description ?? ""} confirmLabel={confirm?.confirmLabel} destructive={confirm?.destructive} busy={dialogBusy} onConfirm={() => void runConfirm()} onClose={() => !dialogBusy && setConfirm(null)} />
       {rootModeUi}
       {updateUi}
       <ToastStack toasts={toasts} onDismiss={(id) => setToasts((items) => items.filter((item) => item.id !== id))} />
-    </div>
+    </div></>
   );
 }
 

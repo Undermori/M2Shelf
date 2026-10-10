@@ -1,3 +1,5 @@
+import {textMessages} from './textMessages';
+import {bookMessages} from './bookMessages';
 // Independent typed translations for the built-in comic library and reader.
 const zhCN = {
   "comic.video": "视频（动画 / 影视）",
@@ -17,7 +19,7 @@ const zhCN = {
   "comic.badge": "{media} · {structure}",
   "comic.rootTitle": "添加资源库",
   "comic.rootDescription": "选择资源类型和识别方式。创建后不可更改。",
-  "comic.rootHelp": "按目录保留层级，读取图片目录、CBZ、PDF 和 EPUB。在 M²Shelf 内阅读，不修改源文件。",
+  "comic.rootHelp": "按目录保留层级，读取图片目录、CBZ、PDF、EPUB、TXT、MOBI 和 AZW3。在 M²Shelf 内阅读，不修改源文件。",
   "comic.create": "添加漫画库",
   "comic.all": "全部类型",
   "comic.books": "{count} 项",
@@ -29,7 +31,7 @@ const zhCN = {
   "comic.continue": "继续阅读",
   "comic.progress": "第 {page} / {count} 页",
   "comic.empty": "没有可阅读的书籍",
-  "comic.emptyHelp": "支持扫描图片目录、CBZ、PDF 或 EPUB 的内置阅读。",
+  "comic.emptyHelp": "支持扫描图片目录、CBZ、PDF、EPUB、TXT、MOBI 或 AZW3 的内置阅读。",
   "comic.loading": "正在打开书籍…",
   "comic.error": "无法读取书籍。文件可能损坏、已变化或不受支持，请重新扫描。",
   "comic.encrypted": "不支持加密书籍，请使用未加密的 CBZ 或 EPUB。",
@@ -66,9 +68,9 @@ const zhCN = {
   "comic.controls": "阅读设置",
   "comic.wideAlone": "宽页单独显示",
   "comic.defaults": "内置阅读",
-  "comic.defaultsHelp": "视频使用外部播放器；漫画和电子书使用内置阅读器。以下为图片书籍的默认设置。",
+  
   "comic.recentTitle": "最近打开",
-  "comic.recentDescription": "本机最近播放的视频和阅读的书籍，最新在前。",
+  
   "comic.openedAt": "打开于 {time}",
   "comic.recentEmpty": "还没有打开记录",
   "comic.recentHelp": "播放视频或打开书籍并阅读后，会记录在这里。",
@@ -99,7 +101,7 @@ const enUS: Record<keyof typeof zhCN, string> = {
   "comic.badge": "{media} · {structure}",
   "comic.rootTitle": "Add library",
   "comic.rootDescription": "Choose a media type and recognition mode. These cannot change after creation.",
-  "comic.rootHelp": "Keep folder hierarchy. Read image folders, CBZ, PDF and EPUB inside M²Shelf. Source files stay untouched.",
+  "comic.rootHelp": "Keep folder hierarchy. Read image folders, CBZ, PDF, EPUB, TXT, MOBI and AZW3 inside M²Shelf. Source files stay untouched.",
   "comic.create": "Add comic library",
   "comic.all": "All media",
   "comic.books": "{count} items",
@@ -111,7 +113,7 @@ const enUS: Record<keyof typeof zhCN, string> = {
   "comic.continue": "Continue reading",
   "comic.progress": "Page {page} / {count}",
   "comic.empty": "No readable books",
-  "comic.emptyHelp": "Supports scanning image folders, CBZ, PDF and EPUB for built-in reading.",
+  "comic.emptyHelp": "Supports scanning image folders, CBZ, PDF, EPUB, TXT, MOBI and AZW3 for built-in reading.",
   "comic.loading": "Opening book…",
   "comic.error": "Cannot read this book. The source may be damaged, changed or unsupported. Rescan the library.",
   "comic.encrypted": "Encrypted books are unsupported. Use an unencrypted CBZ or EPUB.",
@@ -148,9 +150,9 @@ const enUS: Record<keyof typeof zhCN, string> = {
   "comic.controls": "Reader controls",
   "comic.wideAlone": "Show wide pages alone",
   "comic.defaults": "Built-in reader",
-  "comic.defaultsHelp": "Videos use the external player; comics and ebooks use the built-in reader. These defaults apply to image books.",
+  
   "comic.recentTitle": "Recently opened",
-  "comic.recentDescription": "Videos played and books read on this device, newest first.",
+  
   "comic.openedAt": "Opened {time}",
   "comic.recentEmpty": "Nothing opened yet",
   "comic.recentHelp": "Play a video or read a book to see it here.",
@@ -181,7 +183,7 @@ const jaJP: Record<keyof typeof zhCN, string> = {
   "comic.badge": "{media} · {structure}",
   "comic.rootTitle": "ライブラリを追加",
   "comic.rootDescription": "種類と認識方法を選択します。作成後は変更できません。",
-  "comic.rootHelp": "階層を保持し、画像フォルダー・CBZ・PDF・EPUB を読みます。元ファイルは変更しません。",
+  "comic.rootHelp": "階層を保持し、画像フォルダー・CBZ・PDF・EPUB・TXT・MOBI・AZW3 を読みます。元ファイルは変更しません。",
   "comic.create": "漫画ライブラリを追加",
   "comic.all": "すべての種類",
   "comic.books": "{count} 件",
@@ -193,7 +195,7 @@ const jaJP: Record<keyof typeof zhCN, string> = {
   "comic.continue": "続きから読む",
   "comic.progress": "{page} / {count} ページ",
   "comic.empty": "読める本がありません",
-  "comic.emptyHelp": "画像フォルダー・CBZ・PDF・EPUB のスキャンと内蔵閲覧に対応しています。",
+  "comic.emptyHelp": "画像フォルダー・CBZ・PDF・EPUB・TXT・MOBI・AZW3 のスキャンと内蔵閲覧に対応しています。",
   "comic.loading": "本を開いています…",
   "comic.error": "読み込めません。破損・変更・未対応の可能性があります。再スキャンしてください。",
   "comic.encrypted": "暗号化された本は未対応です。暗号化されていない CBZ または EPUB を使用してください。",
@@ -230,9 +232,9 @@ const jaJP: Record<keyof typeof zhCN, string> = {
   "comic.controls": "読書設定",
   "comic.wideAlone": "横長ページを単独表示",
   "comic.defaults": "内蔵リーダー",
-  "comic.defaultsHelp": "動画は外部プレーヤー、漫画と電子書籍は内蔵リーダーを使用します。以下は画像書籍の初期設定です。",
+  
   "comic.recentTitle": "最近開いた項目",
-  "comic.recentDescription": "この端末で再生した動画と読んだ本を新しい順に表示します。",
+  
   "comic.openedAt": "{time} に開きました",
   "comic.recentEmpty": "履歴がありません",
   "comic.recentHelp": "動画を再生するか本を読むとここに記録されます。",
@@ -263,7 +265,7 @@ const koKR: Record<keyof typeof zhCN, string> = {
   "comic.badge": "{media} · {structure}",
   "comic.rootTitle": "라이브러리 추가",
   "comic.rootDescription": "미디어 유형과 인식 방식을 선택하세요. 생성 후에는 변경할 수 없습니다.",
-  "comic.rootHelp": "폴더 구조를 유지하며 이미지 폴더, CBZ, PDF와 EPUB을 읽습니다. 원본은 변경하지 않습니다.",
+  "comic.rootHelp": "폴더 구조를 유지하며 이미지 폴더, CBZ, PDF, EPUB, TXT, MOBI, AZW3을 읽습니다. 원본은 변경하지 않습니다.",
   "comic.create": "만화 라이브러리 추가",
   "comic.all": "모든 미디어",
   "comic.books": "{count}개",
@@ -275,7 +277,7 @@ const koKR: Record<keyof typeof zhCN, string> = {
   "comic.continue": "이어서 읽기",
   "comic.progress": "{page} / {count}페이지",
   "comic.empty": "읽을 수 있는 책이 없습니다",
-  "comic.emptyHelp": "이미지 폴더, CBZ, PDF 및 EPUB 스캔과 내장 읽기를 지원합니다.",
+  "comic.emptyHelp": "이미지 폴더, CBZ, PDF, EPUB 및 TXT 스캔과 내장 읽기를 지원합니다.",
   "comic.loading": "책을 여는 중…",
   "comic.error": "책을 읽을 수 없습니다. 원본이 손상되었거나 변경되었거나 지원되지 않을 수 있습니다. 다시 스캔하세요.",
   "comic.encrypted": "암호화된 책은 지원하지 않습니다. 암호화되지 않은 CBZ 또는 EPUB을 사용하세요.",
@@ -312,9 +314,9 @@ const koKR: Record<keyof typeof zhCN, string> = {
   "comic.controls": "읽기 설정",
   "comic.wideAlone": "가로 페이지를 단독 표시",
   "comic.defaults": "내장 리더",
-  "comic.defaultsHelp": "동영상은 외부 플레이어, 만화와 전자책은 내장 리더를 사용합니다. 아래 설정은 이미지 책에 기본으로 적용됩니다.",
+  
   "comic.recentTitle": "최근 연 항목",
-  "comic.recentDescription": "이 기기에서 재생한 동영상과 읽은 책을 최신순으로 표시합니다.",
+  
   "comic.openedAt": "{time}에 열었음",
   "comic.recentEmpty": "아직 연 기록이 없습니다",
   "comic.recentHelp": "동영상을 재생하거나 책을 읽으면 여기에 기록됩니다.",
@@ -328,9 +330,9 @@ const koKR: Record<keyof typeof zhCN, string> = {
   "comic.scanMixedSummary": "{status} · 동영상 {videos}개 · 책 {books}권{errors}",
 };
 const extra = {
- 'zh-CN': {'ebook.previousChapter':'上一章', 'ebook.nextChapter':'下一章', 'ebook.jumpChapter':'跳转章节', 'reader.bookmarkJump':'跳转到书签', 'bookMode.folderDescription':'保留目录层级，按目录浏览图片集、CBZ、PDF 和 EPUB。', 'bookMode.fileTitle':'按单个文件识别', 'bookMode.fileDescription':'递归扫描，每个 CBZ、PDF、EPUB 和图片集作为独立作品，可分别绑定与整理。','ebook.chapterProgress':'第 {page} / {count} 章','ebook.illustration':'书籍插图','comic.ignoreWarnings':'忽略此库警告','comic.restoreWarnings':'恢复此库警告','comic.warningsIgnored':'已忽略此库警告；扫描仍正常进行。','comic.noPages':'压缩包中没有支持的图片页面，可能包含 PDF 或其他文件。其他可阅读书籍仍可匹配。','window.minimize':'最小化','window.maximize':'最大化 / 还原','window.close':'关闭窗口','window.error':'窗口操作失败，请重试。'},
- 'en-US': {'ebook.previousChapter':'Previous chapter', 'ebook.nextChapter':'Next chapter', 'ebook.jumpChapter':'Go to chapter', 'reader.bookmarkJump':'Jump to bookmark', 'bookMode.folderDescription':'Keep the folder tree and browse image collections, CBZ, PDF and EPUB.', 'bookMode.fileTitle':'Recognize individual files', 'bookMode.fileDescription':'Scan recursively; each CBZ, PDF, EPUB and image collection becomes an independent work.','ebook.chapterProgress':'Chapter {page} / {count}','ebook.illustration':'Book illustration','comic.ignoreWarnings':'Ignore library warnings','comic.restoreWarnings':'Restore library warnings','comic.warningsIgnored':'Warnings ignored; scanning remains enabled.','comic.noPages':'No supported image pages in this archive. It may contain PDFs or other files. Other readable books can still be matched.','window.minimize':'Minimize','window.maximize':'Maximize / restore','window.close':'Close window','window.error':'Window action failed. Please retry.'},
- 'ja-JP': {'ebook.previousChapter':'前の章', 'ebook.nextChapter':'次の章', 'ebook.jumpChapter':'章に移動', 'reader.bookmarkJump':'しおりに移動', 'bookMode.folderDescription':'フォルダー構造を保ち、画像集・CBZ・PDF・EPUB を閲覧します。', 'bookMode.fileTitle':'個別ファイルで認識', 'bookMode.fileDescription':'再帰スキャンし、CBZ・PDF・EPUB・画像集を個別作品として整理・紐付けできます。','ebook.chapterProgress':'第 {page} / {count} 章','ebook.illustration':'本の挿絵','comic.ignoreWarnings':'このライブラリの警告を無視','comic.restoreWarnings':'警告を再表示','comic.warningsIgnored':'警告を非表示にしました。スキャンは継続します。','comic.noPages':'対応画像ページがない圧縮ファイルです。PDF 等が含まれる可能性があります。他の読める本は照合できます。','window.minimize':'最小化','window.maximize':'最大化 / 元に戻す','window.close':'ウィンドウを閉じる','window.error':'操作に失敗しました。再試行してください。'},
- 'ko-KR': {'ebook.previousChapter':'이전 장', 'ebook.nextChapter':'다음 장', 'ebook.jumpChapter':'장으로 이동', 'reader.bookmarkJump':'책갈피로 이동', 'bookMode.folderDescription':'폴더 구조를 유지하며 이미지 모음, CBZ, PDF와 EPUB을 탐색합니다.', 'bookMode.fileTitle':'개별 파일로 인식', 'bookMode.fileDescription':'하위 폴더를 스캔해 CBZ, PDF, EPUB과 이미지 모음을 독립 작품으로 정리합니다.','ebook.chapterProgress':'{page} / {count}장','ebook.illustration':'책 삽화','comic.ignoreWarnings':'라이브러리 경고 무시','comic.restoreWarnings':'경고 다시 표시','comic.warningsIgnored':'경고를 숨겼습니다. 스캔은 계속됩니다.','comic.noPages':'압축 파일에 지원되는 이미지 페이지가 없습니다. PDF 등이 포함될 수 있습니다. 다른 읽을 수 있는 책은 계속 매칭됩니다.','window.minimize':'최소화','window.maximize':'최대화 / 복원','window.close':'창 닫기','window.error':'창 작업에 실패했습니다. 다시 시도하세요.'},
+ 'zh-CN': {'ebook.previousChapter':'上一章', 'ebook.nextChapter':'下一章', 'ebook.jumpChapter':'跳转章节', 'reader.bookmarkJump':'跳转到书签', 'bookMode.folderDescription':'保留目录层级，按目录浏览图片集、CBZ、PDF、EPUB、TXT、MOBI 和 AZW3。', 'bookMode.fileTitle':'按单个文件识别', 'bookMode.fileDescription':'递归扫描，每个 CBZ、PDF、EPUB、TXT、MOBI、AZW3 和图片集作为独立作品，可分别绑定与整理。','ebook.chapterProgress':'第 {page} / {count} 章','ebook.illustration':'书籍插图','comic.ignoreWarnings':'忽略此库警告','comic.restoreWarnings':'恢复此库警告','comic.warningsIgnored':'已忽略此库警告；扫描仍正常进行。','comic.noPages':'压缩包中没有支持的图片页面，可能包含 PDF 或其他文件。其他可阅读书籍仍可匹配。','window.minimize':'最小化','window.maximize':'最大化 / 还原','window.close':'关闭窗口','window.error':'窗口操作失败，请重试。'},
+ 'en-US': {'ebook.previousChapter':'Previous chapter', 'ebook.nextChapter':'Next chapter', 'ebook.jumpChapter':'Go to chapter', 'reader.bookmarkJump':'Jump to bookmark', 'bookMode.folderDescription':'Keep the folder tree and browse image collections, CBZ, PDF, EPUB, TXT, MOBI and AZW3.', 'bookMode.fileTitle':'Recognize individual files', 'bookMode.fileDescription':'Scan recursively; each CBZ, PDF, EPUB, TXT, MOBI, AZW3 and image collection becomes an independent work.','ebook.chapterProgress':'Chapter {page} / {count}','ebook.illustration':'Book illustration','comic.ignoreWarnings':'Ignore library warnings','comic.restoreWarnings':'Restore library warnings','comic.warningsIgnored':'Warnings ignored; scanning remains enabled.','comic.noPages':'No supported image pages in this archive. It may contain PDFs or other files. Other readable books can still be matched.','window.minimize':'Minimize','window.maximize':'Maximize / restore','window.close':'Close window','window.error':'Window action failed. Please retry.'},
+ 'ja-JP': {'ebook.previousChapter':'前の章', 'ebook.nextChapter':'次の章', 'ebook.jumpChapter':'章に移動', 'reader.bookmarkJump':'しおりに移動', 'bookMode.folderDescription':'フォルダー構造を保ち、画像集・CBZ・PDF・EPUB・TXT・MOBI・AZW3 を閲覧します。', 'bookMode.fileTitle':'個別ファイルで認識', 'bookMode.fileDescription':'再帰スキャンし、CBZ・PDF・EPUB・TXT・MOBI・AZW3・画像集を個別作品として整理・紐付けできます。','ebook.chapterProgress':'第 {page} / {count} 章','ebook.illustration':'本の挿絵','comic.ignoreWarnings':'このライブラリの警告を無視','comic.restoreWarnings':'警告を再表示','comic.warningsIgnored':'警告を非表示にしました。スキャンは継続します。','comic.noPages':'対応画像ページがない圧縮ファイルです。PDF 等が含まれる可能性があります。他の読める本は照合できます。','window.minimize':'最小化','window.maximize':'最大化 / 元に戻す','window.close':'ウィンドウを閉じる','window.error':'操作に失敗しました。再試行してください。'},
+ 'ko-KR': {'ebook.previousChapter':'이전 장', 'ebook.nextChapter':'다음 장', 'ebook.jumpChapter':'장으로 이동', 'reader.bookmarkJump':'책갈피로 이동', 'bookMode.folderDescription':'폴더 구조를 유지하며 이미지 모음, CBZ, PDF, EPUB, TXT, MOBI, AZW3을 탐색합니다.', 'bookMode.fileTitle':'개별 파일로 인식', 'bookMode.fileDescription':'하위 폴더를 스캔해 CBZ, PDF, EPUB, TXT, MOBI, AZW3과 이미지 모음을 독립 작품으로 정리합니다.','ebook.chapterProgress':'{page} / {count}장','ebook.illustration':'책 삽화','comic.ignoreWarnings':'라이브러리 경고 무시','comic.restoreWarnings':'경고 다시 표시','comic.warningsIgnored':'경고를 숨겼습니다. 스캔은 계속됩니다.','comic.noPages':'압축 파일에 지원되는 이미지 페이지가 없습니다. PDF 등이 포함될 수 있습니다. 다른 읽을 수 있는 책은 계속 매칭됩니다.','window.minimize':'최소화','window.maximize':'최대화 / 복원','window.close':'창 닫기','window.error':'창 작업에 실패했습니다. 다시 시도하세요.'},
 };
-export const comicMessages = { 'zh-CN': {...zhCN,...extra['zh-CN']}, 'en-US': {...enUS,...extra['en-US']}, 'ja-JP': {...jaJP,...extra['ja-JP']}, 'ko-KR': {...koKR,...extra['ko-KR']} };
+export const comicMessages = { 'zh-CN': {...zhCN,...extra['zh-CN'],...textMessages['zh-CN'],...bookMessages['zh-CN']}, 'en-US': {...enUS,...extra['en-US'],...textMessages['en-US'],...bookMessages['en-US']}, 'ja-JP': {...jaJP,...extra['ja-JP'],...textMessages['ja-JP'],...bookMessages['ja-JP']}, 'ko-KR': {...koKR,...extra['ko-KR'],...textMessages['ko-KR'],...bookMessages['ko-KR']} };

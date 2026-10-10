@@ -1,0 +1,53 @@
+{
+  "id": 10,
+  "title": "Author contains distinct works",
+  "input": {
+    "root_id": "fixture-root",
+    "media_kind": "COMIC",
+    "complete": true,
+    "entries": [
+      {
+        "path": "藤本树",
+        "kind": "DIRECTORY",
+        "hint": "AUTHOR"
+      },
+      {
+        "path": "藤本树/再见绘梨.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "藤本树/蓦然回首.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      }
+    ]
+  },
+  "expected": {
+    "units": [
+      {
+        "path": "藤本树/再见绘梨.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "藤本树/蓦然回首.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      }
+    ],
+    "root_paths": [
+      "藤本树"
+    ],
+    "series": [],
+    "directory_roles": {
+      "藤本树": "CATEGORY"
+    },
+    "diagnostics": [],
+    "editions": 0,
+    "retained_prior": 0
+  },
+  "negative_assertion": "No author-wide Series"
+}

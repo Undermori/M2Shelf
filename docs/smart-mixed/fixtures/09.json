@@ -1,0 +1,119 @@
+{
+  "id": 9,
+  "title": "Volume chapter image hierarchy",
+  "input": {
+    "root_id": "fixture-root",
+    "media_kind": "COMIC",
+    "complete": true,
+    "entries": [
+      {
+        "path": "作品",
+        "kind": "DIRECTORY",
+        "hint": null
+      },
+      {
+        "path": "作品/第01卷/第001话",
+        "kind": "DIRECTORY",
+        "hint": null
+      },
+      {
+        "path": "作品/第01卷/第001话/001.png",
+        "kind": "FILE",
+        "format": "PNG",
+        "verified": true
+      },
+      {
+        "path": "作品/第01卷/第001话/002.png",
+        "kind": "FILE",
+        "format": "PNG",
+        "verified": true
+      },
+      {
+        "path": "作品/第01卷/第002话",
+        "kind": "DIRECTORY",
+        "hint": null
+      },
+      {
+        "path": "作品/第01卷/第002话/001.png",
+        "kind": "FILE",
+        "format": "PNG",
+        "verified": true
+      },
+      {
+        "path": "作品/第01卷/第002话/002.png",
+        "kind": "FILE",
+        "format": "PNG",
+        "verified": true
+      }
+    ],
+    "page_orders": [
+      {
+        "directory": "作品/第01卷/第001话",
+        "pages": [
+          "作品/第01卷/第001话/001.png",
+          "作品/第01卷/第001话/002.png"
+        ],
+        "basis": "EXISTING_INDEXED_NATURAL_ORDER"
+      },
+      {
+        "directory": "作品/第01卷/第002话",
+        "pages": [
+          "作品/第01卷/第002话/001.png",
+          "作品/第01卷/第002话/002.png"
+        ],
+        "basis": "EXISTING_INDEXED_NATURAL_ORDER"
+      }
+    ]
+  },
+  "expected": {
+    "units": [
+      {
+        "path": "作品/第01卷/第001话",
+        "kind": "DIRECT_PAGES",
+        "pages": [
+          "作品/第01卷/第001话/001.png",
+          "作品/第01卷/第001话/002.png"
+        ]
+      },
+      {
+        "path": "作品/第01卷/第002话",
+        "kind": "DIRECT_PAGES",
+        "pages": [
+          "作品/第01卷/第002话/001.png",
+          "作品/第01卷/第002话/002.png"
+        ]
+      }
+    ],
+    "root_paths": [
+      "作品"
+    ],
+    "series": [
+      {
+        "directory": "作品",
+        "title": "作品",
+        "members": [
+          {
+            "path": "作品/第01卷/第001话",
+            "volume": 1,
+            "chapter": 1,
+            "role": "CHAPTER",
+            "decision": "APPLY"
+          },
+          {
+            "path": "作品/第01卷/第002话",
+            "volume": 1,
+            "chapter": 2,
+            "role": "CHAPTER",
+            "decision": "APPLY"
+          }
+        ],
+        "decision": "APPLY"
+      }
+    ],
+    "directory_roles": {},
+    "diagnostics": [],
+    "editions": 0,
+    "retained_prior": 0
+  },
+  "negative_assertion": "Retain both volume and chapter; never concatenate chapter pages"
+}

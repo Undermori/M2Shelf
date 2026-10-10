@@ -111,7 +111,7 @@ export function bindingDisplayTitle(node: MediaNode, language: AppLanguage = get
 }
 
 export function nodeDisplayTitle(node: MediaNode, language: AppLanguage = getActiveLanguage()): string {
-  const bindingTitle = bindingDisplayTitle(node, language);
+  const bindingTitle = (node.tmdbBinding?.active ? node.tmdbBinding.movie.title : null) || bindingDisplayTitle(node, language);
   let title = bindingTitle || node.displayName?.trim() || node.folderName?.trim() || translate(language, "format.unnamedDirectory");
   const suffix = translate(language, "node.seriesSuffix");
   if (bindingTitle && node.nodeType === "CONTAINER" && !title.toLocaleLowerCase(language).endsWith(suffix.trim().toLocaleLowerCase(language))) title += suffix;
@@ -129,7 +129,7 @@ export function canBindBangumi(node: MediaNode): boolean {
 }
 
 export function mediaBadge(node:MediaNode):string {
-  const media=node.mediaKind==='EBOOK'?'ebook.name':node.mediaKind==='COMIC'?'comic.name':node.mediaKind==='ANIMATION'||node.binding?.providerSubjectType===2?'comic.animation':node.mediaKind==='LIVE_ACTION'||node.binding?.providerSubjectType===6?'comic.liveAction':'comic.unboundVideo';
+  const media=node.mediaKind==='ARTBOOK'?'artbook.name':node.mediaKind==='DOUJIN'?'doujin.name':node.mediaKind==='EBOOK'?'ebook.name':node.mediaKind==='COMIC'?'comic.name':node.mediaKind==='ANIMATION'||node.binding?.providerSubjectType===2?'comic.animation':node.mediaKind==='LIVE_ACTION'||node.binding?.providerSubjectType===6?'comic.liveAction':'comic.unboundVideo';
   const structure=node.nodeType==='CONTAINER'?'card.systemSeries':node.nodeType==='MIXED'?'card.systemOtherResources':'card.systemWork';
   return translateActive('comic.badge',{media:translateActive(media),structure:translateActive(structure)});
 }

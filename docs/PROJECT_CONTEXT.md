@@ -1,6 +1,225 @@
 # M²Shelf 当前项目上下文
 
-## 2026-10-08 全局视觉更新
+## 0.5.13 版本与发布（2026-10-10）
+
+当前源码与锁文件统一为 0.5.13，schema 仍为 26。四语言 README 按现有功能重写，删除旧图片，保留文档、下载和作者入口。Release 说明为 docs/releases/0.5.13.md，更新器四语言说明为同目录 0.5.13-notes.json。发布器只上传 NSIS、Portable 和 latest.json；本地八项签名输入的验证及锁定保持。签名工具的 serde/serde_json 精确版本与当前智能书籍路径依赖对齐，密码输入、密钥容器和签名协议不变。公开发布状态以 GitHub 对应 Release 为准。
+
+下方各轮 0.5.12 的 RC、未发布状态和验证数量为当轮历史记录，不代表 0.5.13 当前发布状态。私人交接文档及 UI 审计截图仅保留在本地，不纳入公开源码。
+
+## 2026-10-10 电影命名与既有海报修复（当前实现）
+
+当前报告 `MOVIE_MATCHING_20261010.md`，本地候选目录 `bundle/local-rc-movie-names-20261010/`；版本仍为 0.5.12 / schema 26。对用户授权目录只读枚举 19 组电影、92 个目录/文件条目，私有名称清单仅在 ignored 输出，不进入项目上下文。旧代码仅 4 组提取可靠年份，当前两识别模式均为 19 组；这属于本地提取验证，不等同于在线命中率。
+
+`title_extractor::movie_release_prefix` 在技术词删除前取发布边界，`movie_title_candidates` 产生独立双语片名并识别明确的广播片名组；`is_safe_movie_query` 局部允许两字东亚片名。`tmdb::automatic_title` 不再二次拆词；普通 Bangumi 解析和季集保护保持。
+
+`tmdb::detail` 通过官方 append_to_response=alternative_titles 补全有界别名。`AutomaticRun::fallback` 最多三查询、五候选详情/节点和 256 详情/运行，严格年份/类型/官方精确别名/唯一候选；不相干的非空结果可尝试另一个本地片名，真歧义或不完整候选池仍拒绝。搜索 128 次上限、失败熔断、原事务和取消边界保持。
+
+`automatic_poster_path_using` 对新手动选择和自动绑定统一原语言海报；旧载荷缺语种时补查同一电影 ID，原语言不存在时优先无语言标记/英文，中文及粤语原片保留中文优先。`posterPolicyVersion` 和 `alternativeTitles` 为兼容 JSON 字段，无迁移。`auto_match_node_with_tmdb` 的已绑定早退改为 `AutomaticRun::refresh_bound`：只修旧版本/失败/缺失封面，不搜索、不改 ID/时间；成功持久化版本，重开和再次匹配复用。`retry_cover_using` 同时复核旧绑定、Root revision、自动政策、取消代次及 MANUAL 封面，失败不清旧图。忽略子树、停用绑定和关闭策略不自动联网。
+
+未读写私人数据库、调用真实凭证或改动媒体；验证使用真实名称的离线提取与隔离合成扫描/HTTP/provider 数据。没有修改 UI、阅读器、Debug/F5、Skill/AGENTS 或数据库结构。
+
+`db::filter_missing_bound_cover_candidates` 在候选过滤前批量 hydrate TMDb；扫描和显式匹配的 SQL 均接受待检查的有效 TMDb 记录。即使保留了 Bangumi 绑定及其本地封面，旧 TMDb 海报也不会被原“已有封面”过滤误挡；完成后退出该修复候选集。
+
+## 2026-10-10 v5 增量（当前行为）
+
+当前报告 `TMDB_V5_20261010.md`，候选目录 `bundle/local-rc-tmdb-v5-20261010/`。仍为 0.5.12 / schema 26，无迁移、凭证变更、发布或覆盖安装。下方 v4 记录保留为历史，真人电影数据源顺序以本节和 D61 为准。
+
+`auto_match::auto_match_node_with_tmdb` 在 `tmdb::automatic_movie_source` 成立后，于 Bangumi 别名/搜索/详情之前直接调用现有自动 TMDb 协调器。分离来源判断和查询安全判断，使标题不确定的电影也不会落回 Bangumi。已有绑定先行保护，非电影沿用原路径。生产扫描和显式 rematch 共用此入口；测试在真实扫描链路使用禁止 Bangumi 的运行缓存，覆盖 FOLDER/VIDEO_FILE × 12 名称 × 导入/重扫/rematch 的 72 组 HTTP 参数/持久化检查。
+
+`NativeAutomaticProvider::detail` 为新自动绑定设置 JSON `automaticPoster`；下载和重试使用 `automatic_poster_path`/`preferred_poster`，官方 images 不带 UI 语言，按 original_language/iso_639_1 及清晰度选择。旧 JSON 默认 originalLanguage=null、automaticPoster=false，因此人工及旧载荷可读、选择不被改写。`MetadataBindingPanel` 由 `WorkDetailPage` 的两个提供方共用；`tmdb_open_page` 根据原生当前有效绑定生成固定 movie URL。`workspace.css` 对共享文案/动作使用弹性列和 480px 容器断点。
+
+`vite.config.ts` 将 optimizeDeps.entries 限定为 index.html，防止归档 .tmp HTML 进入开发依赖扫描。本轮原生验收只载入预构建正式 dist，以单独应用标识与全新合成 DB 运行，不覆盖 Tauri 内部对象，不调用真实提供方 API 或读取私人媒体；来源链接实际打开了公开 TMDb 网页。Debug/F5/阅读器及既有自动后台保持。具体测试、截图和限制见本轮报告。
+
+## 2026-10-10 追加：电影查询链路与调试菜单 v4
+
+最新本地候选：`bundle/local-rc-movie-autotmdb-v4-20261010/`；报告：`MOVIE_DEBUG_V4_20261010.md`。版本 0.5.12、schema 26，未增加迁移。
+
+LIVE_ACTION 复用 `title_extractor::movie_query_title`、`build_movie_match_evidence` 和 `movie_evidence_for_node`：现有 Bangumi 清洗器处理发布组与分隔符，共用片名来源选择、可靠年份和有界别名。FOLDER 优先自己的作品目录；VIDEO_FILE 优先自己的视频名；泛用名仅回退到可信自身视频/源路径中的具体作品目录，绝不使用库根。人工默认搜索使用相同预填，用户编辑后直接调用原 TMDb API。自动搜索不再以前置强年份限制跳过无年份电影；强年份仍是自动绑定必要条件。未绑定显式重新匹配也可进入 TMDb；已存在任一 provider 绑定、关闭自动策略及人工封面边界保持。
+
+扫描仍使用原生命周期。`run_scan_with_matcher` 和 `run_auto_match_using` 是同一生产执行体的依赖注入边界，测试替换 provider 而非另写扫描器。TMDb 首次无结果时可用原有候选片名最多查询三次；每次计入原每轮 128 搜索上限，出现候选歧义/冲突不继续挑选结果。请求 `query` 与可靠的 `primary_release_year` 分开。诊断通过原 SQLite settings 的独立 `tmdb_auto_diagnostics` 键保存最多 128 条 / 64 KiB；设置页 TMDb 区域展开时按需加载，区分未查询、凭证缺失、401、429、请求失败、无结果、年份不确定和已绑定/封面失败，不存凭证或完整路径。
+
+Debug 保留 Reload F5，新增返回、上一页、下一页、全屏和书签五个真实菜单动作。App 将当前阅读器原 `turn/step/fullscreen/bookmark` 回调注册给 WindowTitlebar；退出时注销，边界/加载/写入状态驱动禁用。菜单键位以 grid 对齐，移除旧静态快捷键段落。阅读器对打开的菜单不处理自己的翻页/Escape；关闭菜单后原按键仍可操作。Ctrl+R 和菜单的保存/禁用逻辑不变；F5 仍保留此前明确要求的原生 WebView 行为，不能将其描述为经过菜单回调保护。
+
+验收：前端 160 测试、135 validate、Rust 318 通过 / 13 既有忽略，fmt、严格 Clippy 和 Windows unsigned 构建通过。生产扫描夹具覆盖两识别模式 × 首扫/重扫/显式重匹配 × 十二片名样本（72 条最终 HTTP 参数核对），封面经现有验证/原子写入并重开复用。浏览器真实当前组件验证四语言、两主题、三尺寸与五种文档阅读器；Windows WebView2 用独立标识与合成漫画库验证，不覆盖私人数据库或真实在线提供方验收。完整边界与证据见报告。
+
+
+## 2026-10-10 追加：匹配精修、Debug 快捷键与自动 TMDb
+
+最新本地候选为 `bundle/local-rc-polish-autotmdb-20261010/`，报告 `POLISH_AUTOTMDB_20261010.md`。版本保持 0.5.12，schema 26；没有迁移、依赖、权限或旧候选覆盖。以下旧轮次记录保留，当前行为以本节和 D59 为准。
+
+`auto_match::run_match_nodes_with_tmdb` / `auto_match_node_with_tmdb` 继续优先 Bangumi；提供方故障后停止本轮后续 Bangumi 请求，但允许后续符合条件的真人电影走备用来源。`tmdb::AutomaticRun` 复用原 Credential Manager、search/detail/cover 和请求边界，单轮最多 128 次备用搜索，失败后停止继续请求该备用提供方。`automatic_evidence`、`unique_movie`、`automatic_snapshot` 校验类型、强年份、精确标题、类型排除、唯一性及目标状态。读取归属文件与 Root revision 使用同一 SQLite snapshot；写入前再次校验指纹，在 IMMEDIATE 事务内检查取消和过期结果。`save_binding_if_absent` 同时排除已有 TMDb 行，防止跨提供方异步覆盖。无新凭证存储、TV 接口或第三方 host。
+
+`MatchingResults` / `BangumiModal` 共用状态和绑定回调；完整点击行使用原选择按钮的扩展命中区域，关闭该按钮按下时会改变定位包含块的旧滤镜，避免点击到整行边缘时失效。`workspace.css` 删除结果列表旧底描边，局部统一维护操作与路径控件。`SettingsPage` 只去除顶部小品牌字及加入维护动作容器。`WindowTitlebar` 将重载标注为 F5，四语言快捷键说明进入 Debug；没有原生 F5 拦截或新原生 hook，原 Ctrl+R 行为保留。
+
+验证：前端 25 文件 / 156 测试、135 项 validate、Rust 316 通过 / 13 既有忽略、fmt 和严格 Clippy。浏览器使用真实当前组件与合成 IPC 验证四语言、两主题、三窗口尺寸及系统主题切换；不代表私人数据库或在线提供方验收。原生 WebView2 使用完整 App、独立应用标识与空数据库，实际验证 F5、Ctrl+R 和菜单重载（文档加载计数 1→2→3→4）；早期白屏来自验收夹具错误覆盖 Tauri 内部对象，已撤除该做法。生产应用入口和配置未被更改。最终构建与摘要见本轮报告。
+
+## 2026-10-10 追加：跨库书籍展示与窗口栏间距
+
+最新本地候选见 `bundle/local-rc-all-books-20261010/`，报告为 `ALL_RESOURCES_BOOK_FIX_20261010.md`；下方五项定向修复候选保留。版本仍为 0.5.12，schema 26，无迁移或索引转换。
+
+`Database::list_all_resources` 在同一 SQLite read snapshot 返回书库与 Catalogue；SMART_MIXED 调用共享 `smart_mixed::catalogue_conn`，LEGACY 仅补充隐藏 Root 的直属核心书籍。隐藏 Root 与已投影智能库不再重复进入物理卡片或 comicNodes。`bookCollectionEntries` 同时供 SmartMixedBrowser 与 AllResourcesPage 使用；All 页复用 MediaCard/BookPosterCard，封面仍走原本地缩略图路径。`App::selectRoot` 可携带现有 history 中的逻辑目的地，系列/分类使用既有页面与返回路径；单本保持真实 ComicBook ID。元数据补丁同步 Catalogue 锚点，归属纠错通知共享集合刷新，侧栏数量与实际投影一致。窗口语言按钮删除旧的 28px 左占位，恢复左右 8px。
+
+验证覆盖四类书库 × 三种识别方式、六种核心文件格式、分类/系列/未完成逻辑关系回退/忽略目录、全部资源两种总览、过滤排序及阅读返回。浏览器合成 IPC 与原生/私人数据验收分开；具体结果与候选摘要以追加报告为准。未访问用户数据库或媒体、覆盖安装、签名、发布、提交或推送。
+
+扩查修复同一父节点造成的搜索/最近打开合并：`SearchHit::ComicBook` 携带原 book payload；搜索有界查询书名并复用元数据批量 hydration，保留 Node/视频命中、Root 范围与隐藏边界，单本 Node 命中去重。`list_recently_watched` 在读快照内按 `(node_id, book_id)` 区分视频与书籍，附原书籍 DTO。SearchPage、RecentlyWatchedPage 读取本书封面并由 App 进入原 reader；共享 BookContextMenu 只对无独立 Node 的书籍提供源位置操作。没有迁移、进度写入或源文件访问。
+
+## 2026-10-10 五项 UI 定向修复（最新 0.5.12，schema 26）
+
+最新本地候选目录为 `bundle/local-rc-ui-targeted-20261010/`，追加修复报告为根目录 `UI_TARGETED_FIXES_20261010.md`。前一轮主返工和 TMDb v2 的功能全部沿用，本轮不改 Rust、数据库、扫描、海报缓存、reader 或 provider。原候选与报告保留为历史记录。未安装、启动默认主程序、访问私人库、签名或发布。
+
+`SettingsPage` 将 TMDb 整块声明和两按钮从 About 搬到 Bangumi 开关下方，仍调用 `api.tmdbConfigure` 和 `open_external_url`。`Select` 增加 `popupAlign=end`，只由窗口栏语言/主题启用；layout effect 在首绘前计算位置并监听窗口/触发器 resize。`LibraryRecognitionModeDialog` 为视频也使用选择状态和创建按钮，无效提交时才渲染提示，聚焦第一张卡片；焦点陷阱不再因父组件回调重建而每次重新抢焦点。底层模式及自动关联值不变。
+
+`workspace.css` 增加局部 UI 选区和扫描语义色，`LibraryScanHealth` 为状态添加类及 span。缓存路径子项使用 34px 实际内高，外框仍为 36px。视频/书籍卡片共享间隔和完整边框规则。四语言仍复用现有 typed i18n 文案，没有新增密钥、网络 host 或权限。具体测试、截图和构建摘要以追加报告为准；Chrome 合成 IPC 与真实 Windows WebView、原生 DPI、Credential Manager 验收分开。
+
+## 前一轮：2026-10-10 主返工 + TMDb 匹配/识别 v2（0.5.12，schema 26）
+
+当前本地 RC 为 `bundle/local-rc-repair-20261010/`，根目录 `REPAIR_REPORT.md` 是本轮交付记录；旧 `DELIVERY_REPORT.md` 及 Phase 3 候选保留为历史材料。本轮没有安装、启动默认主程序、访问私人数据库/媒体、签名、发布、提交或推送。
+
+`BrowsePage` 持有标准工具栏和筛选；`SmartMixedBrowser` 仅投影同一 SQLite snapshot 中的逻辑组与真实目录 Node，使用 `PosterGrid`、`MediaCard`、新增 `BookPosterCard` 和标准 `ComicDetailPage`/`ComicBookList`。独立单本直接进入现有 reader；系列使用标准详情。真实 Node 的标签/收藏/绑定沿用现有回调，缺少独立 Node 的文件不伪造 Node 或共享写入其父元数据。纠错放入现有右键菜单。逻辑根计数是 App 中的会话展示值，不改物理 Node 或索引计数。
+
+`get_book_cover_data_url` 以真实 book ID/revision 进入 `comic_reader::cover_identity` 与共用 `poster_cache::thumbnail_data_url`，复用源验证、256/384/512/768 档位、磁盘衍生物、四请求门禁、前端 LRU 与单图片 renderer。首次缺失的无锚点书封面按需生成，此次没有另造后台生成队列或承诺每本书在扫描结束时已预生成。
+
+滚动栏根因为 `.content-scroll` 的 flex 子项被限制在一屏高度，内容溢出后 sticky 被父范围截断；改为真实可增长块容器，保留 8px/24px 方向滞回和布局占位。`.document-reader .text-reader-navigation` 用明确优先级保持三列 56px 固定底栏，避免后加载 comics.css 覆盖成 flex。普通复选框与识别卡使用共享主题，视频二选一创建流程保持。
+
+文字定位为稳定 chapter/segment + block index + UTF-16 offset；`textPosition.ts` 捕获/恢复可见正文，`DocumentReaderPage` 处理翻页、重排、模式/窗口/全屏变化、异步章节、书签和退出 flush。迁移 0026 只向 progress/bookmarks 增加可空 block 和有界 offset；原页/章索引、书 ID、附件 FK 及 1–25 迁移不变。Kindle 重建按原 locator 保留这些位置。`ebooks::navigation` 有界解析 EPUB3 nav / NCX，打开时映射原 spine 和片段，无法解析时保留安全章节回退。
+
+`BangumiModal` 持有单一 provider/query/results/request generation；`MatchingResults` 共享渲染，`TmdbMatch` 是类型适配器。TMDb 搜索调用原 `tmdbSearch(nodeId, query, null, locale)`，直接选择仍传 movie ID 和 native snapshot；Bangumi 保留真实 Subject。原生 `tmdb.rs` 生产实现与快照逐字核对相同，修改仅在测试区；`tmdb_credentials.rs`、凭证协议、绑定表和 About 不变。
+
+本轮通过 134 前端测试、308 Rust 测试（13 忽略）、135 仓库校验、fmt、严格 Clippy；Phase 1 的 35 invariant + 49 golden、Shadow 默认/production 各 42 测试通过。Chrome 真实 React DOM + 合成 IPC 共 469 项检查，覆盖三窗口/双主题/四语言及系统切换；截图位于 `docs/ui-repair/20261010/screenshots/`。Windows x64 主程序、NSIS、updater、MOBI worker 和精确八文件 Portable 已构建并校验摘要、版本、helper 公钥和构建路径。原生 Tauri WebView 中部滚动、真实 TMDb/Bangumi 网络、用户书籍未实机验证；未建立私人数据库备份，首次运行前需由所有者备份完整应用数据。
+
+## 历史记录：2026-10-09 Phase 3、电影展示和 EPUB（已被本轮展示修复部分替代）
+
+该轮候选版本为 0.5.12，迁移总数当时为 25；当前为 26，见上方最新记录。未提交、推送、签名、发布或替换用户正在使用的程序；本轮只使用合成数据库和自建测试样本，不运行私人索引迁移或媒体扫描。最终构建、测试和截图清单见根目录 `DELIVERY_REPORT.md`，浏览器夹具与原生应用检查分开记录。
+
+最终本地候选位于 `bundle/local-rc-phase3-0.5.12/`：NSIS `M2Shelf-Setup-0.5.12-x64.exe`，SHA-256 `9c5f48087d3804a50366851afa8479db8e5e0234fcda3ec416fe7c602a4cbf90`；八文件 Portable `M2Shelf-Portable-0.5.12-x64.zip`，SHA-256 `082e1f5678b065d99ae8ff32e89f3f4e742599a3fd2a13067fbebde5e546534a`。标准脚本构建、摘要、x64、helper identity/公钥和私有构建路径检查通过，均未签名。通过 124 前端测试、304 Rust 测试（13 默认忽略）、135 项目校验、rustfmt/严格 Clippy、Phase 1 的 35 invariant+49 golden、Phase 2 的 42 测试，以及 458+97+2 项浏览器夹具检查。未启动默认主程序：Portable 仍使用正常 AppData 数据库，首次运行会迁移 25，须由用户备份后决定验收；真实 WebView、私人库、问题原 EPUB、在线 TMDB 和 Windows 代理热切换仍未实测。
+
+`smart_mixed.rs` 复用 `tools/smart-mixed-lab` Phase 1 识别器和 `tools/smart-mixed-shadow` 只读适配器；后者默认仍接受 schema 24，显式 production feature 当前兼容 25/26；默认独立 Shadow 仍为 24。迁移 0025 给 Root 添加不可变 `book_organization_strategy`，旧值 LEGACY；SMART_MIXED 只允许四类书籍的底层 FOLDER 模式。增量逻辑组/真实 book FK 成员/人工覆盖/Root revision 独立持久化，不重建 Root 或 ComicBook。扫描 worker 完成健康检查后归组，写入事务 CAS 拒绝过期 revision；失败、取消保留旧组和物理兜底。人工修正复用扫描生命周期并在 blocking worker 运行。图片身份标注为 indexed image book，实际二进制验证保留在 reader，不声称索引逐页验证。
+
+该轮的 `SmartMixedBrowser` 曾提供独立目录 UI、显眼原目录切换和无锚点占位，已由 2026-10-10 标准组件 projection 及真实书封面修复替代；Node 身份与五种人工修正继续保留。没有加入 edition-link、全局模糊匹配、第二套扫描器或十万项任务平台。
+
+`ebooks.rs` 的 EPUB 块增加 ImageReference，`read_epub_illustration` 通过 Root/句柄/revision/CRC 校验按需读取 8 MiB 内插图，复用两次前端读取、12 项/128 MiB 解码缓存。章节 XML 4 MiB、30,000 节点/128 层等限制保留；单章过大不再阻断整本索引。开发诊断记录具体限制、实际值或下界及脱敏资源摘要，前端保留目录、其他章节和插图重试。
+
+`tmdb.rs`、`tmdb_credentials.rs`、`TmdbMatch` 提供用户主动选择的 movie provider。独立 `tmdb_movie_bindings` 保留 Bangumi 行和原 Node 手工封面，绑定网络完成后验证来源快照及取消 generation。固定官方 API/图片 host、2 MiB JSON、20 秒超时、有限重试、64 项/15 分钟缓存、15 MiB 封面预算；凭证只进入 Windows Credential Manager。官方 Logo 和非商业/商业许可提示在 About；真实用户凭证和在线 TMDB 尚未验收。Bangumi 客户端在原重试预算内遇到连接/超时错误时重新采样当前系统代理；未对实际系统代理切换作端到端确认。
+
+`BrowsePage` 将影视可读附件置于海报后折叠区，保留原核心视频表；`useDirectionalHeader` 监听实际 content-scroll，8px 上滚/24px 下滚滞回且不移除布局空间。`WindowTitlebar` 新增真实重载菜单、语言图标合并触发区域。App 标记输入方式，解决 Chromium 文本框鼠标点击同样命中 focus-visible 的行为；Tab/方向键保留键盘焦点。设置删除三条不再使用的说明及四语言键，Root 策略显示智能识别。现有海报本地缩略图、主题、设置 writer、播放器和 updater 安全流程不重写。
+
+## 2026-10-09 MOBI/AZW3、设定集与局部窗口菜单（本地未发布）
+
+详见 [本轮验收记录](READER_LIBRARY_EXTENSION_20261009.md)。新增固定版本 LGPL libmobi 独立 worker，直接支持合法未加密 MOBI6/KF8/AZW3，复用安全文档 IR 与全部文字阅读设置、目录、稳定章节进度、书签、图片和内嵌封面；无 Kindle/Calibre 安装要求、DRM 解密或书内脚本/网络/CSS/字体。worker 受 Windows Job、句柄、内存/时间/输出预算保护，完整对应源码、许可证和独立重建脚本随程序提供。
+
+0023 增加扩展 reader_format 与附件来源 FK/原始秒级 stamp，0024 增加不可变 ARTBOOK 子类型及独立 auto_bangumi。新四类书籍库默认不自动关联，旧策略/绑定不清理；同人本/设定集可手动 type 1 绑定，opt-in 自动关联额外要求精确标题证据。所有 Root 统一附件内置打开，旧 MOBI/AZW3 等索引直接进入共享阅读表，统计和列表按来源去重，无需先重扫；其他资源只显示剩余附件。两种模式的书籍重扫提升旧附件时保留原书 ID/进度/书签；Kindle 适配重排按原始 chapter locator 保留状态，移除标题元数据空屏。书籍增量配置升为 5。
+
+WindowTitlebar 提供真实文件/显示/转至/帮助菜单，并按用户追加要求删除文件前的小 Logo；原生控制和空白拖动区域保留，右侧主题/语言共享原 SettingsStore。Settings 仅移除进度区重复底线。ARTBOOK 已接入共享筛选/索引/封面/阅读/收藏标签，没有重做海报路线。
+
+最新本地测试产物 `bundle/local-test-20261009-124745/M2Shelf-Portable-0.5.11-x64.zip`，SHA-256 `43623DDFD19FE312713CF35AEECC261395BBA1CF1583DB6E6089532C849C5F7C`。精确八文件包含 worker/完整源码/notice；旧五文件 updater 不兼容新载荷，正式升级路径仍需发版流程安排。未提交、推送、签名、发布或改版本。正式 bundle、公钥、canonical 图标与 Skill 保持。测试及 Windows 原生/浏览器证据分开记录，NSIS 仅构建未安装。
+
+## 2026-10-09 资源库主页分区标题精简（本地未发布）
+
+`BrowsePage` 仅在 `currentNode` 存在时显示海报区的下级资源标题/继续浏览/节点数。Root 主页直接显示原 PosterGrid，顶部标题旁项目数量、筛选、排序、编辑、其他内容表格及进入子目录后的标题保持。无 CSS、翻译、数据或封面逻辑修改。
+
+完整重跑通过 117 前端测试、278 Rust 测试（10 默认忽略）、135 项目校验、rustfmt、严格 Clippy；实际 React 浏览器夹具通过 231 项检查，覆盖四语言、双主题、三种桌面窗口、六类别/两识别模式及下级目录标题保留。标准 Windows 构建及五文件 Portable 包校验通过，新本地包 `bundle/local-test-20261009-102624/M2Shelf-Portable-0.5.11-x64.zip`，SHA-256 `AA147D54B171777632B8AFD66D14DFC6E9C52178571391795B20688901BE684D`。已备份用户当前本地测试目录的五个程序文件，正常关闭旧窗口、替换为已验证的新文件并重新启动，确认窗口响应正常；没有直接修改应用数据库或媒体文件。版本仍为 0.5.11，未签名或发布。
+
+## 2026-10-09 资源库同步及最新本地程序（本地未发布）
+
+在当日定向更新基础上，按用户补充将 `BrowsePage` 与 `AllResourcesPage` 同步为共享 `collection-toolbar` / `collection-heading` / `collection-title` / `collection-filters` 排版。资源库显示标题/当前列表数量、原管理动作和单行筛选工具栏；保留目录路径、嵌套面包屑、核心视频/书籍表、下级海报及其他资源顺序。数量计入当前展示的子节点和直属核心文件/附件，快筛只影响原来支持快筛的节点，不改变表格的数据范围。长名称可换行，路径省略时可悬停查看完整内容。六类类型 Tabs 仍只在全部资源；各库创建时的不可变类别及识别模式保持。
+
+海报紧凑 footer 和窗口外观快捷设置已是共享实现，所有资源库、详情内下级海报及收藏页继续复用，没有新增封面加载路径或业务 state。此次没有更改 Rust、迁移、媒体文件、Skill、版本或正式发布产物。检查通过：117 项前端测试、278 项 Rust 测试（10 项默认忽略）、135 项项目校验、rustfmt、严格 Clippy；另通过 195 项资源库浏览器检查（24 组语言/主题/窗口组合及 12 组类别/识别模式）和原有 135 项浏览器回归。
+
+已用标准 Windows 构建脚本重新编译当前工作树主程序及 helper，隐私路径检查通过；在隔离打包目录运行原 Portable 打包脚本，未覆盖正式包。本地包 `bundle/local-test-20261009-100839/M2Shelf-Portable-0.5.11-x64.zip`，SHA-256 `CE4C660CE46258C24317FB41EE192609661795A25717A9B58018D92561156BF7`。解包后的最新版主程序已在正常 Windows 环境中启动并确认窗口响应；浏览器页面截图与该原生启动检查分别记录，未宣称完成实际 WebView 全页面交互验收。详情见 `UI_TARGETED_REFRESH_20261009.md`。
+
+## 2026-10-09 全部资源、海报 footer 与窗口栏定向更新（本地未发布）
+
+直接在本地最新工作树实施三个局部变化，未采用此前任何整套独立原型。`MediaCard` 保持图片框、左上角角标、共享图片/加载/缓存 hook，标题仍最多两行；删除独立标签行，数量与一个标签及 +N 共用 20px 元信息行。1280×800 同数据夹具中图片框仍为约 166.59×249.89px，footer 从约 102px 降为 72px，网格横纵间隔未改。
+
+`AllResourcesPage` 使用标题/动态数量与三个原管理动作 → 六类 Tabs → 快筛/标签/排序/视图的结构。沿用 App 的 `allMediaKind`、`allFilter`、`allTagFilterId`、`allSort`、`viewMode` 和导航快照；旧 VIDEO 筛选兼容、聚合来源和编辑语义保持。新增短标签四语言键，不改其他页面筛选器。
+
+窗口栏仍为 36px 自绘 caption，仅品牌区域可拖拽，最小化/最大化/关闭原调用保持。新增主题和语言共享 Select。`AppSettingsProvider` / `SettingsStore` 将设置页原序列化自动保存提升为应用生命周期的单一完整设置 writer：初始化读取去重，乐观发布、修订保护、保存合并与失败回滚共用同一状态；设置页卸载后保存继续，App 统一应用外观和报告失败。首次使用创建库后的播放器路径同样通过该队列并等待保存，避免另一路旧快照覆盖快捷设置，原创建顺序保持。设置保存回执时序、缓存统计独立加载及旧目录请求保护保持，无新依赖、SQL/IPC 或数据库迁移。
+
+验证结果和私有截图见 `UI_TARGETED_REFRESH_20261009.md`。本轮未修改 Rust/数据库/媒体/封面渲染或权限，未签名、发布、自动提交或切换分支；旧项目 Skill 保持原文。
+
+## 2026-10-08 单一成品封面与文案清理（本地未发布；标签布局已由 2026-10-09 更新）
+
+用户明确改为参照 OpenComic 的缓存图片直接显示方案，取代预览图到高清 Canvas 的二次切换。已核对上游缓存和模板源码（提交见 D23）。`PosterImage` 精简为单个异步图片，提前确定 cover/contain；删除渐进缩放队列、滚动结束重绘、Canvas 及最终位图缓存。Rust 现有 v2 持久缩略图、DPR 选档、四路 IPC、实际滚动根预热、精确 URL LRU 和修订保护不变，有效成品封面直接复用，无缓存版本升级或全量重建。
+
+网格类型角标移到海报左上角；本轮原设 22px 独立标签行，已由 2026-10-09 的定向更新替代为数量/标签共用 20px 元信息行。两种布局均保持标签增删不改变图片框或网格行高，完整标签通过悬停可见。滚动容器预留固定滚动条槽。删除全部资源/最近打开/收藏夹介绍、资源库 eyebrow、设置的内置阅读默认说明/外观说明/缓存说明，并缩短 Bangumi 和启动扫描的指定尾句；四语言同步删键。设置格式支持和添加库提示保留。
+
+验证：TypeScript/生产构建、108 项前端测试、278 项 Rust 测试（10 项专用/外网测试默认忽略）、135 项项目校验、rustfmt、严格 Clippy 均通过。浏览器实际组件夹具在四语言、深浅主题及 900×640 / 1280×800 / 1920×1080，分别使用 DPR 1 / 1.25 / 2，完成 24 组 161 张卡片的快滚/回滚/列表/最近/收藏/资源库/设置检查。可见图片元素替换 0、可见裁切方式变化 0、海报框宽度变化 0；空标签/长标签的卡片、文字区和网格行位置逐项相等，无页面脚本错误或横向溢出。另检查短标签保持完整、长标签在固定行内省略。浏览器夹具和原生后端测试分别记录，不冒充实际 Windows WebView 交互验收；未重启用户现用程序。未修改媒体、数据库结构、版本、Logo、公钥或正式发布产物。
+
+标准 Windows 脚本完成主程序/helper 构建；最终生产资产确认无旧 poster preview/Canvas 标记，包内版本/构建路径隐私/五文件 ZIP 解包与逐项摘要通过。本轮本地未签名测试包：`bundle/local-test-20261008-230502/M2Shelf-Portable-0.5.11-x64.zip`，SHA-256 `E87B2E26DD70EF7420E3BA3D01A25E49F56EEC829F7D6EFA011E47715E86EDBF`。正式 Portable/边车、公钥和 Logo 摘要与本轮开始一致。
+
+## 2026-10-08 PNG 内容识别、分卷封面范围与文案精简（本地未发布）
+
+在原封面修正之上增量修改。已定位一项实际失败：PNG 扩展名的页面实际是 JPEG，旧 `comic_reader::image_dimensions` 按扩展名分支拒绝。扫描的图片格式/自然排序不变，原生读取改按受支持的二进制签名识别；首图与 EPUB 图片返回实际 MIME，前端漫画 Blob 交由图片解码器识别。保留 Root/handle/revision、CBZ entry/CRC、容量与尺寸边界。真实索引副本的该项原生读取和完整图片解码通过（181,528 bytes，980×1487）；只读来源，未写入真实数据库或媒体。
+
+`comics::PRESENTATION_CTE` 以可见 Root 子节点为锚点，沿现有 `owned_nodes` 的人工分类和绑定边界计算折叠目录；`POSTER_ELIGIBILITY` 共用于后台封面分页、数量、失败诊断和重试。扫描后和现有资源匹配也排除折叠目录。系列/独立作品及不同绑定版本继续匹配，DOUJIN/电子书行为不变；不删除已有绑定、封面、进度或书签。实际索引副本由 500 个后台候选缩至 242 个，排除 258 个详情内目录；SQL 检查约 39ms，无媒体目录枚举。完成检查点仍直接复用；只有保存的失败数大于零时校正当前可见失败范围，数值未变不重写检查点，有效派生文件不因这次范围变化重建。没有新增迁移或 IPC。
+
+删除封面生成/失败区域的长说明、重建索引的媒体安全说明，以及设置、标签、收藏夹中的同类重复文字；状态、原因、重试和必要确认保留。四语言同步删除不用的键，现有 Favorites 文案静态校验按新的无重复说明要求更新；添加库格式指引不变。
+
+验证：TypeScript/生产构建、107 项前端测试、278 项 Rust 测试（10 项专用/外网检查默认忽略，其中来源失败图片探针已单独运行）、135 项项目校验、rustfmt、严格 Clippy 通过。浏览器实际组件夹具完成四语言、双主题、900×640 / 1280×800 / 1920×1080、DPR 2 的 24 组检查，覆盖精简说明、失败原因/重试/停止轮询、详情分卷行及 PNG 后缀的 JPEG 页面解码，无页面错误或横向溢出。未重启用户 Windows 窗口，浏览器夹具与原生后端检查不能冒充实际 WebView 交互验收。版本保持 0.5.11，无提交、推送、签名或发布。
+
+标准 Windows 脚本构建主程序/helper 完成，版本、最终可执行文件构建路径隐私、五文件 ZIP 解包及逐项摘要通过。本轮本地未签名测试包：`bundle/local-test-20261008-221950/M2Shelf-Portable-0.5.11-x64.zip`，SHA-256 `98DBE74BBFAF1FE05430F4DAC0F8DDFFE24F495DD99F377747D1A563A0E47859`。派生版本仍为 v2，沿用已有有效尺寸；正式 Portable/边车、生产公钥和原 Logo 摘要未变。
+
+## 2026-10-08 封面完成复用、断点续跑与失败重试（本地未发布）
+
+保留当前分支和全部未提交工作。实测原先四档全部无损编码接近 512 MiB 配额，后台淘汰后又补回；完成状态仅存内存，重启重新全量检查。这轮参照 OpenComic 的质量 95 JPEG 磁盘缩略图，以及 Jellyfin 的来源/参数版本键命中复用，调整现有有界缓存，不引入外部服务或运行依赖。普通不透明封面使用质量 95 JPEG、透明封面保持无损 WebP；EXIF/ICC、等比尺寸、DPR 选档和原图不变。派生键升至 v2，升级只删除严格命名的普通 v1 派生文件，其他目录/原图不参与。后台不淘汰已生成图片来补其他档位；容量不足独立记录暂缓，浏览按需生成仍受原 4096 项/512 MiB 上限和 LRU 保护。
+
+新增迁移 0022，只添加 `poster_cache_failures`，Node 外键删除级联；`poster_cache_checkpoint` 是独立 settings 键，不进入 AppSettings 全量快照。每项结果和 keyset 游标同事务保存；启动完成且无失败时仅恢复该记录，不 COUNT/遍历 Nodes/原图或缩略图目录；已有失败仅校正当前 SQL 候选范围，不重新读取图片，未完成任务从游标继续。缓存切换/清理取消旧任务，检查点写入复用缓存读屏障，清理写屏障同时清除记录和内存状态，避免旧失败数留在界面。扫描/匹配/封面变化检查缺项，不重写有效尺寸；启动增量扫描报告目录未变化时沿用 Resume，不重新开始封面检查。保留单生成门禁，容量计数仅在共享写入代次改变时刷新，避免为每个档位重复枚举目录。
+
+`PosterCacheProgress.tsx` 独立轮询运行快照，每秒至多一个请求，其他设置字段不因进度重绘。失败诊断按需获取前 100 项，显式重试处理全部失败 Nodes；任务级错误从已保存位置续跑。查看原因/重试、错误阶段及图片无效指引覆盖四语言，操作使用共享按钮和语义主题；卸载/缓存切换/清理丢弃迟到诊断。无新桌面权限或媒体写入。
+
+本地优化版 Rust 实际索引副本检查：500 项，生成 1,524 个派生文件，共 286,358,925 bytes（约 273 MiB），首次约 79.3 秒，容量暂缓 0；重新创建 Database 并恢复完成状态约 1,322 微秒，目录文件/大小/修改时间完全一致，重写 0 项。1 项来源首图返回 `COMIC_IMAGE_INVALID`，记录原因并可重试，未把该项误报为生成成功。此检查只读实际来源，数据库/派生输出均为开发私有副本，不修改真实索引、缓存或媒体；1.3ms 是后台状态恢复时间，不能表述为整程序启动或首次绘制耗时。持久小图仍需首次磁盘读取/解码，路由返回沿用内存缩略图 URL LRU，后续已移除 Bitmap/Canvas 路径（见 D23）。
+
+验证：TypeScript/生产构建、106 项前端测试、276 项 Rust 测试（9 项专用/外网检查默认忽略，其中真实索引副本检查已单独运行）、135 项项目校验、rustfmt、严格 Clippy 通过。浏览器实际组件夹具在四语言、深浅主题、900×640 / 1280×800 / 1920×1080、DPR 2 下完成 24 组失败详情/重试/离页停止轮询检查，无页面错误或横向溢出。未重启用户原有 Windows 窗口，浏览器夹具与原生后端检查不等同最终 WebView 交互验收。
+
+标准 Windows 脚本已构建并核验最终主程序/helper，版本、构建路径隐私和五文件 ZIP 解压摘要通过。最终本地未签名测试包：`bundle/local-test-20261008-214332/M2Shelf-Portable-0.5.11-x64.zip`，SHA-256 `2B6C16902D36E8BE8314B2F950B9D405EC54DA24F79267E1D94268016C43D01C`。首次运行此版需要一次 v1→v2 派生格式转换，之后持久复用；原封面和媒体不变。正式 Portable/边车、生产公钥和原 Logo 摘要保持，版本仍为 0.5.11；无提交、推送、签名或发布。
+
+## 2026-10-08 设置加载解耦与封面后台进度（本地未发布）
+
+保留 `ui/global-visual-refresh` / `f7f5c1e` 的已有未提交工作。设置页原先把 AppSettings 与缓存统计放在同一个 `Promise.allSettled` 中，四档持久缩略图增加待统计文件后，整页需要等待磁盘枚举；同步原生命令还占用命令执行线程。现在首次显示只等待设置，缓存统计独立加载并移到 `spawn_blocking`。活动缓存位置使用轻量配置/Root 路径查询，验证三个子目录后只统计严格命名的普通文件，跳过链接、目录及外来文件，不逐文件重复 canonicalize。自动保存不等待统计，缓存切换/清理/卸载通过请求代次丢弃旧结果，原清理与写入边界保持。
+
+原后台缩略图队列维护运行快照，并通过后续迁移 0022 持久保存游标、结果和诊断；单个 worker 保留排队、处理中、完成、停止、失败以及已处理/总数/失败数；每个任务有独立取消标记，清理/切换位置使旧任务结果失效。候选总数由 SQLite 轻量 COUNT 获取，处理包含缓存命中、缺失补齐及失败项，不声称全部尺寸永久驻留。`get_poster_cache_status` 只读取内存快照，无文件枚举或新权限。后台持久化与完成复用见本页最新修正。设置的缓存分区显示“适配封面”进度，每秒串行查询，离开设置停止查询但后台继续；完成时补刷缓存统计。手动扫描/匹配成功提示到设置查看，启动后台扫描仍保持安静。新增文案通过 `posterMessages.ts` 覆盖四语言，进度使用共享语义主题。
+
+验证：TypeScript、生产构建、102 项前端测试、272 项 Rust 测试（8 项既有专用/外网测试忽略）、135 项项目校验、rustfmt 与严格 Clippy 通过。新增测试覆盖统计和进度均挂起时仍可编辑设置、清理和位置切换后的旧统计隔离、保存不等待统计、进度更新及离页停止轮询、扫描/匹配完成提示，以及原生后台四档生成/命中/源缺失失败计数/取消和 1024 项缓存统计。浏览器夹具覆盖四语言、双主题、三种窗口的 24 组加载/进度更新场景，以及 49 组状态/双请求挂起检查；模拟统计延迟 1800ms 时设置显示约 103～276ms，不能等同真实 Windows WebView 性能。深浅主题渲染已核验。未重启用户现有原生窗口，原生 UI 交互仍待最终测试包验收。
+
+标准脚本已构建最终 x64 主程序/helper，并验证版本、构建路径隐私及五文件解压摘要。本地未签名测试包为 `bundle/local-test-20261008-181708/M2Shelf-Portable-0.5.11-x64.zip`，SHA-256 `2FE49F0EA776B90ED935A020875371916608E3457FC89782A4E85A67DC30AA43`。本轮版本仍为 0.5.11，未提交、推送、签名或发布；正式 Portable/边车、生产公钥与原 Logo 摘要保持不变。
+
+## 2026-10-08 持久海报缩略图与自动选档（本地未发布）
+
+在当前 `ui/global-visual-refresh` / `f7f5c1e` 未提交工作上增量修改，保留既有 UI 与媒体行为。新增 `poster_cache.rs`，采用 `image` 0.25.10 的 JPEG/PNG/WebP 解码、EXIF 方向和 ICC 保留、Lanczos3 等比缩小；后续编码修正为普通图质量 95 JPEG、透明图无损 WebP；256/384/512/768px 四档，小原图不放大。原缓存文件路径/长度/修改时间或索引首图 revision 参与带版本的派生键，带摘要容器防止损坏缓存继续使用，同目录暂存后原子替换。
+
+原生派生文件仅位于验证过的应用封面缓存 `posters` 子目录，每项最多 4 MiB，共限 4096 项/512 MiB，前台按需最近使用淘汰、后台容量不足暂缓，清理复用既有缓存屏障且只识别本应用严格命名文件。一个合并后台队列通过 SQLite keyset 分批补齐，启动恢复已完成状态或中断游标，扫描/匹配完成、封面更新和缓存位置切换检查变化；不阻塞扫描完成，切换位置或清缓存取消旧任务。前台命中直接读小图，冷缺失通过异步 Tauri 命令的 blocking worker 重建；失败保留既有原封面回退。漫画首图仍复用 Root/revision/句柄校验，无媒体写入或新权限；迁移 0022 仅保存任务失败诊断。
+
+`usePosterThumbnailSize.ts` 用一个共享 ResizeObserver 及显示缩放监听，按 CSS 宽度 × DPR（≤2）向上选档；列表、搜索和详情统一传入 width。数据 URL LRU 与请求去重按源修订和档位区分，升级尺寸时保留同源预览；原有四路传输、两路绘制、128/32 MiB 预览、128/128 MiB Bitmap、64 项 Canvas 工作集和滚动延后绘制保持。持久缓存减少重复大图解码和缩小，不保证完全没有读取或初次绘制。
+
+验证：TypeScript、生产构建、96 项前端测试、270 项 Rust 测试（8 项既有专用/外网测试忽略）、135 项项目校验、rustfmt 与严格 Clippy 通过。原生临时目录测试覆盖四档尺寸/透明度/方向、原图不变、数据库重开复用、源变化和损坏重建、配额与安全清理、资源库/链接目录拒绝；真实索引扫描测试验证同人首图缓存及重扫失效。实际组件浏览器夹具完成四语言/双主题/三尺寸的 316 项页面检查，以及 100%/125%/150%/200% × 三窗口的 12 组选档与 180 张海报滚动恢复检查，Canvas 工作集未超过 64；另以 DPR 仿真加 resize 事件验证运行中换档，期间未出现空白帧。上述浏览器证据不等同真实跨显示器或原生 WebView 验收，没有重启用户正在使用的窗口。
+
+标准 Windows 脚本构建主程序/helper 并通过版本、构建路径隐私和 ZIP/解压摘要验证。本地未签名测试包为 `bundle/local-test-20261008-174822/M2Shelf-Portable-0.5.11-x64.zip`，SHA-256 `0519205664C17805AAEDBC9FA8CBEEADEF753B046846B97EE1B786846072AFE3`。正式 Portable/边车、生产公钥和原 Logo 摘要保持；版本仍为 0.5.11，没有提交、推送、签名或发布。
+
+## 2026-10-08 文案、计数字体与快速滚动（本地未发布）
+
+首次使用页移除欢迎语和宣传标题，保留品牌、目录/播放器选择及只读说明。书籍格式支持说明从详情移到设置“内置阅读”，该分区说明移除外部播放器文案，添加资源库说明保持；四语言同步。侧栏数字显式优先 Segoe UI、16px/600 字重、20px 行高，避免中文 Windows 的 system-ui 回退到微软雅黑 UI Bold。
+
+`posterViewportObserver.ts` 按内部滚动根与 margin 共享两个可见性观察器，批量分发并在最后订阅离开时销毁；64 项工作集、预热/保护距离和源图/Bitmap 缓存上限保持。`posterScrollActivity.ts` 按根共享被动滚动监听，快速滚动时把新高质量缩放延至停止约 120ms 后，现有 Canvas 和源预览保留；绘制仍最多两个，源读取仍最多四个。`PosterImage` 不重复绘制已同步恢复的 Bitmap，并复用 ResizeObserver 的物理尺寸，减少强制布局读取。没有新增数据库迁移、权限或媒体写入。
+
+验证：TypeScript、生产构建、93 项前端测试、265 项 Rust 测试（8 项既有专用/外网测试忽略）、135 项项目校验、rustfmt 与严格 Clippy 通过。实际组件浏览器夹具完成 316 项检查，覆盖四语言、深浅主题、900×640 / 1280×800 / 1920×1080、文案位置、添加库说明和 100% / 125% / 150% / 200% 缩放下实际 Segoe UI Semibold 字体。180 张虚构海报、125% 缩放、4 倍 CPU 限速的生产构建滚动压测中，单次旧基线平均帧耗时 69.3ms，最终三次为 31.3–33.6ms；这是浏览器夹具压力测试，不代表真实用户库或原生 WebView 帧率。滚动停止后 10 张可见海报全部恢复高清，高清 Canvas 工作集保持 64 项，无页面错误。
+
+标准脚本完成最终 x64 主程序/helper 构建、版本和构建路径隐私检查、ZIP 与五文件解压摘要验证。本地未签名测试包为 `bundle/local-test-20261008-170150/M2Shelf-Portable-0.5.11-x64.zip`，SHA-256 `F2D74A4048A7BC2CE9EEFA3F5FA8DE33E1AD8C73E9A2D68FA339EE1097337872`。未重启用户正在操作的原生窗口，最终包尚未进行原生 WebView 交互验收。正式 Portable/边车、生产公钥和原 Logo 摘要保持；版本仍为 0.5.11，没有提交、签名或发布。
+
+## 2026-10-08 共享控件、同人本与 TXT（本地未发布）
+
+沿用 `ui/global-visual-refresh` / `f7f5c1e` 当前基线，保留既有 UI 与功能。增加同人本库、TXT 与文字阅读设置，不改版本、Logo、生产公钥或更新协议；没有签名、提交、推送或发布。
+
+`Select.tsx` 统一所有下拉菜单（类型、标签、排序、范围、设置及阅读器/书签），主题化固定位置弹出层仍在当前 modal 子树，支持 ARIA、方向键、Home/End、Esc 和 typeahead，保留原生 change 契约。label 内的菜单项阻止默认 label 转发点击，避免选择后重开。阅读器快捷键让位于 combobox/listbox。搜索复合框只有一层焦点提示，强调以 Logo 红 #A13436 为基准，深色文字采用同色系亮色；浅色侧栏灰色 hover 提高对比。视频/书籍绑定条共用普通标题与官方跳转提示，漫画子目录改为共享 PosterGrid。
+
+迁移 0021 给 Root 添加不可变 doujin_library 标记、书籍添加 text_encoding；不重建旧表/外键，不丢弃绑定、手工 metadata 或记录。当时 DOUJIN 属于 COMIC 存储家族并全面排除 Bangumi；2026-10-09 由 migration 0024 和 D54 的独立策略/手动绑定替代。类型筛选与添加库一致；旧 VIDEO 的绑定 type 可拆分，无绑定内容仍在两个视频筛选可访问。首图封面回退从索引找到自然排序 page 0，复用 revision/Root/句柄/图片校验，预览最多 8 MiB、原生四请求门禁与既有 poster LRU；缓存/手工封面优先，不写源文件。没有可用首图的 PDF 等作品显示普通占位，不误报缓存封面损坏；本地首图缓存键包含扫描/源修改时间，重扫刷新且丢弃旧请求的迟到结果。
+
+`text_books.rs` 以 32 MiB 源限额识别 UTF-8、UTF-16 与 GB18030/GBK，按最多 8192 字节稳定范围并保存 SHA-256，单段读取核验摘要后输出安全文字块。重扫保持原 ID、进度、书签，TXT 不重复出现在附件；book 增量配置提升到 4，使旧库也重新识别。`text_reader_settings.rs` 的有界结构独立写 settings.text_reader，不被完整 AppSettings 保存覆盖。`TextReaderControls` 与 EPUB/TXT 共用字体、对齐、间距、宽度/边距、背景与基础滤镜；CSS columns 按真实可用视口分页，窗口/字号变化重排，滚动模式阅读当前章节/文本段。进度/书签持久定位章节/文本段，当前不持久化段内屏号。未复制 OpenComic 源码、资产或字体。
+
+验证：TypeScript、生产构建、87 项前端测试、265 项 Rust 测试（8 项既有专用/外网测试忽略）、135 项项目校验、rustfmt 与严格 Clippy 通过。实际组件浏览器夹具 821 项检查覆盖四语言、两主题、900×640 / 1280×800 / 1920×1080、五类添加库/六项筛选、菜单键盘、焦点/hover、TXT/EPUB 重排、背景与设置写入，以及滤镜作用于有界正文视口、同时覆盖文字/背景且不影响工具栏。默认无滤镜不创建额外合成层。真实 Windows WebView 在 1546×1032 窗口验证类型弹出菜单、漫画筛选、详情/下级续作海报和同人本添加说明及两种识别选项；取消添加，没有产生测试资源库。现有应用索引先用 SQLite 只读连接备份，实际 migration 21 启动升级成功，旧绑定、标签、收藏、书籍、进度和书签逐列核对保持。TXT 编码/读取/重扫与同人本无网络路径由 Rust 测试覆盖，文本阅读设置与重排由真实组件浏览器夹具覆盖；本轮没有新增 TXT/同人本的真实用户库端到端验收。
+
+标准脚本构建最终 x64 主程序/helper，并检查版本、构建路径隐私、ZIP 与五文件解压摘要。最终本地未签名测试包为 `bundle/local-test-20261008-110354/M2Shelf-Portable-0.5.11-x64.zip`，SHA-256 `A5AF8F83DECAD38FB9F05910CD09BE0D2EC5A73BB414EC11052A8B071C3C73EE`。本轮较早临时包已在真实 WebView 启动；最终包进一步移除重复外链箭头、修正本地封面缺失/刷新状态和文字滤镜边界。这些最终修正通过前端回归/浏览器检查，尚未重启正在由用户操作的原生窗口。正式 Portable/边车、生产公钥和原 Logo 摘要保持；版本仍为 0.5.11，含 additive migration 21，未签名或发布。
+
+## 上一轮：2026-10-08 全局视觉更新
 
 已有全部功能修复先保存在 `backup/ui-before-global-refresh-20261008` / `47dd0fa`，当前工作分支为 `ui/global-visual-refresh`。本轮只更新表现层、相关静态验证及耐久文档，Rust、IPC、数据结构、扫描和阅读逻辑没有变化。未推送、合并、签名或发布，版本仍为 0.5.11。
 
@@ -56,9 +275,9 @@ Migration 0020 移除旧 COMIC/FOLDER-only 触发器，统一识别模式不可�
 
 ## 漫画资源库与内置阅读器（本地未发布）
 
-后续本地修订：migration 0019 增加不可变 `book_library_kind` 和 `video_subject_scope` 子类型列，保留原 Root 表/外键/身份及旧 VIDEO 混合行为；DTO 映射为 COMIC/EBOOK 与 ANIMATION/LIVE_ACTION。新库四类，Bangumi 查询、缓存、评分和写入按 1/2/6 隔离，旧库及绑定不改写。重分类在全部当前列齐备的 migration 19 内事务执行。
+后续本地修订：migration 0019 增加不可变 `book_library_kind` 和 `video_subject_scope` 子类型列，保留原 Root 表/外键/身份及旧 VIDEO 混合行为；DTO 映射为 COMIC/EBOOK 与 ANIMATION/LIVE_ACTION。当时新库五类（含 DOUJIN）；现增加独立 ARTBOOK，并以 migration 0024 扩展 Root 策略。Bangumi 查询、缓存、评分和写入继续按 1/2/6 隔离，同人本默认关闭自动匹配但允许手动绑定，旧库及绑定不改写。为兼容当前 DTO，尚未完成 migration 19 的旧数据库重分类推迟到全部当前 DTO 列齐备的 migration 24 事务中执行；已经完成旧重分类的数据库不重复执行。
 
-书籍标题保留卷号和 `:re`，具体子版清除会压过自身的父标题候选，最终硬冲突拒绝错误卷/续作。卷号支持中文和全角数字；通用目录只有一本书时保留该文件名的版本证据，多册目录不继承首册卷号。普通流程不替换旧绑定，历史错误需显式重新匹配所选。普通 ZIP 不索引为书，CBZ/PDF/EPUB 和图片目录保留；书籍增量配置版本提升以刷新旧识别。核心书表复用视频表格 class，附件 SQL 排除同一核心路径及直属图片页，子目录在其他资源区只展示一次；源码不删除源文件。
+书籍标题保留卷号和 `:re`，具体子版清除会压过自身的父标题候选，最终硬冲突拒绝错误卷/续作。卷号支持中文和全角数字；通用目录只有一本书时保留该文件名的版本证据，多册目录不继承首册卷号。普通流程不替换旧绑定，历史错误需显式重新匹配所选。普通 ZIP 不索引为书，CBZ/PDF/EPUB/TXT 和图片目录保留；书籍增量配置版本提升以刷新旧识别。核心书表复用视频表格 class，附件 SQL 排除同一核心路径及直属图片页，子目录在其他资源区只展示一次；源码不删除源文件。
 
 PDF `MAX_PDF_BYTES=512 MiB` 与单图片限制分开。`read_pdf_range` 复用四请求门禁、Root/打开句柄/修订/元数据前后校验，每次 ≤2 MiB；PDF.js NativePdfTransport 串行请求并在卸载中止，禁止自动整本预取。默认 fitPage 同时考虑视口宽高、DPR ≤2 / Canvas ≤16MP。文档与漫画共用设置面板入口和书签状态样式，统一 SVG 设置图标；路径去掉橙色库徽标，添加库去掉图标/识别 eyebrow。8MP 显示预览降低高分辨率漫画缓存成本，原始索引尺寸与源文件不变。
 
@@ -165,7 +384,7 @@ Vite 的开发 watcher 排除原生源码、Portable 打包、临时测试、工
 - `lib/api.ts`：唯一的 Tauri invoke 封装；
 - `lib/i18n.tsx`：`zh-CN`、`en-US`、`ja-JP`、`ko-KR` 文案及标题选择；
 - `components/UpdateBanner.tsx`、`UpdateDialog.tsx`：更新可用提示，以及紧凑的说明、下载进度和安装确认对话框；设置/About 页面只保留同层级的自动检查开关与手动检查按钮；
-- `components/PosterImage.tsx`、`lib/poster.ts`、`hooks/useCoverDataUrl.ts`、`hooks/usePosterViewportLifecycle.ts`：缓存图加载以及主列表/详情共用的 DPR 对齐高质量重采样；128 项/约 32 MiB 源图 LRU 提供即时预览，128 项/128 MiB 最终位图 LRU 跨页面同步恢复清晰 Canvas，64 项挂载 Canvas 工作集独立受限，列表以内部滚动容器为观察根并使用预热区和保留区；
+- `components/PosterImage.tsx`、`lib/poster.ts`、`hooks/useCoverDataUrl.ts`、`hooks/usePosterViewportLifecycle.ts`：直接显示 Rust 准备的 DPR 档位本地缩略图；128 项/约 32 MiB data URL LRU 跨页面复用，64 项目标控制保护区外请求保留，列表以内部滚动容器预热；无前台 Canvas、位图 LRU 或二次重绘；
 - `pages/`：Onboarding、All Resources、Browse、Search、Recently Watched、Favorites、Work Detail、Settings；
 - `components/`：海报网格、文件列表、标签筛选、上下文菜单、编辑模式和对话框；
 - `styles.css`：语义主题变量、布局和响应式样式。
@@ -271,7 +490,7 @@ Bangumi 封面下载到活动应用缓存，Node 保存实际缓存路径和失�
 
 ### 浏览与导航
 
-Rust 返回已 hydrate 的 Node DTO；列表所需的 Bangumi 绑定与用户标签按最多 500 个 Node 分块批量查询，避免全部资源和目录浏览退化为每项两次附加 SQL。`Database::search` 也在同一个 deferred SQLite 读事务中完成 Node 命中、文件命中及其所属 Node 补齐、批量绑定/标签 hydrate、自然排序与最终截断，确保本地搜索结果来自同一快照且不出现逐项查询。前端按当前语言选择标题；主列表、详情与搜索结果共用 `PosterImage`，封面 IPC 保持 4 路并发，并用 128 项/约 32 MiB 字符预算的 LRU 缓存精确版本 data URL。页面切换时，已排队读取继续完成并预热此跨页缓存；同一 Node 的旧 revision 即使晚完成也不能重新写入 LRU。命中时先同步显示普通源图预览。渐进重采样后的 ImageBitmap 以 128 项和 128 MiB 双上限另行跨页缓存，命中时在 `useLayoutEffect` 中为实际可见卡片同步画回 Canvas，因此返回页面无需再次解码和缩放；render generation 阻止旧异步任务覆盖新封面。主列表以 `.content-scroll` 为显式观察根，在上下 1000 px 内预热、1800 px 内保护；搜索结果分别使用 800/1400 px。挂载 Canvas 另保留在跨列表共享的 64 项目标工作集；超限时只淘汰最旧且位于保护区外的 Canvas，保护区内项目允许暂时软超限，Canvas 不在时仍显示源图预览。源图 LRU 达到容量后淘汰最旧项，并向已经释放的挂载卡片发送一次性精确失效通知，防止 data URL 与监听引用无界积累。大图重采样首级即裁剪，之后最多约 2:1 渐进缩小。全部资源、搜索、最近观看、收藏夹和每个 Root 各有会话快照。集合与 Root 加载器分别维护请求代次，只有最新响应可提交数据或关闭 loading；收藏夹 folders/nodes 共享 epoch 与 pending 集合，避免一个旧请求提前结束另一个请求的 loading。历史返回恢复快照；资源库与收藏夹恢复会重新查询当前行，避免把旧业务数据写回 UI。
+Rust 返回已 hydrate 的 Node DTO；列表所需的 Bangumi 绑定与用户标签按最多 500 个 Node 分块批量查询，避免全部资源和目录浏览退化为每项两次附加 SQL。`Database::search` 也在同一个 deferred SQLite 读事务中完成 Node 命中、文件命中及其所属 Node 补齐、批量绑定/标签 hydrate、自然排序与最终截断，确保本地搜索结果来自同一快照且不出现逐项查询。前端按当前语言选择标题；主列表、详情与搜索结果共用 `PosterImage`，封面 IPC 保持 4 路并发，并用 128 项/约 32 MiB 字符预算的 LRU 缓存精确版本 data URL。页面切换时，已排队读取继续完成并预热此跨页缓存；同一 Node 的旧 revision 即使晚完成也不能重新写入 LRU。命中时同步复用小缩略图 URL，由单个图片元素显示；先确认图片尺寸/裁切再显示。前端不再执行渐进重采样、ImageBitmap/Canvas 缓存或停滚后替换。主列表以 `.content-scroll` 为观察根，在上下 1000 px 内预热、1800 px 内保护；搜索结果分别使用 800/1400 px。共享 64 项请求保留目标仅淘汰保护区外的最旧请求订阅；已显示图片继续保留，直到精确 data URL LRU 容量淘汰通知释放，以避免引用无界积累。全部资源、搜索、最近观看、收藏夹和每个 Root 各有会话快照。集合与 Root 加载器分别维护请求代次，只有最新响应可提交数据或关闭 loading；收藏夹 folders/nodes 共享 epoch 与 pending 集合，避免一个旧请求提前结束另一个请求的 loading。历史返回恢复快照；资源库与收藏夹恢复会重新查询当前行，避免把旧业务数据写回 UI。
 
 Bangumi 手动弹窗为每次预填、搜索和绑定维护 Node ID 与请求代次。关闭弹窗、切换 Node 或手动修改关键词会使旧异步结果失效，旧预填不会覆盖用户输入，旧搜索结果不会显示到新关键词或新作品，旧绑定回调也不会关闭或刷新新作品的弹窗；绑定提交期间输入保持锁定。
 

@@ -1,0 +1,1322 @@
+{
+  "id": 3,
+  "title": "Two series plus 100 independent PDFs",
+  "input": {
+    "root_id": "fixture-root",
+    "media_kind": "COMIC",
+    "complete": true,
+    "entries": [
+      {
+        "path": "系列甲",
+        "kind": "DIRECTORY",
+        "hint": null
+      },
+      {
+        "path": "系列甲/第01卷.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "系列甲/第02卷.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "系列乙",
+        "kind": "DIRECTORY",
+        "hint": null
+      },
+      {
+        "path": "系列乙/第01卷.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "系列乙/第02卷.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立000.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立001.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立002.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立003.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立004.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立005.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立006.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立007.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立008.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立009.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立010.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立011.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立012.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立013.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立014.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立015.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立016.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立017.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立018.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立019.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立020.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立021.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立022.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立023.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立024.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立025.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立026.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立027.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立028.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立029.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立030.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立031.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立032.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立033.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立034.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立035.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立036.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立037.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立038.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立039.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立040.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立041.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立042.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立043.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立044.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立045.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立046.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立047.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立048.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立049.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立050.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立051.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立052.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立053.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立054.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立055.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立056.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立057.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立058.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立059.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立060.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立061.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立062.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立063.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立064.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立065.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立066.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立067.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立068.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立069.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立070.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立071.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立072.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立073.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立074.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立075.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立076.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立077.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立078.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立079.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立080.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立081.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立082.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立083.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立084.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立085.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立086.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立087.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立088.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立089.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立090.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立091.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立092.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立093.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立094.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立095.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立096.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立097.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立098.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "独立099.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      }
+    ]
+  },
+  "expected": {
+    "units": [
+      {
+        "path": "系列甲/第01卷.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "系列甲/第02卷.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "系列乙/第01卷.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "系列乙/第02卷.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立000.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立001.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立002.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立003.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立004.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立005.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立006.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立007.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立008.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立009.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立010.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立011.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立012.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立013.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立014.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立015.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立016.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立017.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立018.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立019.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立020.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立021.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立022.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立023.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立024.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立025.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立026.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立027.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立028.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立029.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立030.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立031.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立032.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立033.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立034.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立035.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立036.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立037.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立038.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立039.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立040.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立041.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立042.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立043.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立044.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立045.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立046.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立047.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立048.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立049.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立050.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立051.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立052.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立053.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立054.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立055.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立056.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立057.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立058.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立059.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立060.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立061.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立062.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立063.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立064.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立065.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立066.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立067.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立068.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立069.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立070.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立071.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立072.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立073.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立074.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立075.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立076.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立077.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立078.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立079.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立080.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立081.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立082.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立083.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立084.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立085.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立086.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立087.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立088.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立089.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立090.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立091.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立092.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立093.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立094.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立095.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立096.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立097.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立098.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "独立099.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      }
+    ],
+    "root_paths": [
+      "系列甲",
+      "系列乙",
+      "独立000.pdf",
+      "独立001.pdf",
+      "独立002.pdf",
+      "独立003.pdf",
+      "独立004.pdf",
+      "独立005.pdf",
+      "独立006.pdf",
+      "独立007.pdf",
+      "独立008.pdf",
+      "独立009.pdf",
+      "独立010.pdf",
+      "独立011.pdf",
+      "独立012.pdf",
+      "独立013.pdf",
+      "独立014.pdf",
+      "独立015.pdf",
+      "独立016.pdf",
+      "独立017.pdf",
+      "独立018.pdf",
+      "独立019.pdf",
+      "独立020.pdf",
+      "独立021.pdf",
+      "独立022.pdf",
+      "独立023.pdf",
+      "独立024.pdf",
+      "独立025.pdf",
+      "独立026.pdf",
+      "独立027.pdf",
+      "独立028.pdf",
+      "独立029.pdf",
+      "独立030.pdf",
+      "独立031.pdf",
+      "独立032.pdf",
+      "独立033.pdf",
+      "独立034.pdf",
+      "独立035.pdf",
+      "独立036.pdf",
+      "独立037.pdf",
+      "独立038.pdf",
+      "独立039.pdf",
+      "独立040.pdf",
+      "独立041.pdf",
+      "独立042.pdf",
+      "独立043.pdf",
+      "独立044.pdf",
+      "独立045.pdf",
+      "独立046.pdf",
+      "独立047.pdf",
+      "独立048.pdf",
+      "独立049.pdf",
+      "独立050.pdf",
+      "独立051.pdf",
+      "独立052.pdf",
+      "独立053.pdf",
+      "独立054.pdf",
+      "独立055.pdf",
+      "独立056.pdf",
+      "独立057.pdf",
+      "独立058.pdf",
+      "独立059.pdf",
+      "独立060.pdf",
+      "独立061.pdf",
+      "独立062.pdf",
+      "独立063.pdf",
+      "独立064.pdf",
+      "独立065.pdf",
+      "独立066.pdf",
+      "独立067.pdf",
+      "独立068.pdf",
+      "独立069.pdf",
+      "独立070.pdf",
+      "独立071.pdf",
+      "独立072.pdf",
+      "独立073.pdf",
+      "独立074.pdf",
+      "独立075.pdf",
+      "独立076.pdf",
+      "独立077.pdf",
+      "独立078.pdf",
+      "独立079.pdf",
+      "独立080.pdf",
+      "独立081.pdf",
+      "独立082.pdf",
+      "独立083.pdf",
+      "独立084.pdf",
+      "独立085.pdf",
+      "独立086.pdf",
+      "独立087.pdf",
+      "独立088.pdf",
+      "独立089.pdf",
+      "独立090.pdf",
+      "独立091.pdf",
+      "独立092.pdf",
+      "独立093.pdf",
+      "独立094.pdf",
+      "独立095.pdf",
+      "独立096.pdf",
+      "独立097.pdf",
+      "独立098.pdf",
+      "独立099.pdf"
+    ],
+    "series": [
+      {
+        "directory": "系列甲",
+        "title": "系列甲",
+        "members": [
+          {
+            "path": "系列甲/第01卷.pdf",
+            "volume": 1,
+            "chapter": null,
+            "role": "VOLUME",
+            "decision": "APPLY"
+          },
+          {
+            "path": "系列甲/第02卷.pdf",
+            "volume": 2,
+            "chapter": null,
+            "role": "VOLUME",
+            "decision": "APPLY"
+          }
+        ],
+        "decision": "APPLY"
+      },
+      {
+        "directory": "系列乙",
+        "title": "系列乙",
+        "members": [
+          {
+            "path": "系列乙/第01卷.pdf",
+            "volume": 1,
+            "chapter": null,
+            "role": "VOLUME",
+            "decision": "APPLY"
+          },
+          {
+            "path": "系列乙/第02卷.pdf",
+            "volume": 2,
+            "chapter": null,
+            "role": "VOLUME",
+            "decision": "APPLY"
+          }
+        ],
+        "decision": "APPLY"
+      }
+    ],
+    "directory_roles": {},
+    "diagnostics": [],
+    "editions": 0,
+    "retained_prior": 0
+  },
+  "negative_assertion": "104 sources; 102 parallel root cards; independent PDFs outside both series"
+}

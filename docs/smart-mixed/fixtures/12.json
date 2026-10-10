@@ -1,0 +1,69 @@
+{
+  "id": 12,
+  "title": "Artbook and raw image assets",
+  "input": {
+    "root_id": "fixture-root",
+    "media_kind": "ARTBOOK",
+    "complete": true,
+    "entries": [
+      {
+        "path": "某作品",
+        "kind": "DIRECTORY",
+        "hint": "WORK"
+      },
+      {
+        "path": "某作品/设定集.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "某作品/角色原画",
+        "kind": "DIRECTORY",
+        "hint": null
+      },
+      {
+        "path": "某作品/角色原画/001.png",
+        "kind": "FILE",
+        "format": "PNG",
+        "verified": true
+      },
+      {
+        "path": "某作品/角色原画/002.png",
+        "kind": "FILE",
+        "format": "PNG",
+        "verified": true
+      }
+    ],
+    "page_orders": [
+      {
+        "directory": "某作品/角色原画",
+        "pages": [
+          "某作品/角色原画/001.png",
+          "某作品/角色原画/002.png"
+        ],
+        "basis": "EXISTING_INDEXED_NATURAL_ORDER"
+      }
+    ]
+  },
+  "expected": {
+    "units": [
+      {
+        "path": "某作品/设定集.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      }
+    ],
+    "root_paths": [
+      "某作品"
+    ],
+    "series": [],
+    "directory_roles": {},
+    "diagnostics": [
+      "IMAGE_ASSETS_ONLY"
+    ],
+    "editions": 0,
+    "retained_prior": 0
+  },
+  "negative_assertion": "Raw art directory is physical assets, not another book"
+}

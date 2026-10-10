@@ -35,8 +35,6 @@ export function OnboardingPage({ onComplete, onError }: OnboardingPageProps) {
       <div className="onboarding-decoration" aria-hidden="true"><span /><span /><span /></div>
       <section className="onboarding-card">
         <div className="onboarding-brand"><img className="brand-mark" src={brandMark} alt="" aria-hidden="true" /><span><strong>{t("brand.name")}</strong><small>{t("brand.subtitle")}</small></span></div>
-        <p className="eyebrow">{t("onboarding.welcome")}</p>
-        <h1>{t("onboarding.title")}</h1>
         <p className="onboarding-lead">{t("onboarding.lead")}</p>
 
         <div className="onboarding-fields">

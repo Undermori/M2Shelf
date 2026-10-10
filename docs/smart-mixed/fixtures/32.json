@@ -1,0 +1,30 @@
+{
+  "id": 32,
+  "title": "Empty directory safe fallback",
+  "input": {
+    "root_id": "fixture-root",
+    "media_kind": "COMIC",
+    "complete": true,
+    "entries": [
+      {
+        "path": "空目录",
+        "kind": "DIRECTORY",
+        "hint": null
+      }
+    ]
+  },
+  "expected": {
+    "units": [],
+    "root_paths": [
+      "空目录"
+    ],
+    "series": [],
+    "directory_roles": {
+      "空目录": "AMBIGUOUS"
+    },
+    "diagnostics": [],
+    "editions": 0,
+    "retained_prior": 0
+  },
+  "negative_assertion": "No ghost book"
+}

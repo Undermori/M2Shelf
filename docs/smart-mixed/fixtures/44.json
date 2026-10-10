@@ -1,0 +1,124 @@
+{
+  "id": 44,
+  "title": "Main extra reference sections",
+  "input": {
+    "root_id": "fixture-root",
+    "media_kind": "COMIC",
+    "complete": true,
+    "entries": [
+      {
+        "path": "某作品",
+        "kind": "DIRECTORY",
+        "hint": null
+      },
+      {
+        "path": "某作品/正篇",
+        "kind": "DIRECTORY",
+        "hint": null
+      },
+      {
+        "path": "某作品/特典",
+        "kind": "DIRECTORY",
+        "hint": null
+      },
+      {
+        "path": "某作品/设定资料",
+        "kind": "DIRECTORY",
+        "hint": null
+      },
+      {
+        "path": "某作品/正篇/第01卷.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "某作品/正篇/第02卷.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "某作品/特典/小册子.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "某作品/设定资料/资料.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      }
+    ]
+  },
+  "expected": {
+    "units": [
+      {
+        "path": "某作品/正篇/第01卷.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "某作品/正篇/第02卷.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "某作品/特典/小册子.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "某作品/设定资料/资料.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      }
+    ],
+    "root_paths": [
+      "某作品"
+    ],
+    "series": [
+      {
+        "directory": "某作品",
+        "title": "某作品",
+        "members": [
+          {
+            "path": "某作品/正篇/第01卷.pdf",
+            "volume": 1,
+            "chapter": null,
+            "role": "VOLUME",
+            "decision": "APPLY"
+          },
+          {
+            "path": "某作品/正篇/第02卷.pdf",
+            "volume": 2,
+            "chapter": null,
+            "role": "VOLUME",
+            "decision": "APPLY"
+          },
+          {
+            "path": "某作品/特典/小册子.pdf",
+            "volume": null,
+            "chapter": null,
+            "role": "EXTRA",
+            "decision": "APPLY"
+          },
+          {
+            "path": "某作品/设定资料/资料.pdf",
+            "volume": null,
+            "chapter": null,
+            "role": "EXTRA",
+            "decision": "APPLY"
+          }
+        ],
+        "decision": "APPLY"
+      }
+    ],
+    "directory_roles": {},
+    "diagnostics": [],
+    "editions": 0,
+    "retained_prior": 0
+  },
+  "negative_assertion": "Only main section contributes volume numbering"
+}

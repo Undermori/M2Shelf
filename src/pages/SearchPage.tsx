@@ -1,3 +1,4 @@
+import {Select} from '../components/Select';
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { SearchHit, LibraryRoot } from "../types/media";
 import { EmptyState } from "../components/EmptyState";
@@ -24,20 +25,21 @@ interface SearchPageProps {
 
 function SearchResult({ hit, index, coverRevision, onOpen }: { hit: SearchHit; index: number; coverRevision: number; onOpen: (hit: SearchHit) => void }) {
   const { t } = useI18n();
+  const coverNode=hit.comicBook && (hit.node.parentNodeId===null || (hit.node.totalComicBookCount??0)!==1) ? undefined : hit.node;
   const resultRef = useRef<HTMLButtonElement>(null);
-  const hasCachedCover = Boolean(hit.node.coverCachePath ?? hit.node.binding?.coverCachePath);
+  const hasCachedCover = Boolean(hit.comicBook || hit.node.coverCachePath || hit.node.binding?.coverCachePath);
   const { coverRequested, coverVisible } = usePosterViewportLifecycle(
     resultRef,
-    `${hit.node.id}:${hit.mediaFile?.id ?? ""}`,
+    `${hit.node.id}:${hit.comicBook?.id ?? hit.mediaFile?.id ?? ""}`,
     {
       activationMarginPx: 800,
       retentionEnabled: hasCachedCover,
       retentionMarginPx: 1_400,
     },
   );
-  const { coverCacheKey, coverUrl, coverFailed: coverReadFailed } = useCoverDataUrl(hit.node, coverRevision, coverRequested);
+  const { coverFrameRef, coverCacheKey, coverUrl, coverFailed: coverReadFailed } = useCoverDataUrl(coverNode, coverRevision, coverRequested,coverNode?undefined:hit.comicBook??undefined);
   const [imageFailed, setImageFailed] = useState(false);
-  const title = hit.mediaFile?.fileName ?? nodeDisplayTitle(hit.node);
+  const title = hit.comicBook?.displayName ?? hit.mediaFile?.fileName ?? nodeDisplayTitle(hit.node);
   const nodeTitle = nodeDisplayTitle(hit.node);
   const coverFailed = coverReadFailed || imageFailed;
   const placeholderIcon = hit.node.nodeType === "CONTAINER" ? "folder" : hit.node.nodeType === "MIXED" ? "archive" : "work";
@@ -45,13 +47,13 @@ function SearchResult({ hit, index, coverRevision, onOpen }: { hit: SearchHit; i
   useEffect(() => setImageFailed(false), [coverUrl]);
 
   return (
-    <button className="search-hit" key={`${hit.kind}-${hit.mediaFile?.id ?? hit.node.id}-${index}`} onClick={() => onOpen(hit)} ref={resultRef} type="button">
-      <span className={`search-hit-cover ${coverUrl && !coverFailed ? "has-cover" : "is-placeholder"} ${coverFailed ? "is-failed" : ""}`}>
+    <button className="search-hit" key={`${hit.kind}-${hit.comicBook?.id ?? hit.mediaFile?.id ?? hit.node.id}-${index}`} onClick={() => onOpen(hit)} ref={resultRef} type="button">
+      <span ref={coverFrameRef} className={`search-hit-cover ${coverUrl && !coverFailed ? "has-cover" : "is-placeholder"} ${coverFailed ? "is-failed" : ""}`}>
         {coverUrl && !coverFailed
           ? <PosterImage active={coverVisible} alt={t("card.coverAlt", { title: nodeTitle })} cacheKey={coverCacheKey} onError={() => setImageFailed(true)} src={coverUrl} />
           : <Icon name={placeholderIcon} />}
       </span>
-      <span className="search-hit-copy"><small>{hit.kind === "MEDIA_FILE" ? t("search.videoFile") : mediaBadge(hit.node)}</small><strong>{title}</strong><em>{compactPath(hit.mediaFile?.absolutePath ?? hit.node.absolutePath, 96)}</em></span>
+      <span className="search-hit-copy"><small>{hit.comicBook?t(hit.node.mediaKind==='EBOOK'?'ebook.files':hit.node.mediaKind==='ARTBOOK'?'artbook.files':'comic.files'):hit.kind === "MEDIA_FILE" ? t("search.videoFile") : mediaBadge(hit.node)}</small><strong>{title}</strong><em>{compactPath(hit.comicBook?.sourcePath ?? hit.mediaFile?.absolutePath ?? hit.node.absolutePath, 96)}</em></span>
       {hit.mediaFile && <span className="search-hit-meta">{formatBytes(hit.mediaFile.fileSize)}<small>{hit.mediaFile.extension.replace(/^\./, "").toUpperCase()}</small></span>}
       <Icon className="search-hit-chevron" name="chevron" />
     </button>
@@ -109,7 +111,7 @@ export function SearchPage({ initialQuery = "", rootId, roots = [], onRootChange
         </div>
         <form className="search-controls" onSubmit={event => { event.preventDefault(); void search(query); }}>
             <label className="search-field"><Icon name="search" /><input aria-label={t("common.search")} ref={inputRef} onChange={event => { setQuery(event.target.value); onQueryChange?.(event.target.value); }} value={query} /></label>
-            <label className="sort-field"><select aria-label={t("search.scope")} value={rootId ?? "all"} onChange={event => onRootChange?.(event.target.value === "all" ? null : Number(event.target.value))}><option value="all">{t("search.allLibraries")}</option>{roots.map(root => <option key={root.id} value={root.id}>{root.displayName}</option>)}</select></label>
+            <label className="sort-field"><Select aria-label={t("search.scope")} value={rootId ?? "all"} onChange={event => onRootChange?.(event.target.value === "all" ? null : Number(event.target.value))}><option value="all">{t("search.allLibraries")}</option>{roots.map(root => <option key={root.id} value={root.id}>{root.displayName}</option>)}</Select></label>
             <button className="button primary" disabled={!query.trim() || loading} type="submit">{t("common.search")}</button>
         </form>
       </header>

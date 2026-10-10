@@ -26,13 +26,13 @@ interface MediaCardProps {
 function MediaCardComponent({ node, viewMode, onOpen, onMenu, onBangumi, onRetryCover, coverRevision, watchedAt, showModifiedTime = false, editMode = false, selected = false, onSelect }: MediaCardProps) {
   const { t } = useI18n();
   const cardRef = useRef<HTMLElement>(null);
-  const hasCachedCover = Boolean(node.coverCachePath ?? node.binding?.coverCachePath);
+  const hasCachedCover = Boolean(node.coverCachePath ?? node.binding?.coverCachePath) || ["COMIC","EBOOK","DOUJIN","ARTBOOK"].includes(node.mediaKind ?? "") && (node.totalComicBookCount ?? 0) > 0;
   const { coverRequested, coverVisible } = usePosterViewportLifecycle(cardRef, node.id, {
     activationMarginPx: 1_000,
     retentionEnabled: hasCachedCover,
     retentionMarginPx: 1_800,
   });
-  const { coverCacheKey, coverUrl: cover, coverFailed: coverReadFailed, coverLoading } = useCoverDataUrl(node, coverRevision, coverRequested);
+  const { coverFrameRef, coverCacheKey, coverUrl: cover, coverFailed: coverReadFailed, coverLoading } = useCoverDataUrl(node, coverRevision, coverRequested);
   const [imageFailed, setImageFailed] = useState(false);
   useEffect(() => setImageFailed(false), [cover]);
   const videos = node.totalVideoCount ?? node.directVideoCount ?? 0;
@@ -49,13 +49,14 @@ function MediaCardComponent({ node, viewMode, onOpen, onMenu, onBangumi, onRetry
       onContextMenu={(event) => { event.preventDefault(); onMenu(event, node); }}
     >
       <button aria-pressed={editMode ? selected : undefined} className="media-card-open" onClick={() => editMode ? onSelect?.(node) : onOpen(node)} type="button">
-        <span className={`cover-frame ${cover ? "has-cover" : ""} ${container ? "is-container" : ""}`}>
+        <span ref={coverFrameRef} className={`cover-frame ${cover ? "has-cover" : ""} ${container ? "is-container" : ""}`}>
           {cover && !coverFailed ? <PosterImage active={coverVisible} alt={t("card.coverAlt", { title })} cacheKey={coverCacheKey} onError={() => setImageFailed(true)} src={cover} /> : (
             <span className="cover-placeholder">
               <span className="cover-art"><Icon name={container ? "folder-open" : "work"} /></span>
               <small>{coverError ? t("card.coverFailed") : container ? t("card.resourceContainer") : t("card.noCover")}</small>
             </span>
           )}
+          {viewMode === "grid" && <span className="type-pill system-tag" title={mediaBadge(node)}>{mediaBadge(node)}</span>}
           {editMode && <span aria-hidden="true" className="selection-indicator"><Icon name={selected ? "check" : "plus"} /></span>}
         </span>
         <span className="media-card-copy">
@@ -63,20 +64,19 @@ function MediaCardComponent({ node, viewMode, onOpen, onMenu, onBangumi, onRetry
           {watchedAt && <time className="media-card-watch-time" dateTime={watchedAt}>{t("comic.openedAt", { time: formatDate(watchedAt) })}</time>}
           {showModifiedTime && <FileModifiedTime value={node.latestFileModifiedAt} />}
           <span className="media-card-meta">
-            <span className="type-pill system-tag">{mediaBadge(node)}</span>
+            {viewMode === "list" && <span className="type-pill system-tag">{mediaBadge(node)}</span>}
             <small>
-              {(node.mediaKind==='COMIC'||node.mediaKind==='EBOOK')?t('comic.books',{count:node.totalComicBookCount??0}):videos > 0 ? t("card.videoCount", { count: videos }) : container ? t("card.childCount", { count: node.childMediaBranchCount ?? 0 }) : t("card.awaitingScan")}
+              {(node.mediaKind==='COMIC'||node.mediaKind==='EBOOK'||(node.mediaKind==='DOUJIN' || node.mediaKind === 'ARTBOOK'))?t('comic.books',{count:node.totalComicBookCount??0}):videos > 0 ? t("card.videoCount", { count: videos }) : container ? t("card.childCount", { count: node.childMediaBranchCount ?? 0 }) : t("card.awaitingScan")}
             </small>
+            {node.userTags.length > 0 && <span aria-label={t("card.customTags")} className="media-card-tags" title={node.userTags.map((tag) => tag.name).join(" · ")}>
+              <span className="user-tag-pill">{node.userTags[0].name}</span>
+              {node.userTags.length > 1 && <span className="media-card-tag-overflow">+{node.userTags.length - 1}</span>}
+            </span>}
           </span>
           {viewMode === "list" && !node.binding && <span className="card-path">{node.absolutePath}</span>}
-          {(node.userTags?.length ?? 0) > 0 && (
-            <span aria-label={t("card.customTags")} className="media-card-tags">
-              {node.userTags.map((tag) => <span className="user-tag-pill" key={tag.id}>{tag.name}</span>)}
-            </span>
-          )}
         </span>
       </button>
-      {!editMode && bindable && !node.binding && (
+      {!editMode && bindable && !node.binding && !node.tmdbBinding?.active && (
         <button className="quick-bind" onClick={() => onBangumi(node)} title={t("card.searchCover")} type="button"><Icon name="plus" /><span>{t("provider.bangumi")}</span></button>
       )}
       {!editMode && bindable && node.binding && coverError && (

@@ -1,0 +1,78 @@
+{
+  "id": 47,
+  "title": "Existing exclusions not new hidden/temp policy",
+  "input": {
+    "root_id": "fixture-root",
+    "media_kind": "COMIC",
+    "complete": true,
+    "entries": [
+      {
+        "path": "__MACOSX",
+        "kind": "DIRECTORY",
+        "hint": null
+      },
+      {
+        "path": "__MACOSX/ignored.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": ".hidden.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "draft.tmp",
+        "kind": "FILE",
+        "format": null,
+        "verified": false
+      },
+      {
+        "path": "$Recycle.Bin",
+        "kind": "DIRECTORY",
+        "hint": null
+      },
+      {
+        "path": "$Recycle.Bin/book.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "desktop.ini",
+        "kind": "FILE",
+        "format": null,
+        "verified": false
+      }
+    ]
+  },
+  "expected": {
+    "units": [
+      {
+        "path": ".hidden.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "$Recycle.Bin/book.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      }
+    ],
+    "root_paths": [
+      ".hidden.pdf",
+      "$Recycle.Bin"
+    ],
+    "series": [],
+    "directory_roles": {},
+    "diagnostics": [
+      "EXCLUDED_EXISTING_POLICY",
+      "UNSUPPORTED_OR_UNVERIFIED_FILE"
+    ],
+    "editions": 0,
+    "retained_prior": 0
+  },
+  "negative_assertion": "Only existing four names excluded; hidden and recycle names not silently dropped"
+}

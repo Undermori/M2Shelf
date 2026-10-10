@@ -3,23 +3,38 @@ use crate::{
     comics::{self, IndexedPage},
     db::AppResult,
 };
-use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use std::{collections::HashMap, fs::File, io::Read, path::Path};
 
 const XML_LIMIT: u64 = 4 * 1024 * 1024;
+fn resource_hash(locator: &str) -> u64 {
+    u64::from_le_bytes(Sha256::digest(locator.as_bytes())[..8].try_into().unwrap())
+}
 pub const MAX_PDF_BYTES: u64 = 512 * 1024 * 1024;
 pub const PDF_CHUNK_BYTES: u64 = 2 * 1024 * 1024;
 pub fn format(path: &Path) -> Option<&'static str> {
     match comics::extension(path).as_str() {
         "pdf" => Some("PDF"),
         "epub" => Some("EPUB"),
+        "txt" => Some("TXT"),
+        "mobi" => Some("MOBI"),
+        "azw3" => Some("AZW3"),
         _ => None,
     }
 }
 pub fn index(path: &Path) -> AppResult<Vec<IndexedPage>> {
-    if format(path) == Some("PDF") {
-        let file = File::open(path).map_err(|_| "COMIC_READ_FAILED")?;
+    let format = format(path).ok_or("COMIC_DOCUMENT_INVALID")?;
+    index_file(File::open(path).map_err(|_| "COMIC_READ_FAILED")?, format)
+}
+pub(crate) fn index_file(file: File, format: &str) -> AppResult<Vec<IndexedPage>> {
+    if matches!(format, "MOBI" | "AZW3") {
+        return crate::kindle_books::index_file(file);
+    }
+    if format == "TXT" {
+        return crate::text_books::index_file(file);
+    }
+    if format == "PDF" {
         let size = file.metadata().map_err(|_| "COMIC_READ_FAILED")?.len();
         if size > MAX_PDF_BYTES {
             return Err("COMIC_PAGE_LIMIT".into());
@@ -49,7 +64,7 @@ pub fn index(path: &Path) -> AppResult<Vec<IndexedPage>> {
             })
             .collect())
     } else {
-        let mut zip = comics::open_archive(File::open(path).map_err(|_| "COMIC_READ_FAILED")?)?;
+        let mut zip = comics::open_archive(file)?;
         let container = read_text(&mut zip, "META-INF/container.xml")?;
         let container = parse_xml(&container)?;
         let opf = container
@@ -92,7 +107,7 @@ pub fn index(path: &Path) -> AppResult<Vec<IndexedPage>> {
             if entry.encrypted() {
                 return Err("COMIC_ARCHIVE_ENCRYPTED".into());
             }
-            if entry.size() > XML_LIMIT || pages.len() >= comics::MAX_PAGES {
+            if pages.len() >= comics::MAX_PAGES {
                 return Err("COMIC_PAGE_LIMIT".into());
             }
             pages.push(IndexedPage {
@@ -109,6 +124,107 @@ pub fn index(path: &Path) -> AppResult<Vec<IndexedPage>> {
         Ok(pages)
     }
 }
+pub(crate) fn navigation(file: File) -> AppResult<Vec<(String, String, Option<String>)>> {
+    let mut zip = comics::open_archive(file)?;
+    let container_text = read_text(&mut zip, "META-INF/container.xml")?;
+    let container = parse_xml(&container_text)?;
+    let opf = container
+        .descendants()
+        .find(|n| n.has_tag_name("rootfile"))
+        .and_then(|n| n.attribute("full-path"))
+        .ok_or("COMIC_DOCUMENT_INVALID")?;
+    if !comics::valid_entry(opf) {
+        return Err("COMIC_ARCHIVE_PATH".into());
+    }
+    let package_text = read_text(&mut zip, opf)?;
+    let package = parse_xml(&package_text)?;
+    let items = package
+        .descendants()
+        .filter(|n| n.has_tag_name("item"))
+        .collect::<Vec<_>>();
+    let nav = items
+        .iter()
+        .find(|n| {
+            n.attribute("properties")
+                .is_some_and(|v| v.split_whitespace().any(|p| p == "nav"))
+        })
+        .or_else(|| {
+            items
+                .iter()
+                .find(|n| n.attribute("media-type") == Some("application/x-dtbncx+xml"))
+        });
+    let Some(href) = nav.and_then(|n| n.attribute("href")) else {
+        return Ok(Vec::new());
+    };
+    let nav_path = resolve(opf, href)?;
+    let nav_text = read_text(&mut zip, &nav_path)?;
+    let doc = parse_xml(&nav_text)?;
+    let mut result = Vec::new();
+    for n in doc.descendants() {
+        let entry = if n.has_tag_name("navPoint") {
+            let href = n
+                .children()
+                .find(|c| c.has_tag_name("content"))
+                .and_then(|c| c.attribute("src"));
+            let label = n.children().find(|c| c.has_tag_name("navLabel")).map(|c| {
+                c.descendants()
+                    .filter(|v| v.is_text())
+                    .map(|v| v.text().unwrap_or_default())
+                    .collect::<String>()
+            });
+            href.zip(label)
+        } else if n.has_tag_name("a")
+            && n.ancestors().any(|a| {
+                a.has_tag_name("nav")
+                    && a.attributes().any(|p| {
+                        p.name() == "type" && p.value().split_whitespace().any(|v| v == "toc")
+                    })
+            })
+        {
+            n.attribute("href").map(|h| {
+                (
+                    h,
+                    n.descendants()
+                        .filter(|v| v.is_text())
+                        .map(|v| v.text().unwrap_or_default())
+                        .collect::<String>(),
+                )
+            })
+        } else {
+            None
+        };
+        if let Some((href, title)) = entry {
+            if href.contains(':') || href.starts_with('/') {
+                continue;
+            }
+            let (path, fragment) = href
+                .split_once('#')
+                .map_or((href, None), |(p, f)| (p, Some(f)));
+            let Ok(locator) = resolve(&nav_path, path) else {
+                continue;
+            };
+            let title = title
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .chars()
+                .take(200)
+                .collect::<String>();
+            if title.is_empty() {
+                continue;
+            }
+            let fragment = fragment
+                .filter(|f| !f.is_empty() && f.len() <= 512)
+                .map(|f| decode_component(f).unwrap_or_else(|_| f.to_string()));
+            result.push((locator, title, fragment));
+            if result.len() >= comics::MAX_PAGES {
+                break;
+            }
+        }
+    }
+    Ok(result)
+}
+
 fn parse_xml(text: &str) -> AppResult<roxmltree::Document<'_>> {
     let document = roxmltree::Document::parse_with_options(
         text,
@@ -117,12 +233,21 @@ fn parse_xml(text: &str) -> AppResult<roxmltree::Document<'_>> {
             nodes_limit: 30_000,
         },
     )
-    .map_err(|_| "COMIC_DOCUMENT_INVALID".to_string())?;
+    .map_err(|error| {
+        if matches!(error, roxmltree::Error::NodesLimitReached) {
+            eprintln!("EPUB limit=xml_nodes max=30000 actual_at_least=30001");
+            "COMIC_PAGE_LIMIT".to_string()
+        } else {
+            "COMIC_DOCUMENT_INVALID".to_string()
+        }
+    })?;
     // Bound ancestor walks in semantic extraction even for a deeply nested small XML file.
-    if document
+    if let Some(depth) = document
         .descendants()
-        .any(|node| node.ancestors().take(130).count() > 128)
+        .map(|node| node.ancestors().take(130).count())
+        .find(|depth| *depth > 128)
     {
+        eprintln!("EPUB limit=xml_depth max=128 actual_at_least={depth}");
         return Err("COMIC_PAGE_LIMIT".into());
     }
     Ok(document)
@@ -133,6 +258,12 @@ fn read_text(zip: &mut zip::ZipArchive<File>, name: &str) -> AppResult<String> {
         return Err("COMIC_ARCHIVE_ENCRYPTED".into());
     }
     if entry.size() > XML_LIMIT {
+        eprintln!(
+            "EPUB limit=chapter_xml max={} actual={} resource_hash={:08x}",
+            XML_LIMIT,
+            entry.size(),
+            resource_hash(name)
+        );
         return Err("COMIC_PAGE_LIMIT".into());
     }
     let mut bytes = Vec::new();
@@ -209,10 +340,7 @@ fn normalize_xhtml(text: &str) -> AppResult<String> {
     }
     Ok(value)
 }
-fn resolve(base: &str, href: &str) -> AppResult<String> {
-    let href = href.split('#').next().unwrap_or_default();
-    // EPUB manifest references are URLs; resolve encoded spaces and Unicode once,
-    // then apply the same archive-only path checks to the decoded value.
+fn decode_component(href: &str) -> AppResult<String> {
     let mut decoded = Vec::with_capacity(href.len());
     let mut chars = href.as_bytes().iter().copied();
     while let Some(byte) = chars.next() {
@@ -230,7 +358,11 @@ fn resolve(base: &str, href: &str) -> AppResult<String> {
             decoded.push(byte);
         }
     }
-    let href = String::from_utf8(decoded).map_err(|_| "COMIC_ARCHIVE_PATH")?;
+    String::from_utf8(decoded).map_err(|_| "COMIC_ARCHIVE_PATH".to_string())
+}
+
+fn resolve(base: &str, href: &str) -> AppResult<String> {
+    let href = decode_component(href.split('#').next().unwrap_or_default())?;
     if href.contains([':', '\\', '\0']) || href.starts_with('/') {
         return Err("COMIC_ARCHIVE_PATH".into());
     }
@@ -253,9 +385,145 @@ fn resolve(base: &str, href: &str) -> AppResult<String> {
     }
     Ok(value)
 }
+
+/// Read only embedded images; missing/vector-only covers use the normal placeholder.
+/// These bytes still pass the common image limits before entering the poster cache.
+pub(crate) fn cover(file: File, format: &str) -> AppResult<Option<Vec<u8>>> {
+    if format == "PDF" {
+        let size = file.metadata().map_err(|_| "COMIC_READ_FAILED")?.len();
+        if size > MAX_PDF_BYTES {
+            return Err("COMIC_PAGE_LIMIT".into());
+        }
+        let mut bytes = Vec::new();
+        file.take(MAX_PDF_BYTES + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|_| "COMIC_READ_FAILED")?;
+        if bytes.len() as u64 > MAX_PDF_BYTES {
+            return Err("COMIC_PAGE_LIMIT".into());
+        }
+        let doc = lopdf::Document::load_mem(&bytes).map_err(|_| "COMIC_DOCUMENT_INVALID")?;
+        if doc.is_encrypted() {
+            return Ok(None);
+        }
+        let Some((_, page)) = doc.get_pages().into_iter().next() else {
+            return Ok(None);
+        };
+        let mut selected: Option<(u64, Vec<u8>)> = None;
+        for image in doc
+            .get_page_images(page)
+            .unwrap_or_default()
+            .into_iter()
+            .take(32)
+        {
+            // A directly embedded JPEG from the first page avoids unbounded PDF rasterization.
+            if image
+                .filters
+                .as_ref()
+                .is_some_and(|filters| filters.len() == 1 && filters[0] == "DCTDecode")
+                && image.content.len() <= 8 * 1024 * 1024
+            {
+                if let Ok((w, h)) = crate::comic_reader::image_dimensions(image.content) {
+                    let pixels = u64::from(w) * u64::from(h);
+                    if selected.as_ref().is_none_or(|old| pixels > old.0) {
+                        selected = Some((pixels, image.content.to_vec()));
+                    }
+                }
+            }
+        }
+        return Ok(selected.map(|entry| entry.1));
+    }
+    if format != "EPUB" {
+        return Ok(None);
+    }
+    let mut zip = comics::open_archive(file)?;
+    let container_text = read_text(&mut zip, "META-INF/container.xml")?;
+    let container = parse_xml(&container_text)?;
+    let opf = container
+        .descendants()
+        .find(|n| n.has_tag_name("rootfile"))
+        .and_then(|n| n.attribute("full-path"))
+        .ok_or("COMIC_DOCUMENT_INVALID")?;
+    if !comics::valid_entry(opf) {
+        return Err("COMIC_ARCHIVE_PATH".into());
+    }
+    let text = read_text(&mut zip, opf)?;
+    let package = parse_xml(&text)?;
+    let cover_id = package
+        .descendants()
+        .find(|n| n.has_tag_name("meta") && n.attribute("name") == Some("cover"))
+        .and_then(|n| n.attribute("content"));
+    let mut names: Vec<String> = package
+        .descendants()
+        .filter(|n| {
+            n.has_tag_name("item")
+                && (n.attribute("id") == cover_id && cover_id.is_some()
+                    || n.attribute("properties")
+                        .is_some_and(|p| p.split_whitespace().any(|p| p == "cover-image")))
+        })
+        .filter_map(|n| n.attribute("href"))
+        .filter_map(|href| resolve(opf, href).ok())
+        .collect();
+    // EPUB2 often supplies a cover XHTML document via guide or the first spine item.
+    let manifest: HashMap<_, _> = package
+        .descendants()
+        .filter(|n| n.has_tag_name("item"))
+        .filter_map(|n| Some((n.attribute("id")?, n.attribute("href")?)))
+        .collect();
+    let chapter = package
+        .descendants()
+        .find(|n| n.has_tag_name("reference") && n.attribute("type") == Some("cover"))
+        .and_then(|n| n.attribute("href"))
+        .or_else(|| {
+            package
+                .descendants()
+                .find(|n| n.has_tag_name("itemref"))
+                .and_then(|n| n.attribute("idref"))
+                .and_then(|id| manifest.get(id).copied())
+        });
+    if let Some(name) = chapter.and_then(|href| resolve(opf, href).ok()) {
+        if let Ok(text) = read_text(&mut zip, &name) {
+            if let Ok(doc) = parse_xml(&text) {
+                names.extend(
+                    doc.descendants()
+                        .filter(|n| n.has_tag_name("img") || n.has_tag_name("image"))
+                        .filter_map(|n| {
+                            n.attribute("src")
+                                .or_else(|| n.attribute("href"))
+                                .or_else(|| n.attribute(("http://www.w3.org/1999/xlink", "href")))
+                        })
+                        .take(8)
+                        .filter_map(|href| resolve(&name, href).ok()),
+                );
+            }
+        }
+    }
+    for name in names.into_iter().take(8) {
+        let Ok(mut entry) = zip.by_name(&name) else {
+            continue;
+        };
+        if entry.encrypted() || entry.size() > 8 * 1024 * 1024 {
+            continue;
+        }
+        let mut bytes = Vec::new();
+        if entry
+            .by_ref()
+            .take(8 * 1024 * 1024 + 1)
+            .read_to_end(&mut bytes)
+            .is_ok()
+            && bytes.len() <= 8 * 1024 * 1024
+            && crate::comic_reader::validate_image(&bytes).is_ok()
+        {
+            return Ok(Some(bytes));
+        }
+    }
+    Ok(None)
+}
 #[derive(Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum EpubBlock {
+    Anchor {
+        id: String,
+    },
     Text {
         text: String,
         tag: String,
@@ -264,14 +532,19 @@ pub enum EpubBlock {
     Image {
         data_url: String,
     },
+    ImageReference {
+        locator: String,
+        size: u64,
+        crc32: u32,
+    },
 }
 #[derive(Clone, Default, Serialize)]
 pub struct EpubRun {
-    text: String,
-    bold: bool,
-    italic: bool,
-    superscript: bool,
-    subscript: bool,
+    pub(crate) text: String,
+    pub(crate) bold: bool,
+    pub(crate) italic: bool,
+    pub(crate) superscript: bool,
+    pub(crate) subscript: bool,
 }
 pub fn chapter(
     file: File,
@@ -286,14 +559,28 @@ pub fn chapter(
             return Err("COMIC_PAGE_CHANGED".into());
         }
     }
-    let text = read_text(&mut zip, locator)?;
-    let doc = parse_xml(&text)?;
+    let text = read_text(&mut zip, locator).map_err(|e| {
+        if e == "COMIC_PAGE_LIMIT" {
+            "EPUB_CHAPTER_LIMIT".into()
+        } else {
+            e
+        }
+    })?;
+    let doc = parse_xml(&text).map_err(|e| {
+        if e == "COMIC_PAGE_LIMIT" {
+            eprintln!(
+                "EPUB structure resource_hash={:016x}",
+                resource_hash(locator)
+            );
+            "EPUB_STRUCTURE_LIMIT".into()
+        } else {
+            e
+        }
+    })?;
     let mut blocks = Vec::new();
     let mut paragraph = String::new();
     let mut runs = Vec::new();
     let mut tag = "p".to_string();
-    let mut image_bytes = 0;
-    let mut image_pixels = 0_u64;
     let mut traversal = vec![(doc.root(), false)];
     while let Some((n, closing)) = traversal.pop() {
         if closing {
@@ -321,6 +608,13 @@ pub fn chapter(
                 n.tag_name().name()
             }
             .to_string();
+        }
+        if let Some(id) = n
+            .attribute("id")
+            .filter(|s| !s.is_empty() && s.len() <= 512)
+        {
+            flush_text(&mut blocks, &mut paragraph, &mut runs, &tag);
+            blocks.push(EpubBlock::Anchor { id: id.to_string() });
         }
         if n.is_text() {
             let raw = n.text().unwrap_or_default();
@@ -383,52 +677,83 @@ pub fn chapter(
             if !comics::is_image(Path::new(&name)) {
                 continue;
             }
-            let mut entry = zip.by_name(&name).map_err(|_| "COMIC_DOCUMENT_INVALID")?;
-            if entry.encrypted()
-                || entry.size() > 8 * 1024 * 1024
-                || image_bytes + entry.size() > 16 * 1024 * 1024
-            {
-                return Err("COMIC_PAGE_LIMIT".into());
+            let entry = zip.by_name(&name).map_err(|_| "COMIC_DOCUMENT_INVALID")?;
+            if entry.encrypted() {
+                return Err("COMIC_ARCHIVE_ENCRYPTED".into());
             }
-            let mut bytes = Vec::new();
-            entry
-                .by_ref()
-                .take(8 * 1024 * 1024 + 1)
-                .read_to_end(&mut bytes)
-                .map_err(|_| "COMIC_DOCUMENT_INVALID")?;
-            if bytes.len() > 8 * 1024 * 1024 {
-                return Err("COMIC_PAGE_LIMIT".into());
-            }
-            image_bytes += bytes.len() as u64;
-            let (width, height) = crate::comic_reader::image_dimensions(
-                &bytes,
-                &comics::extension(Path::new(&name)),
-            )?;
-            image_pixels += u64::from(width) * u64::from(height);
-            if image_pixels > 32_000_000 {
-                return Err("COMIC_PAGE_LIMIT".into());
-            }
-            let ext = comics::extension(Path::new(&name));
-            let mime = if matches!(ext.as_str(), "jpg" | "jpeg") {
-                "jpeg"
-            } else {
-                ext.as_str()
-            };
-            blocks.push(EpubBlock::Image {
-                data_url: format!("data:image/{mime};base64,{}", STANDARD.encode(bytes)),
+            // No raster decoding or base64 images in the chapter IPC. Each illustration is
+            // independently read on demand through the same opened-handle/Root boundary.
+            blocks.push(EpubBlock::ImageReference {
+                locator: name,
+                size: entry.size(),
+                crc32: entry.crc32(),
             });
         }
     }
     flush_text(&mut blocks, &mut paragraph, &mut runs, &tag);
     Ok(blocks)
 }
-fn is_block(tag: &str) -> bool {
+/// Read one explicitly referenced illustration; callers validate source identity and revision.
+pub fn illustration(
+    file: File,
+    chapter_locator: &str,
+    chapter_size: u64,
+    chapter_crc: Option<u32>,
+    block_index: usize,
+) -> AppResult<Vec<u8>> {
+    let blocks = chapter(
+        file.try_clone().map_err(|_| "COMIC_READ_FAILED")?,
+        chapter_locator,
+        chapter_size,
+        chapter_crc,
+    )?;
+    let Some(EpubBlock::ImageReference {
+        locator,
+        size,
+        crc32,
+    }) = blocks.get(block_index)
+    else {
+        return Err("COMIC_ARCHIVE_PATH".into());
+    };
+    if *size > 8 * 1024 * 1024 {
+        eprintln!(
+            "EPUB limit=illustration_bytes max={} actual={} resource_hash={:08x}",
+            8 * 1024 * 1024,
+            size,
+            resource_hash(locator)
+        );
+        return Err("EPUB_IMAGE_LIMIT".into());
+    }
+    let mut zip = comics::open_archive(file)?;
+    let mut entry = zip.by_name(locator).map_err(|_| "COMIC_PAGE_CHANGED")?;
+    if entry.encrypted() || entry.size() != *size || entry.crc32() != *crc32 {
+        return Err("COMIC_PAGE_CHANGED".into());
+    }
+    let mut bytes = Vec::with_capacity(*size as usize);
+    entry
+        .by_ref()
+        .take(8 * 1024 * 1024 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| "COMIC_PAGE_CHANGED")?;
+    if bytes.len() as u64 != *size {
+        return Err("COMIC_PAGE_CHANGED".into());
+    }
+    crate::comic_reader::validate_image(&bytes)?;
+    Ok(bytes)
+}
+
+pub(crate) fn is_block(tag: &str) -> bool {
     matches!(
         tag,
         "p" | "div" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "li" | "blockquote" | "pre"
     )
 }
-fn flush_text(blocks: &mut Vec<EpubBlock>, text: &mut String, runs: &mut Vec<EpubRun>, tag: &str) {
+pub(crate) fn flush_text(
+    blocks: &mut Vec<EpubBlock>,
+    text: &mut String,
+    runs: &mut Vec<EpubRun>,
+    tag: &str,
+) {
     if tag != "pre" {
         let leading = runs
             .iter()
@@ -463,6 +788,7 @@ fn flush_text(blocks: &mut Vec<EpubBlock>, text: &mut String, runs: &mut Vec<Epu
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::{engine::general_purpose::STANDARD, Engine};
     use std::io::Write;
 
     #[test]
@@ -519,8 +845,9 @@ mod tests {
                 );
                 for block in blocks {
                     match block {
-                        EpubBlock::Image { .. } => images += 1,
+                        EpubBlock::Image { .. } | EpubBlock::ImageReference { .. } => images += 1,
                         EpubBlock::Text { .. } => texts += 1,
+                        EpubBlock::Anchor { .. } => {}
                     }
                 }
             }
@@ -564,7 +891,29 @@ mod tests {
         .unwrap();
         let json = serde_json::to_string(&blocks).unwrap();
         assert!(json.contains("第二章"));
-        assert!(json.contains("data:image/png;base64,"));
+        assert!(json.contains("imageReference"));
+        assert!(!json.contains("base64"));
+        let image_index = blocks
+            .iter()
+            .position(|b| matches!(b, EpubBlock::ImageReference { .. }))
+            .unwrap();
+        let bytes = illustration(
+            File::open(&path).unwrap(),
+            &pages[0].locator,
+            pages[0].size,
+            pages[0].crc,
+            image_index,
+        )
+        .unwrap();
+        assert!(bytes.starts_with(b"\x89PNG"));
+        assert!(illustration(
+            File::open(&path).unwrap(),
+            &pages[0].locator,
+            pages[0].size,
+            pages[0].crc,
+            0
+        )
+        .is_err());
         assert!(!json.contains("malicious"));
         assert!(!json.contains("Hidden title"));
         assert!(!json.contains("https://"));
@@ -575,6 +924,115 @@ mod tests {
             pages[0].crc
         )
         .is_err());
+    }
+    fn illustrated_fixture(
+        chapter_text: &str,
+        image_size: usize,
+    ) -> (tempfile::TempDir, std::path::PathBuf) {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("synthetic.epub");
+        let mut zip = zip::ZipWriter::new(File::create(&path).unwrap());
+        for (name,text) in [("META-INF/container.xml","<container><rootfiles><rootfile full-path='book.opf'/></rootfiles></container>"),("book.opf","<package><manifest><item id='one' href='one.xhtml' media-type='application/xhtml+xml'/><item id='two' href='two.xhtml' media-type='application/xhtml+xml'/></manifest><spine><itemref idref='one'/><itemref idref='two'/></spine></package>"),("one.xhtml",chapter_text),("two.xhtml","<html><body><p>Usable chapter</p></body></html>")]{zip.start_file(name,zip::write::SimpleFileOptions::default()).unwrap();zip.write_all(text.as_bytes()).unwrap();}
+        zip.start_file("image.png", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        zip.write_all(&vec![0; image_size]).unwrap();
+        zip.finish().unwrap();
+        (temp, path)
+    }
+    #[test]
+    fn epub_many_images_do_not_expand_chapter_ipc() {
+        let text = format!(
+            "<html><body><p>Readable</p>{}</body></html>",
+            "<img src='image.png'/>".repeat(100)
+        );
+        let (_temp, path) = illustrated_fixture(&text, 1024 * 1024);
+        let pages = index(&path).unwrap();
+        let blocks = chapter(
+            File::open(path).unwrap(),
+            &pages[0].locator,
+            pages[0].size,
+            pages[0].crc,
+        )
+        .unwrap();
+        assert_eq!(
+            blocks
+                .iter()
+                .filter(|b| matches!(b, EpubBlock::ImageReference { .. }))
+                .count(),
+            100
+        );
+        assert!(serde_json::to_vec(&blocks).unwrap().len() < 20000);
+    }
+    #[test]
+    fn oversize_illustration_does_not_block_text_or_other_chapters() {
+        let (_temp, path) = illustrated_fixture(
+            "<html><body><p>Readable</p><img src='image.png'/></body></html>",
+            8 * 1024 * 1024 + 1,
+        );
+        let pages = index(&path).unwrap();
+        let blocks = chapter(
+            File::open(&path).unwrap(),
+            &pages[0].locator,
+            pages[0].size,
+            pages[0].crc,
+        )
+        .unwrap();
+        assert!(matches!(&blocks[0], EpubBlock::Text { .. }));
+        assert_eq!(
+            illustration(
+                File::open(&path).unwrap(),
+                &pages[0].locator,
+                pages[0].size,
+                pages[0].crc,
+                1
+            )
+            .unwrap_err(),
+            "EPUB_IMAGE_LIMIT"
+        );
+        assert!(chapter(
+            File::open(path).unwrap(),
+            &pages[1].locator,
+            pages[1].size,
+            pages[1].crc
+        )
+        .is_ok());
+    }
+    #[test]
+    fn oversize_and_deep_chapters_keep_contents_and_other_chapters() {
+        for text in [
+            format!(
+                "<html><body><p>{}</p></body></html>",
+                "x".repeat(XML_LIMIT as usize)
+            ),
+            format!(
+                "<html>{}x{}</html>",
+                "<div>".repeat(140),
+                "</div>".repeat(140)
+            ),
+        ] {
+            let (_temp, path) = illustrated_fixture(&text, 1);
+            let pages = index(&path).unwrap();
+            assert_eq!(pages.len(), 2);
+            let error = chapter(
+                File::open(&path).unwrap(),
+                &pages[0].locator,
+                pages[0].size,
+                pages[0].crc,
+            )
+            .err()
+            .unwrap();
+            assert!(matches!(
+                error.as_str(),
+                "EPUB_CHAPTER_LIMIT" | "EPUB_STRUCTURE_LIMIT"
+            ));
+            assert!(chapter(
+                File::open(path).unwrap(),
+                &pages[1].locator,
+                pages[1].size,
+                pages[1].crc
+            )
+            .is_ok());
+        }
     }
     #[test]
     fn epub_paths_are_local_and_bounded() {
@@ -617,5 +1075,47 @@ mod tests {
             "</span>".repeat(30)
         ))
         .is_ok());
+    }
+    #[test]
+    fn semantic_navigation_maps_spine_locators_and_safe_fragment_blocks() {
+        for ncx in [false, true] {
+            let temp = tempfile::tempdir().unwrap();
+            let path = temp.path().join("toc.epub");
+            let mut zip = zip::ZipWriter::new(File::create(&path).unwrap());
+            let nav_item = if ncx {
+                "<item id='toc' href='toc.ncx' media-type='application/x-dtbncx+xml'/>"
+            } else {
+                "<item id='toc' href='nav.xhtml' properties='nav' media-type='application/xhtml+xml'/>"
+            };
+            let opf=format!("<package><manifest>{nav_item}<item id='one' href='one.xhtml' media-type='application/xhtml+xml'/><item id='two' href='two.xhtml' media-type='application/xhtml+xml'/></manifest><spine><itemref idref='two'/><itemref idref='one'/></spine></package>");
+            let nav = if ncx {
+                "<ncx><navMap><navPoint><navLabel><text>River</text></navLabel><content src='two.xhtml'/></navPoint><navPoint><navLabel><text>River</text></navLabel><content src='two.xhtml#part%20two'/></navPoint></navMap></ncx>"
+            } else {
+                "<!DOCTYPE html><html xmlns:epub='http://www.idpf.org/2007/ops'><nav epub:type='toc'><a href='two.xhtml'>River</a><a href='two.xhtml#part%20two'>River</a><a href='https://invalid.example/book'>Remote</a><a href='../../escape.xhtml'>Invalid</a></nav></html>"
+            };
+            for (name,text) in [("META-INF/container.xml","<container><rootfiles><rootfile full-path='OPS/book.opf'/></rootfiles></container>"),("OPS/book.opf",opf.as_str()),(if ncx {"OPS/toc.ncx"}else{"OPS/nav.xhtml"},nav),("OPS/one.xhtml","<html><body><p>First chapter</p></body></html>"),("OPS/two.xhtml","<html><body><p>River begins</p><h2 id='part two'>Section title</h2><p>River ends</p><script id='unsafe'>bad()</script></body></html>")] {zip.start_file(name,zip::write::SimpleFileOptions::default()).unwrap();zip.write_all(text.as_bytes()).unwrap();}
+            zip.finish().unwrap();
+            let pages = index(&path).unwrap();
+            assert_eq!(pages[0].locator, "OPS/two.xhtml");
+            assert_eq!(pages[1].locator, "OPS/one.xhtml");
+            let nav = navigation(File::open(&path).unwrap()).unwrap();
+            assert_eq!(nav.len(), 2);
+            assert_eq!(nav[0], ("OPS/two.xhtml".into(), "River".into(), None));
+            assert_eq!(nav[1].2.as_deref(), Some("part two"));
+            let blocks = chapter(
+                File::open(&path).unwrap(),
+                &pages[0].locator,
+                pages[0].size,
+                pages[0].crc,
+            )
+            .unwrap();
+            assert!(blocks
+                .iter()
+                .any(|b| matches!(b,EpubBlock::Anchor{id} if id=="part two")));
+            assert!(!serde_json::to_string(&blocks).unwrap().contains("unsafe"));
+        }
+        let (_temp, path) =
+            illustrated_fixture("<html><body><p>No table of contents</p></body></html>", 0);
+        assert!(navigation(File::open(path).unwrap()).unwrap().is_empty());
     }
 }

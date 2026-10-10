@@ -130,7 +130,10 @@ enum ConfirmedAliasExactness {
 
 #[derive(Default)]
 struct MatchRunCache {
+    #[cfg(test)]
+    forbid_bangumi: bool,
     owned_file_names: Option<HashMap<i64, Vec<String>>>,
+    owned_file_revisions: HashMap<i64, i64>,
     searches: HashMap<String, Result<Vec<BangumiSubject>, String>>,
     details: HashMap<i64, Result<BangumiSubject, String>>,
     cover_requests_disabled: bool,
@@ -138,6 +141,9 @@ struct MatchRunCache {
     detail_fetches_started: usize,
     detail_fetches_for_current_node: usize,
     nodes_remaining_including_current: usize,
+    tmdb: crate::tmdb::AutomaticRun,
+    bangumi_search_error: Option<String>,
+    bangumi_error_reported: bool,
 }
 
 enum DetailRequestPlan {
@@ -211,13 +217,42 @@ where
     F: FnMut(usize, usize, &MediaNode, AutoMatchReport),
     C: Fn() -> bool,
 {
+    run_auto_match_using(
+        database,
+        targets,
+        unchanged,
+        cache_root,
+        on_progress,
+        (
+            is_cancelled,
+            &mut crate::tmdb::NativeAutomaticProvider,
+            MatchRunCache::default(),
+        ),
+    )
+}
+
+fn run_auto_match_using<F, C, P: crate::tmdb::AutomaticProvider>(
+    database: &Database,
+    targets: &[ScanTarget],
+    unchanged: &HashSet<PathBuf>,
+    cache_root: Result<&Path, &str>,
+    on_progress: F,
+    context: (C, &mut P, MatchRunCache),
+) -> AutoMatchReport
+where
+    F: FnMut(usize, usize, &MediaNode, AutoMatchReport),
+    C: Fn() -> bool,
+{
     let candidates: Vec<MediaNode> = match candidates_in_targets(database, targets) {
         Ok(candidates) => candidates
             .into_iter()
             .filter(|node| {
-                !Path::new(&node.absolute_path)
-                    .ancestors()
-                    .any(|path| unchanged.contains(path))
+                node.tmdb_binding
+                    .as_ref()
+                    .is_some_and(|b| crate::tmdb::needs_cover_refresh(node, b))
+                    || !Path::new(&node.absolute_path)
+                        .ancestors()
+                        .any(|path| unchanged.contains(path))
             })
             .collect(),
         Err(_) => {
@@ -227,13 +262,14 @@ where
             };
         }
     };
-    run_match_nodes(
+    run_match_nodes_with_tmdb(
         database,
         &candidates,
         cache_root,
         MatchWriteMode::IfAbsent,
         on_progress,
-        is_cancelled,
+        (context.0, context.1),
+        context.2,
     )
 }
 
@@ -247,17 +283,41 @@ pub fn run_match_nodes<F, C>(
     nodes: &[MediaNode],
     cache_root: Result<&Path, &str>,
     write_mode: MatchWriteMode,
-    mut on_progress: F,
+    on_progress: F,
     is_cancelled: C,
 ) -> AutoMatchReport
 where
     F: FnMut(usize, usize, &MediaNode, AutoMatchReport),
     C: Fn() -> bool,
 {
+    run_match_nodes_with_tmdb(
+        database,
+        nodes,
+        cache_root,
+        write_mode,
+        on_progress,
+        (is_cancelled, &mut crate::tmdb::NativeAutomaticProvider),
+        MatchRunCache::default(),
+    )
+}
+
+fn run_match_nodes_with_tmdb<F, C, P: crate::tmdb::AutomaticProvider>(
+    database: &Database,
+    nodes: &[MediaNode],
+    cache_root: Result<&Path, &str>,
+    write_mode: MatchWriteMode,
+    mut on_progress: F,
+    context: (C, &mut P),
+    mut run_cache: MatchRunCache,
+) -> AutoMatchReport
+where
+    F: FnMut(usize, usize, &MediaNode, AutoMatchReport),
+    C: Fn() -> bool,
+{
+    let (is_cancelled, provider) = context;
     let total = nodes.len();
     let mut report = AutoMatchReport::default();
     let mut consecutive_errors = 0usize;
-    let mut run_cache = MatchRunCache::default();
 
     for (index, node) in nodes.iter().enumerate() {
         if is_cancelled() {
@@ -270,13 +330,14 @@ where
         on_progress(index + 1, total, node, report);
         run_cache.begin_node(total.saturating_sub(index));
 
-        let should_stop = match auto_match_node(
+        let should_stop = match auto_match_node_with_tmdb(
             database,
             node,
             cache_root,
             write_mode,
             &mut run_cache,
             &is_cancelled,
+            provider,
         ) {
             Ok(AutoMatchNodeResult::Matched) => {
                 report.matched += 1;
@@ -294,6 +355,12 @@ where
                 consecutive_errors = 0;
                 false
             }
+            Ok(AutoMatchNodeResult::UnmatchedWithProviderError) => {
+                report.unmatched += 1;
+                report.errors += 1;
+                consecutive_errors = 0;
+                false
+            }
             Ok(AutoMatchNodeResult::AlreadyBound) => {
                 consecutive_errors = 0;
                 false
@@ -302,9 +369,19 @@ where
             Err(error) => {
                 report.errors += 1;
                 consecutive_errors += 1;
-                // One provider-wide search failure is enough to stop this run's online phase;
-                // retrying every remaining Node would multiply the same offline/429 delay.
-                is_provider_search_failure(&error) || consecutive_errors >= 3
+                // Stop Bangumi requests after one provider-wide failure, while still allowing
+                // later strictly eligible live-action movies to use the independent fallback.
+                if is_provider_search_failure(&error) {
+                    run_cache.bangumi_search_error = Some(error);
+                    run_cache.bangumi_error_reported = true;
+                    eprintln!(
+                        "auto-match provider=BANGUMI outcome=request-failed disabled-for-run=true"
+                    );
+                    consecutive_errors = 0;
+                    false
+                } else {
+                    consecutive_errors >= 3
+                }
             }
         };
         on_progress(index + 1, total, node, report);
@@ -324,6 +401,7 @@ enum AutoMatchNodeResult {
     Matched,
     MatchedWithCoverError,
     Unmatched,
+    UnmatchedWithProviderError,
     AlreadyBound,
     Cancelled,
 }
@@ -344,17 +422,63 @@ fn candidates_in_targets(database: &Database, targets: &[ScanTarget]) -> AppResu
     Ok(candidates)
 }
 
-fn auto_match_node<C>(
+fn auto_match_node_with_tmdb<C, P: crate::tmdb::AutomaticProvider>(
     database: &Database,
     node: &MediaNode,
     cache_root: Result<&Path, &str>,
     write_mode: MatchWriteMode,
     run_cache: &mut MatchRunCache,
     is_cancelled: &C,
+    provider: &mut P,
 ) -> AppResult<AutoMatchNodeResult>
 where
     C: Fn() -> bool,
 {
+    if !node.can_bind_bangumi() || node.node_type == NodeType::Ignored {
+        return Ok(AutoMatchNodeResult::Unmatched);
+    }
+    let connection = database.connect()?;
+    let snapshot = connection
+        .unchecked_transaction()
+        .map_err(|e| e.to_string())?;
+    let current_node = crate::db::get_node_conn(&snapshot, node.id)?;
+    let initial_tmdb_snapshot = if current_node.binding.is_none() {
+        crate::tmdb::automatic_snapshot(&snapshot, node.id)?
+    } else {
+        None
+    };
+    let initial_root_revision: i64 = snapshot
+        .query_row(
+            "SELECT revision FROM book_organization_state WHERE root_id=?1",
+            [current_node.library_root_id],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    drop(snapshot);
+    drop(connection);
+    let node = &current_node;
+    // Candidate projections can be older than a manual binding. Read the actual provider row
+    // before any Bangumi request, including an explicitly deactivated TMDb choice.
+    if let Some(bound) = node.tmdb_binding.as_ref() {
+        use crate::tmdb::AutomaticOutcome;
+        return Ok(
+            match run_cache.tmdb.refresh_bound(
+                database,
+                node,
+                bound,
+                cache_root,
+                provider,
+                is_cancelled,
+            )? {
+                AutomaticOutcome::Matched => AutoMatchNodeResult::Matched,
+                AutomaticOutcome::MatchedWithCoverError => {
+                    AutoMatchNodeResult::MatchedWithCoverError
+                }
+                AutomaticOutcome::Cancelled => AutoMatchNodeResult::Cancelled,
+                _ => AutoMatchNodeResult::AlreadyBound,
+            },
+        );
+    }
     if !node.can_bind_bangumi() || node.node_type == NodeType::Ignored {
         return Ok(AutoMatchNodeResult::Unmatched);
     }
@@ -372,9 +496,25 @@ where
         }
     }
 
-    if run_cache.owned_file_names.is_none() {
+    if run_cache.owned_file_names.is_none()
+        || (node.media_kind == crate::models::LibraryMediaKind::LiveAction
+            && run_cache.owned_file_revisions.get(&node.library_root_id)
+                != Some(&initial_root_revision))
+    {
         let connection = database.connect()?;
-        let index = crate::logical_works::LogicalWorkIndex::load(&connection)?;
+        let snapshot = connection
+            .unchecked_transaction()
+            .map_err(|e| e.to_string())?;
+        let connection = &snapshot;
+        let mut revisions = connection
+            .prepare("SELECT root_id,revision FROM book_organization_state")
+            .map_err(|e| e.to_string())?;
+        run_cache.owned_file_revisions = revisions
+            .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)))
+            .map_err(|e| e.to_string())?
+            .collect::<Result<HashMap<_, _>, _>>()
+            .map_err(|e| e.to_string())?;
+        let index = crate::logical_works::LogicalWorkIndex::load(connection)?;
         let mut names: HashMap<i64, Vec<String>> = HashMap::new();
         for (id, files) in &index.videos {
             if let Some(owner) = index.owners.get(id) {
@@ -421,6 +561,12 @@ where
             parent_name.as_deref(),
             &media_file_names,
         )
+    } else if node.media_kind == crate::models::LibraryMediaKind::LiveAction {
+        title_extractor::movie_evidence_for_node(
+            node,
+            &media_file_names,
+            &database.get_root(node.library_root_id)?,
+        )
     } else {
         title_extractor::build_match_evidence(
             &node.folder_name,
@@ -429,19 +575,68 @@ where
             &media_file_names,
         )
     };
+    if write_mode == MatchWriteMode::IfAbsent
+        && !database.get_root(node.library_root_id)?.auto_bangumi
+    {
+        return Ok(AutoMatchNodeResult::Unmatched);
+    }
+    // Movie routing precedes ALL Bangumi search/alias/detail work, including when its title
+    // is uncertain or TMDb is unavailable. Existing provider choices remain authoritative.
+    if crate::tmdb::automatic_movie_source(node, &evidence, &media_file_names) {
+        if initial_binding.is_some() {
+            return Ok(AutoMatchNodeResult::AlreadyBound);
+        }
+        let Some(expected) = initial_tmdb_snapshot.as_deref() else {
+            return Ok(AutoMatchNodeResult::Unmatched);
+        };
+        if run_cache.owned_file_revisions.get(&node.library_root_id) != Some(&initial_root_revision)
+            || !crate::tmdb::automatic_evidence(node, &evidence, &media_file_names)
+        {
+            crate::tmdb::diagnostic(database, node, &evidence, "ineligible");
+            return Ok(AutoMatchNodeResult::Unmatched);
+        }
+        return tmdb_fallback(
+            database,
+            node,
+            cache_root,
+            &evidence,
+            &media_file_names,
+            run_cache,
+            (provider, is_cancelled, false, expected),
+        );
+    }
     let confirmed_alias = database
         .resolve_confirmed_title_alias(&title_extractor::confirmed_alias_candidates(&evidence))?;
-    let decision = match assess_evidence_online_for_kind(
-        &evidence,
-        node.node_type == NodeType::Container && !node.media_kind.is_book(),
-        confirmed_alias,
-        run_cache,
-        is_cancelled,
-        node.media_kind,
-    )? {
-        OnlineAssessment::Decision(decision) => *decision,
-        OnlineAssessment::Cancelled => return Ok(AutoMatchNodeResult::Cancelled),
+    if run_cache.bangumi_search_error.is_some() {
+        return Ok(AutoMatchNodeResult::Unmatched);
+    }
+    let assessment = if let Some(error) = &run_cache.bangumi_search_error {
+        Err(error.clone())
+    } else {
+        assess_evidence_online_for_kind(
+            &evidence,
+            node.node_type == NodeType::Container && !node.media_kind.is_book(),
+            confirmed_alias,
+            run_cache,
+            is_cancelled,
+            node.media_kind,
+        )
     };
+    let decision = match assessment {
+        Ok(OnlineAssessment::Decision(decision)) => *decision,
+        Ok(OnlineAssessment::Cancelled) => return Ok(AutoMatchNodeResult::Cancelled),
+        Err(error) => return Err(error),
+    };
+    if matches!(
+        node.media_kind,
+        crate::models::LibraryMediaKind::Doujin | crate::models::LibraryMediaKind::Artbook
+    ) && !decision
+        .best
+        .as_ref()
+        .is_some_and(|candidate| candidate.primary_exact || candidate.alternate_exact)
+    {
+        return Ok(AutoMatchNodeResult::Unmatched);
+    }
     let subject = match decision.confidence {
         MatchConfidence::High | MatchConfidence::Direct => decision
             .best
@@ -506,6 +701,42 @@ where
         run_cache,
         is_cancelled,
     )
+}
+
+fn tmdb_fallback<P: crate::tmdb::AutomaticProvider, C: Fn() -> bool>(
+    database: &Database,
+    node: &MediaNode,
+    cache_root: Result<&Path, &str>,
+    evidence: &MatchEvidence,
+    files: &[String],
+    run_cache: &mut MatchRunCache,
+    context: (&mut P, &C, bool, &str),
+) -> AppResult<AutoMatchNodeResult> {
+    use crate::tmdb::AutomaticOutcome;
+    let (provider, cancelled, bangumi_failed, expected) = context;
+    let result = run_cache.tmdb.fallback(
+        crate::tmdb::AutomaticRequest {
+            db: database,
+            node,
+            evidence,
+            files,
+            root: cache_root,
+            expected,
+        },
+        provider,
+        cancelled,
+    )?;
+    Ok(match result {
+        AutomaticOutcome::Matched if bangumi_failed => AutoMatchNodeResult::MatchedWithCoverError,
+        AutomaticOutcome::Matched => AutoMatchNodeResult::Matched,
+        AutomaticOutcome::MatchedWithCoverError => AutoMatchNodeResult::MatchedWithCoverError,
+        AutomaticOutcome::Unmatched if bangumi_failed => {
+            AutoMatchNodeResult::UnmatchedWithProviderError
+        }
+        AutomaticOutcome::Unmatched => AutoMatchNodeResult::Unmatched,
+        AutomaticOutcome::Stale => AutoMatchNodeResult::AlreadyBound,
+        AutomaticOutcome::Cancelled => AutoMatchNodeResult::Cancelled,
+    })
 }
 
 fn restore_bound_cover<C>(
@@ -701,6 +932,11 @@ fn assess_evidence_online_for_kind<C>(
 where
     C: Fn() -> bool,
 {
+    #[cfg(test)]
+    assert!(
+        !run_cache.forbid_bangumi,
+        "movie route entered Bangumi matching"
+    );
     // A unique alias learned from an explicit manual binding is application-owned evidence for
     // one exact Subject. It receives first detail priority below, while ordinary bounded search
     // remains available if that observation is stale, conflicted, or unavailable.
@@ -1064,6 +1300,10 @@ fn score_recalled_candidate_for_kind(
     // result has no hard conflict, preserve that provider signal instead of leaving the item in
     // the former Pending gap merely because a fan translation is absent from provider aliases.
     if candidate.primary_query_rank == Some(0)
+        && !matches!(
+            kind,
+            crate::models::LibraryMediaKind::Doujin | crate::models::LibraryMediaKind::Artbook
+        )
         && evidence.evidence_quality >= 40
         && !title_extractor::is_generic_title(&evidence.primary_title)
     {
@@ -1553,6 +1793,785 @@ fn bigrams(value: &[char]) -> Vec<(char, char)> {
 mod tests {
     use super::*;
 
+    struct MovieFixtureProvider {
+        available: bool,
+        calls: [usize; 4],
+        movies: AppResult<Vec<crate::tmdb::Movie>>,
+        on_search: Option<Box<dyn FnMut()>>,
+        details_override: Option<Vec<crate::tmdb::Movie>>,
+        write_cover: bool,
+        cover_error: Option<String>,
+        on_cover: Option<Box<dyn FnMut()>>,
+    }
+    impl MovieFixtureProvider {
+        fn reliable() -> Self {
+            Self {
+                available: true,
+                calls: [0; 4],
+                movies: Ok(vec![crate::tmdb::Movie {
+                    id: 27205,
+                    title: "Inception".into(),
+                    original_title: "Inception".into(),
+                    release_date: Some("2010-07-16".into()),
+                    overview: String::new(),
+                    poster_path: None,
+                    genre_ids: Some(vec![28, 878]),
+                    original_language: Some("en".into()),
+                    automatic_poster: false,
+                    poster_policy_version: 1,
+                    alternative_titles: Vec::new(),
+                }]),
+                on_search: None,
+                details_override: None,
+                write_cover: false,
+                cover_error: None,
+                on_cover: None,
+            }
+        }
+    }
+    impl crate::tmdb::AutomaticProvider for MovieFixtureProvider {
+        fn available(&mut self) -> bool {
+            self.calls[0] += 1;
+            self.available
+        }
+        fn search(
+            &mut self,
+            _: &Database,
+            _: i64,
+            query: &str,
+            year: Option<u16>,
+            _: &str,
+        ) -> AppResult<Vec<crate::tmdb::Movie>> {
+            self.calls[1] += 1;
+            assert_eq!(query, "Inception");
+            assert_eq!(year, Some(2010));
+            if let Some(callback) = &mut self.on_search {
+                callback();
+            }
+            self.movies.clone()
+        }
+        fn detail(&mut self, id: i64, _: &str) -> AppResult<crate::tmdb::Movie> {
+            self.calls[2] += 1;
+            self.details_override
+                .as_ref()
+                .unwrap_or(self.movies.as_ref().unwrap())
+                .iter()
+                .find(|m| m.id == id)
+                .cloned()
+                .ok_or_else(|| "TMDB_INVALID_ID".into())
+        }
+        fn cover(&mut self, root: &Path, movie: &crate::tmdb::Movie) -> AppResult<Option<PathBuf>> {
+            self.calls[3] += 1;
+            if let Some(callback) = &mut self.on_cover {
+                callback();
+            }
+            if let Some(error) = &self.cover_error {
+                return Err(error.clone());
+            }
+            if self.write_cover {
+                crate::tmdb::fixture_movie_cover(root, movie).map(Some)
+            } else {
+                Ok(None)
+            }
+        }
+    }
+    fn automatic_movie_fixture(
+        mode: &str,
+    ) -> (tempfile::TempDir, Database, MediaNode, MatchRunCache) {
+        use m2shelf_smart_mixed_lab::model::LibraryKind;
+        use m2shelf_smart_mixed_shadow::fixture::Factory;
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("automatic-movie.db");
+        let mut f = Factory::create(&path, LibraryKind::LiveAction, mode).unwrap();
+        let name = if mode == "VIDEO_FILE" {
+            "Inception.2010.1080p.BluRay.x264-GROUP.mkv"
+        } else {
+            "Inception.2010.1080p.BluRay.x264-GROUP"
+        };
+        let id = f.node(name).unwrap();
+        f.connection
+            .execute("UPDATE library_roots SET auto_bangumi=1", [])
+            .unwrap();
+        f.connection.execute("UPDATE nodes SET node_type='WORK',direct_video_count=1,total_video_count=1 WHERE id=?1", [id]).unwrap();
+        f.connection.execute("INSERT INTO media_files(node_id,absolute_path,file_name,extension,file_size,modified_at) VALUES(?1,?2,'Inception.2010.1080p.BluRay.x264-GROUP.mkv','mkv',10,'2026-01-01')",
+            rusqlite::params![id, format!("{}\\main.mkv", Factory::absolute(name))]).unwrap();
+        let db = Database::new(path);
+        db.migrate().unwrap();
+        let node = db.get_node(id).unwrap();
+        let mut run = MatchRunCache {
+            forbid_bangumi: true,
+            ..Default::default()
+        };
+        let evidence = title_extractor::build_movie_match_evidence(
+            &node.folder_name,
+            &node.display_name,
+            &["Inception.2010.1080p.BluRay.x264-GROUP.mkv".into()],
+            db.get_root(node.library_root_id).unwrap().recognition_mode,
+        );
+        assert!(crate::tmdb::automatic_evidence(
+            &node,
+            &evidence,
+            &["Inception.2010.1080p.BluRay.x264-GROUP.mkv".into()]
+        ));
+        for query in match_queries(&evidence) {
+            run.searches.insert(
+                format!(
+                    "LIVE_ACTION:{}",
+                    title_extractor::normalize_title_for_match(&query)
+                ),
+                Ok(Vec::new()),
+            );
+        }
+        (temp, db, node, run)
+    }
+
+    #[test]
+    fn automatic_movie_direct_tmdb_ignores_bangumi_candidates_and_failures_in_both_modes() {
+        let _serial = crate::tmdb::MOVIE_TEST_GATE
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        for mode in ["FOLDER", "VIDEO_FILE"] {
+            for branch in ["matched", "empty", "unqualified", "request-error"] {
+                let (_temp, db, node, mut run) = automatic_movie_fixture(mode);
+                let mut provider = MovieFixtureProvider::reliable();
+                match branch {
+                    "matched" | "unqualified" => {
+                        let mut candidate = subject_with_type(999, "Inception", None, 6);
+                        candidate.date = Some(
+                            if branch == "matched" {
+                                "2010-01-01"
+                            } else {
+                                "2024-01-01"
+                            }
+                            .into(),
+                        );
+                        for result in run.searches.values_mut() {
+                            *result = Ok(vec![candidate.clone()]);
+                        }
+                        run.details.insert(999, Ok(candidate));
+                    }
+                    "request-error" => {
+                        for result in run.searches.values_mut() {
+                            *result = Err("搜索 Bangumi 失败：synthetic-offline".into());
+                        }
+                    }
+                    _ => {}
+                }
+                let result = auto_match_node_with_tmdb(
+                    &db,
+                    &node,
+                    Err("SYNTHETIC_CACHE_UNAVAILABLE"),
+                    MatchWriteMode::IfAbsent,
+                    &mut run,
+                    &|| false,
+                    &mut provider,
+                )
+                .unwrap();
+                assert!(
+                    matches!(
+                        result,
+                        AutoMatchNodeResult::Matched | AutoMatchNodeResult::MatchedWithCoverError
+                    ),
+                    "{mode}/{branch}: {result:?}"
+                );
+                assert!(db.get_binding(node.id).unwrap().is_none());
+                assert_eq!(provider.calls, [1, 1, 1, 0]);
+                assert_eq!(
+                    crate::tmdb::binding(&db.connect().unwrap(), node.id)
+                        .unwrap()
+                        .unwrap()
+                        .movie
+                        .id,
+                    27205
+                );
+                assert!(!run.bangumi_error_reported);
+            }
+        }
+    }
+
+    #[test]
+    fn movie_official_alternate_titles_are_required_for_foreign_names_and_ambiguity_is_retained() {
+        let _serial = crate::tmdb::MOVIE_TEST_GATE
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        for mode in ["FOLDER", "VIDEO_FILE"] {
+            for scenario in [
+                "official-alias",
+                "no-alias",
+                "two-aliases",
+                "too-many",
+                "detail-budget",
+            ] {
+                let (_temp, db, node, mut run) = automatic_movie_fixture(mode);
+                let mut provider = MovieFixtureProvider::reliable();
+                let mut foreign = provider.movies.as_ref().unwrap()[0].clone();
+                foreign.title = "本地译名".into();
+                foreign.original_title = "異国の作品".into();
+                provider.movies = Ok(vec![foreign.clone()]);
+                foreign.alternative_titles = if scenario == "no-alias" {
+                    vec![]
+                } else {
+                    vec!["Inception".into()]
+                };
+                provider.details_override = Some(vec![foreign.clone()]);
+                if scenario == "two-aliases" || scenario == "too-many" {
+                    for offset in 1..if scenario == "two-aliases" { 2 } else { 6 } {
+                        let mut candidate = provider.movies.as_ref().unwrap()[0].clone();
+                        candidate.id += offset;
+                        provider.movies.as_mut().unwrap().push(candidate);
+                        let mut detail = foreign.clone();
+                        detail.id += offset;
+                        provider.details_override.as_mut().unwrap().push(detail);
+                    }
+                }
+                if scenario == "detail-budget" {
+                    run.tmdb = crate::tmdb::fixture_exhausted_details();
+                }
+                let result = auto_match_node_with_tmdb(
+                    &db,
+                    &node,
+                    Ok(_temp.path()),
+                    MatchWriteMode::IfAbsent,
+                    &mut run,
+                    &|| false,
+                    &mut provider,
+                )
+                .unwrap();
+                if scenario == "official-alias" {
+                    assert_eq!(result, AutoMatchNodeResult::Matched);
+                    assert_eq!(
+                        db.get_node(node.id)
+                            .unwrap()
+                            .tmdb_binding
+                            .unwrap()
+                            .movie
+                            .alternative_titles,
+                        vec!["Inception"]
+                    );
+                } else {
+                    assert_eq!(result, AutoMatchNodeResult::Unmatched, "{mode}/{scenario}");
+                    assert!(db.get_node(node.id).unwrap().tmdb_binding.is_none());
+                }
+                assert_eq!(provider.calls[1], 1);
+                assert_eq!(
+                    provider.calls[2],
+                    match scenario {
+                        "two-aliases" => 2,
+                        "too-many" | "detail-budget" => 0,
+                        _ => 1,
+                    }
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn movie_existing_cover_upgrade_reuses_binding_and_never_overrides_manual_cancelled_or_failed_state(
+    ) {
+        let _serial = crate::tmdb::MOVIE_TEST_GATE
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        for mode in ["FOLDER", "VIDEO_FILE"] {
+            for scenario in [
+                "upgrade",
+                "upgrade-with-bangumi-cover",
+                "manual",
+                "inactive",
+                "failed",
+                "late-clear",
+            ] {
+                let (temp, db, node, mut run) = automatic_movie_fixture(mode);
+                let root = temp.path().join("covers");
+                std::fs::create_dir_all(&root).unwrap();
+                crate::cache::ensure_directories(&root).unwrap();
+                let mut provider = MovieFixtureProvider::reliable();
+                provider.write_cover = true;
+                let mut old = provider.movies.as_ref().unwrap()[0].clone();
+                old.poster_policy_version = 0;
+                old.original_language = None;
+                old.poster_path = Some("/zh.jpg".into());
+                let old_path = crate::tmdb::fixture_movie_cover(&root, &old).unwrap();
+                db.connect().unwrap().execute("INSERT INTO tmdb_movie_bindings(node_id,movie_id,payload_json,cover_cache_path,active,bound_at) VALUES(?1,?2,?3,?4,?5,'2020-01-01')",rusqlite::params![node.id,old.id,serde_json::to_string(&old).unwrap(),old_path.to_string_lossy(),scenario!="inactive"]).unwrap();
+                if scenario == "upgrade-with-bangumi-cover" {
+                    let connection = db.connect().unwrap();
+                    connection.execute("UPDATE nodes SET cover_source='BANGUMI',cover_cache_path=?2 WHERE id=?1",rusqlite::params![node.id,old_path.to_string_lossy()]).unwrap();
+                    connection.execute("INSERT INTO metadata_bindings(node_id,provider,provider_subject_id,provider_subject_type,provider_title,provider_image_url) VALUES(?1,'BANGUMI',42,6,'Inception','https://lain.bgm.tv/pic/cover/l/fixture.jpg')",[node.id]).unwrap();
+                    // Both actual command/scanner candidate queries must reach the repair, even
+                    // with the previous provider's image present and the media tree unchanged.
+                    // The factory's R: paths intentionally do not exist, so check the scanner's
+                    // indexed candidate query without bypassing its separate canonical path gate.
+                    assert!(db
+                        .list_unbound_bangumi_candidates(node.library_root_id)
+                        .unwrap()
+                        .iter()
+                        .any(|n| n.id == node.id && n.tmdb_binding.is_some()));
+                    assert!(db
+                        .list_bangumi_match_candidates(Some(&[node.id]), false)
+                        .unwrap()
+                        .iter()
+                        .any(|n| n.id == node.id));
+                }
+                if scenario == "manual" {
+                    db.connect().unwrap().execute("UPDATE nodes SET cover_source='MANUAL',cover_cache_path='user-picked' WHERE id=?1",[node.id]).unwrap();
+                }
+                if scenario == "failed" {
+                    provider.cover_error = Some("TMDB_COVER_NETWORK".into());
+                }
+                if scenario == "late-clear" {
+                    let db = db.clone();
+                    let id = node.id;
+                    provider.on_cover = Some(Box::new(move || {
+                        crate::tmdb::deactivate(&db, id).unwrap();
+                    }));
+                }
+                let fresh = db.get_node(node.id).unwrap();
+                let result = auto_match_node_with_tmdb(
+                    &db,
+                    &fresh,
+                    Ok(&root),
+                    MatchWriteMode::IfAbsent,
+                    &mut run,
+                    &|| false,
+                    &mut provider,
+                )
+                .unwrap();
+                let after = db.get_node(node.id).unwrap();
+                let bound = after.tmdb_binding.unwrap();
+                assert_eq!(bound.movie.id, old.id);
+                assert_eq!(after.display_name, node.display_name);
+                assert_eq!(provider.calls[1], 0, "cover repair must not search");
+                let bound_at: String = db
+                    .connect()
+                    .unwrap()
+                    .query_row(
+                        "SELECT bound_at FROM tmdb_movie_bindings WHERE node_id=?1",
+                        [node.id],
+                        |r| r.get(0),
+                    )
+                    .unwrap();
+                assert_eq!(bound_at, "2020-01-01");
+                match scenario {
+                    "upgrade" | "upgrade-with-bangumi-cover" => {
+                        assert_eq!(result, AutoMatchNodeResult::Matched);
+                        assert_eq!(bound.movie.poster_policy_version, 1);
+                        assert_eq!(bound.movie.original_language.as_deref(), Some("en"));
+                        let before = provider.calls;
+                        let _ = auto_match_node_with_tmdb(
+                            &db,
+                            &db.get_node(node.id).unwrap(),
+                            Ok(&root),
+                            MatchWriteMode::IfAbsent,
+                            &mut run,
+                            &|| false,
+                            &mut provider,
+                        )
+                        .unwrap();
+                        assert_eq!(provider.calls, before, "ready poster must be reused");
+                        if scenario == "upgrade-with-bangumi-cover" {
+                            assert_eq!(
+                                db.get_binding(node.id)
+                                    .unwrap()
+                                    .unwrap()
+                                    .provider_subject_id,
+                                42
+                            );
+                            assert!(
+                                db.list_bangumi_match_candidates(Some(&[node.id]), false)
+                                    .unwrap()
+                                    .is_empty(),
+                                "completed cover must leave the repair candidate set"
+                            );
+                        }
+                    }
+                    "failed" => {
+                        assert_eq!(result, AutoMatchNodeResult::MatchedWithCoverError);
+                        assert_eq!(bound.cover_cache_path.as_deref(), old_path.to_str());
+                        assert_eq!(bound.movie.poster_policy_version, 0);
+                        assert_eq!(bound.cover_error.as_deref(), Some("TMDB_COVER_NETWORK"));
+                    }
+                    "manual" => {
+                        assert_eq!(provider.calls, [0; 4]);
+                        assert_eq!(after.cover_cache_path.as_deref(), Some("user-picked"));
+                    }
+                    "inactive" => {
+                        assert_eq!(provider.calls, [0; 4]);
+                        assert!(!bound.active);
+                    }
+                    "late-clear" => {
+                        assert_eq!(result, AutoMatchNodeResult::AlreadyBound);
+                        assert!(!bound.active);
+                        assert_eq!(bound.movie.poster_policy_version, 0);
+                    }
+                    _ => unreachable!(),
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn automatic_movie_fallback_rejects_ambiguity_year_genre_and_provider_failures() {
+        let _serial = crate::tmdb::MOVIE_TEST_GATE
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        for mode in ["FOLDER", "VIDEO_FILE"] {
+            for scenario in [
+                "duplicate",
+                "year",
+                "fuzzy",
+                "documentary",
+                "animation",
+                "tv-movie",
+                "genres-missing",
+                "empty",
+                "missing",
+                "401",
+                "429",
+                "timeout",
+            ] {
+                let (_temp, db, node, mut run) = automatic_movie_fixture(mode);
+                let mut provider = MovieFixtureProvider::reliable();
+                let movies = provider.movies.as_mut().unwrap();
+                match scenario {
+                    "duplicate" => {
+                        let mut other = movies[0].clone();
+                        other.id += 1;
+                        movies.push(other);
+                    }
+                    "year" => movies[0].release_date = Some("2020-01-01".into()),
+                    "fuzzy" => movies[0].title = "Inceptions".into(),
+                    "documentary" => movies[0].genre_ids = Some(vec![99]),
+                    "animation" => movies[0].genre_ids = Some(vec![16]),
+                    "tv-movie" => movies[0].genre_ids = Some(vec![10770]),
+                    "genres-missing" => movies[0].genre_ids = None,
+                    "empty" => movies.clear(),
+                    "missing" => provider.available = false,
+                    "401" => provider.movies = Err("TMDB_HTTP_401".into()),
+                    "429" => provider.movies = Err("TMDB_HTTP_429".into()),
+                    "timeout" => provider.movies = Err("TMDB_NETWORK_FAILED".into()),
+                    _ => unreachable!(),
+                }
+                if scenario == "fuzzy" {
+                    provider.movies.as_mut().unwrap()[0].original_title = "Inceptions".into();
+                }
+                let result = auto_match_node_with_tmdb(
+                    &db,
+                    &node,
+                    Err("synthetic"),
+                    MatchWriteMode::IfAbsent,
+                    &mut run,
+                    &|| false,
+                    &mut provider,
+                )
+                .unwrap();
+                assert_eq!(result, AutoMatchNodeResult::Unmatched, "{mode}/{scenario}");
+                let diagnostic = crate::tmdb::diagnostics(&db).unwrap();
+                assert_eq!(
+                    diagnostic[0].outcome,
+                    match scenario {
+                        "missing" => "credentials-unavailable",
+                        "401" => "unauthorized",
+                        "429" => "rate-limited",
+                        "timeout" => "request-failed",
+                        "empty" => "no-results",
+                        _ => "no-unique-title-year",
+                    },
+                    "{mode}/{scenario}"
+                );
+                assert!(
+                    db.get_node(node.id).unwrap().tmdb_binding.is_none(),
+                    "{mode}/{scenario}"
+                );
+                assert_eq!(
+                    provider.calls[2],
+                    usize::from(scenario == "fuzzy"),
+                    "{mode}/{scenario}"
+                );
+                if matches!(scenario, "missing" | "401" | "429" | "timeout") {
+                    let before = provider.calls;
+                    assert_eq!(
+                        auto_match_node_with_tmdb(
+                            &db,
+                            &node,
+                            Err("synthetic"),
+                            MatchWriteMode::IfAbsent,
+                            &mut run,
+                            &|| false,
+                            &mut provider
+                        )
+                        .unwrap(),
+                        AutoMatchNodeResult::Unmatched
+                    );
+                    assert_eq!(provider.calls, before, "provider failure must not multiply");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn automatic_movie_fallback_preserves_manual_state_and_rejects_cancelled_stale_results() {
+        let _serial = crate::tmdb::MOVIE_TEST_GATE
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        for mode in ["FOLDER", "VIDEO_FILE"] {
+            for scenario in [
+                "manual-cover",
+                "bangumi",
+                "bangumi-rematch",
+                "tmdb",
+                "inactive-tmdb",
+                "root-disabled",
+                "global-disabled",
+                "cancelled",
+                "stale",
+                "racing-binding",
+            ] {
+                let (_temp, db, node, mut run) = automatic_movie_fixture(mode);
+                let mut provider = MovieFixtureProvider::reliable();
+                let c = db.connect().unwrap();
+                match scenario {
+                    "manual-cover" => {
+                        c.execute("UPDATE nodes SET cover_source='MANUAL',cover_cache_path='synthetic-manual' WHERE id=?1", [node.id]).unwrap();
+                    }
+                    "bangumi" | "bangumi-rematch" => {
+                        c.execute("INSERT INTO metadata_bindings(node_id,provider,provider_subject_id,provider_subject_type,provider_title) VALUES(?1,'BANGUMI',42,6,'Manual')", [node.id]).unwrap();
+                    }
+                    "tmdb" | "inactive-tmdb" => {
+                        c.execute("INSERT INTO tmdb_movie_bindings(node_id,movie_id,payload_json,active) VALUES(?1,42,?2,?3)", rusqlite::params![node.id,serde_json::to_string(&provider.movies.as_ref().unwrap()[0]).unwrap(),scenario=="tmdb"]).unwrap();
+                    }
+                    "root-disabled" => {
+                        c.execute("UPDATE library_roots SET auto_bangumi=0", [])
+                            .unwrap();
+                    }
+                    "global-disabled" => {
+                        c.execute("INSERT INTO settings(key,value) VALUES('bangumi_search_enabled','false')", []).unwrap();
+                    }
+                    "stale" | "racing-binding" => {
+                        let clone = db.clone();
+                        let id = node.id;
+                        provider.on_search = Some(Box::new(move || {
+                            if scenario == "stale" {
+                                clone.connect().unwrap().execute("UPDATE nodes SET display_name='New manual name' WHERE id=?1", [id]).unwrap();
+                            } else {
+                                clone.connect().unwrap().execute("INSERT INTO metadata_bindings(node_id,provider,provider_subject_id,provider_subject_type,provider_title) VALUES(?1,'BANGUMI',42,6,'Manual')", [id]).unwrap();
+                            }
+                        }));
+                    }
+                    _ => {}
+                }
+                let fresh = db.get_node(node.id).unwrap();
+                let result = auto_match_node_with_tmdb(
+                    &db,
+                    &fresh,
+                    Err("synthetic"),
+                    if scenario == "bangumi-rematch" {
+                        MatchWriteMode::ExplicitRematch
+                    } else {
+                        MatchWriteMode::IfAbsent
+                    },
+                    &mut run,
+                    &|| scenario == "cancelled",
+                    &mut provider,
+                )
+                .unwrap();
+                let after = db.get_node(node.id).unwrap();
+                match scenario {
+                    "manual-cover" => {
+                        assert_eq!(result, AutoMatchNodeResult::Matched);
+                        assert_eq!(after.cover_cache_path.as_deref(), Some("synthetic-manual"));
+                        assert_eq!(provider.calls[3], 0);
+                    }
+                    "tmdb" | "inactive-tmdb" => {
+                        assert_eq!(result, AutoMatchNodeResult::AlreadyBound);
+                        assert_eq!(provider.calls, [0; 4]);
+                        assert_eq!(after.tmdb_binding.unwrap().movie.id, 27205);
+                    }
+                    "bangumi" | "bangumi-rematch" => {
+                        assert_eq!(provider.calls, [0; 4]);
+                        assert_eq!(after.binding.unwrap().provider_subject_id, 42);
+                    }
+                    "stale" | "racing-binding" => {
+                        assert_eq!(result, AutoMatchNodeResult::AlreadyBound);
+                        assert!(after.tmdb_binding.is_none());
+                    }
+                    _ => {
+                        assert!(after.tmdb_binding.is_none());
+                        assert_eq!(provider.calls, [0; 4]);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn automatic_movie_fallback_provider_breaker_allows_interleaved_later_movies() {
+        let _serial = crate::tmdb::MOVIE_TEST_GATE
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        for mode in ["FOLDER", "VIDEO_FILE"] {
+            for tv_first in [false, true] {
+                let (temp, db, movie, mut run) = automatic_movie_fixture(mode);
+                run.forbid_bangumi = false; // This mixed fixture deliberately includes a TV episode.
+                let c = db.connect().unwrap();
+                let mut nodes = vec![movie.clone()];
+                for (suffix, name) in [
+                    ("tv", "Serial.2010.S01E01"),
+                    ("movie2", "Inception.2010.1080p.BluRay.x264-GROUP"),
+                ] {
+                    c.execute("INSERT INTO nodes(library_root_id,parent_node_id,absolute_path,folder_name,display_name,node_type,direct_video_count,total_video_count) VALUES(1,1,?1,?2,?2,'WORK',1,1)",
+                        rusqlite::params![format!("R:\\SyntheticLibrary\\{suffix}"),name]).unwrap();
+                    let id = c.last_insert_rowid();
+                    c.execute("INSERT INTO media_files(node_id,absolute_path,file_name,extension,file_size,modified_at) VALUES(?1,?2,?3,'mkv',10,'2026-01-01')",
+                        rusqlite::params![id,format!("R:\\SyntheticLibrary\\{suffix}\\main.mkv"),format!("{name}.mkv")]).unwrap();
+                    nodes.push(db.get_node(id).unwrap());
+                }
+                if tv_first {
+                    nodes.swap(0, 1);
+                }
+                for node in &nodes {
+                    let e = title_extractor::build_movie_match_evidence(
+                        &node.folder_name,
+                        &node.display_name,
+                        &[format!("{}.mkv", node.folder_name)],
+                        db.get_root(node.library_root_id).unwrap().recognition_mode,
+                    );
+                    for query in match_queries(&e) {
+                        run.searches.insert(
+                            format!(
+                                "LIVE_ACTION:{}",
+                                title_extractor::normalize_title_for_match(&query)
+                            ),
+                            Err("搜索 Bangumi 失败：synthetic-offline".into()),
+                        );
+                    }
+                }
+                let mut provider = MovieFixtureProvider::reliable();
+                let report = run_match_nodes_with_tmdb(
+                    &db,
+                    &nodes,
+                    Ok(temp.path()),
+                    MatchWriteMode::IfAbsent,
+                    |_, _, _, _| {},
+                    (|| false, &mut provider),
+                    run,
+                );
+                assert_eq!(
+                    report,
+                    AutoMatchReport {
+                        examined: 3,
+                        matched: 2,
+                        unmatched: 0,
+                        errors: 1
+                    },
+                    "{mode}/tv-first={tv_first}"
+                );
+                assert_eq!(provider.calls, [1, 2, 2, 2]);
+            }
+        }
+    }
+
+    #[test]
+    fn automatic_movie_fallback_rejects_changes_during_primary_provider_and_late_cancel() {
+        let _serial = crate::tmdb::MOVIE_TEST_GATE
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        for mode in ["FOLDER", "VIDEO_FILE"] {
+            let (_temp, db, node, mut run) = automatic_movie_fixture(mode);
+            let mut provider = MovieFixtureProvider::reliable();
+            let count = std::cell::Cell::new(0);
+            let result=auto_match_node_with_tmdb(&db,&node,Err("synthetic"),MatchWriteMode::IfAbsent,&mut run,&||{
+                let value=count.get()+1;count.set(value);
+                // assess_evidence checks cancellation before its first cached HTTP result.
+                if value==1 { db.connect().unwrap().execute("UPDATE nodes SET display_name='User changed the title' WHERE id=?1",[node.id]).unwrap(); }
+                false
+            },&mut provider).unwrap();
+            assert_eq!(result, AutoMatchNodeResult::AlreadyBound);
+            assert_eq!(provider.calls, [0; 4]);
+            assert!(db.get_node(node.id).unwrap().tmdb_binding.is_none());
+
+            let (_temp, db, node, mut run) = automatic_movie_fixture(mode);
+            let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let callback = cancelled.clone();
+            let mut provider = MovieFixtureProvider::reliable();
+            provider.on_search = Some(Box::new(move || {
+                callback.store(true, std::sync::atomic::Ordering::SeqCst)
+            }));
+            let result = auto_match_node_with_tmdb(
+                &db,
+                &node,
+                Err("synthetic"),
+                MatchWriteMode::IfAbsent,
+                &mut run,
+                &|| cancelled.load(std::sync::atomic::Ordering::SeqCst),
+                &mut provider,
+            )
+            .unwrap();
+            assert_eq!(result, AutoMatchNodeResult::Cancelled);
+            assert_eq!(provider.calls, [1, 1, 0, 0]);
+            assert!(db.get_node(node.id).unwrap().tmdb_binding.is_none());
+        }
+    }
+
+    #[test]
+    fn automatic_movie_fallback_requires_live_action_feature_evidence() {
+        let _serial = crate::tmdb::MOVIE_TEST_GATE
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        use crate::models::LibraryMediaKind;
+        for mode in ["FOLDER", "VIDEO_FILE"] {
+            let (_temp, _db, node, _run) = automatic_movie_fixture(mode);
+            let files = vec!["Inception.2010.1080p.BluRay.x264-GROUP.mkv".into()];
+            let e = title_extractor::build_match_evidence(
+                &node.folder_name,
+                &node.display_name,
+                None,
+                &files,
+            );
+            for kind in [
+                LibraryMediaKind::Video,
+                LibraryMediaKind::Animation,
+                LibraryMediaKind::Comic,
+                LibraryMediaKind::Ebook,
+                LibraryMediaKind::Doujin,
+                LibraryMediaKind::Artbook,
+            ] {
+                let mut other = node.clone();
+                other.media_kind = kind;
+                assert!(
+                    !crate::tmdb::automatic_evidence(&other, &e, &files),
+                    "{mode}/{kind:?}"
+                );
+            }
+            for name in [
+                "Inception.2010.S01E01",
+                "Inception.2010.EP01",
+                "Inception.2010.TV",
+                "Inception.2010.Documentary",
+                "Inception.2010.第1集",
+            ] {
+                let mut other = node.clone();
+                other.folder_name = name.into();
+                other.display_name = name.into();
+                let e = title_extractor::build_match_evidence(name, name, None, &[]);
+                assert!(
+                    !crate::tmdb::automatic_evidence(&other, &e, &files),
+                    "{mode}/{name}"
+                );
+            }
+            let mut weak = e.clone();
+            weak.year_is_strong = false;
+            // Weak/no year may be searched, but never automatically bound without strong year.
+            assert!(crate::tmdb::automatic_evidence(&node, &weak, &files));
+            let mut multi = node.clone();
+            multi.total_video_count = 2;
+            assert!(!crate::tmdb::automatic_evidence(&multi, &e, &files));
+            assert!(!crate::tmdb::automatic_evidence(
+                &node,
+                &e,
+                &[files[0].clone(), files[0].clone()]
+            ));
+        }
+    }
+
     fn subject(id: i64, title: &str, title_cn: Option<&str>) -> BangumiSubject {
         BangumiSubject {
             subject_id: id,
@@ -1645,6 +2664,7 @@ mod tests {
 
     fn ineligible_progress_node(id: i64) -> MediaNode {
         MediaNode {
+            tmdb_binding: None,
             media_kind: crate::models::LibraryMediaKind::Video,
             direct_comic_book_count: 0,
             child_comic_branch_count: 0,
@@ -2686,3 +3706,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod movie_pipeline_tests;

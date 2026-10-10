@@ -1,5 +1,6 @@
 import type { MediaNode, ViewMode } from "../types/media";
 import { MediaCard } from "./MediaCard";
+import type {ReactNode} from 'react';
 
 interface PosterGridProps {
   nodes: MediaNode[];
@@ -14,12 +15,14 @@ interface PosterGridProps {
   editMode?: boolean;
   selectedNodeIds?: ReadonlySet<number>;
   onSelect?: (node: MediaNode) => void;
+  children?: ReactNode;
 }
 
 export function PosterGrid(props: PosterGridProps) {
   return (
     <div className={`poster-grid poster-grid-${props.viewMode}`}>
       {props.nodes.map((node) => <MediaCard showModifiedTime={props.showModifiedTime} key={node.id} node={node} viewMode={props.viewMode} onOpen={props.onOpen} onMenu={props.onMenu} onBangumi={props.onBangumi} onRetryCover={props.onRetryCover} coverRevision={props.coverRevision} watchedAt={props.watchedAtByNodeId?.get(node.id)} editMode={props.editMode} selected={props.selectedNodeIds?.has(node.id)} onSelect={props.onSelect} />)}
+      {props.children}
     </div>
   );
 }

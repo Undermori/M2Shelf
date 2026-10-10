@@ -1,0 +1,57 @@
+{
+  "id": 21,
+  "title": "Same title distinct parents and Root scopes",
+  "input": {
+    "root_id": "fixture-root",
+    "media_kind": "COMIC",
+    "complete": true,
+    "entries": [
+      {
+        "path": "作者A",
+        "kind": "DIRECTORY",
+        "hint": "AUTHOR"
+      },
+      {
+        "path": "作者B",
+        "kind": "DIRECTORY",
+        "hint": "AUTHOR"
+      },
+      {
+        "path": "作者A/同名.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "作者B/同名.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      }
+    ]
+  },
+  "expected": {
+    "units": [
+      {
+        "path": "作者A/同名.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "作者B/同名.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      }
+    ],
+    "root_paths": [
+      "作者A",
+      "作者B"
+    ],
+    "series": [],
+    "directory_roles": {},
+    "diagnostics": [],
+    "editions": 0,
+    "retained_prior": 0
+  },
+  "negative_assertion": "No title-based global dedup; additional property test checks distinct Root IDs"
+}

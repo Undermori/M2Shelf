@@ -1,3 +1,4 @@
+import {Select} from './Select';
 import { useEffect, useMemo } from "react";
 import type { MediaNode, UserTag } from "../types/media";
 import { useI18n } from "../lib/i18n";
@@ -30,14 +31,14 @@ export function TagFilter({ nodes, value, onChange }: TagFilterProps) {
     <label className="sort-field tag-filter-field">
       <Icon name="tag" />
       <span className="sr-only">{t("filter.tagsAria")}</span>
-      <select
+      <Select
         aria-label={t("filter.tagsAria")}
         onChange={(event) => onChange(event.target.value ? Number(event.target.value) : null)}
         value={selected}
       >
         <option value="">{t("filter.allTags")}</option>
         {tags.map((tag) => <option key={tag.id} value={tag.id}>{tag.name}</option>)}
-      </select>
+      </Select>
     </label>
   );
 }

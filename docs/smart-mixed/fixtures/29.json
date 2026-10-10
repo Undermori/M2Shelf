@@ -1,0 +1,97 @@
+{
+  "id": 29,
+  "title": "Parent images and nested file volume",
+  "input": {
+    "root_id": "fixture-root",
+    "media_kind": "COMIC",
+    "complete": true,
+    "entries": [
+      {
+        "path": "混合",
+        "kind": "DIRECTORY",
+        "hint": null
+      },
+      {
+        "path": "混合/001.png",
+        "kind": "FILE",
+        "format": "PNG",
+        "verified": true
+      },
+      {
+        "path": "混合/002.png",
+        "kind": "FILE",
+        "format": "PNG",
+        "verified": true
+      },
+      {
+        "path": "混合/第02卷",
+        "kind": "DIRECTORY",
+        "hint": null
+      },
+      {
+        "path": "混合/第02卷/第02卷.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      }
+    ],
+    "page_orders": [
+      {
+        "directory": "混合",
+        "pages": [
+          "混合/001.png",
+          "混合/002.png"
+        ],
+        "basis": "EXISTING_INDEXED_NATURAL_ORDER"
+      }
+    ]
+  },
+  "expected": {
+    "units": [
+      {
+        "path": "混合",
+        "kind": "DIRECT_PAGES",
+        "pages": [
+          "混合/001.png",
+          "混合/002.png"
+        ]
+      },
+      {
+        "path": "混合/第02卷/第02卷.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      }
+    ],
+    "root_paths": [
+      "混合"
+    ],
+    "series": [
+      {
+        "directory": "混合",
+        "title": "混合",
+        "members": [
+          {
+            "path": "混合",
+            "volume": null,
+            "chapter": null,
+            "role": "MAIN",
+            "decision": "APPLY"
+          },
+          {
+            "path": "混合/第02卷/第02卷.pdf",
+            "volume": 2,
+            "chapter": null,
+            "role": "VOLUME",
+            "decision": "APPLY"
+          }
+        ],
+        "decision": "REVIEW"
+      }
+    ],
+    "directory_roles": {},
+    "diagnostics": [],
+    "editions": 0,
+    "retained_prior": 0
+  },
+  "negative_assertion": "No direct-page loss; no automatic volume1"
+}

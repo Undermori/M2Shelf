@@ -75,7 +75,7 @@ export function FavoritesPage(props: FavoritesPageProps) {
           </div>
         </div>
         <div className="page-title-row">
-          <div><h1>{selectedFolder?.name ?? t("favorites.title")}</h1><p>{selectedFolder ? t("favorites.folderDescription") : t("favorites.description")}</p></div>
+          <div><h1>{selectedFolder?.name ?? t("favorites.title")}</h1></div>
           {selectedFolder && <div className="browse-controls">
             <label className="search-field"><Icon name="search" /><input aria-label={t("favorites.filterAria")} onChange={(event) => props.onFilter(event.target.value)} placeholder={t("favorites.filterPlaceholder")} value={props.filter} />{props.filter && <button aria-label={t("common.clear")} onClick={() => props.onFilter("")} type="button"><Icon name="close" /></button>}</label>
             <CollectionSortControl value={props.sort} onChange={props.onSort} />

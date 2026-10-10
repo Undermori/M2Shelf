@@ -77,7 +77,6 @@ export function BatchTagDialog({ nodeIds, onClose, onApplied }: BatchTagDialogPr
           {tags?.length === 0 && <p className="tag-empty"><Icon name="tag" />{t("selection.noExistingTags")}</p>}
           {tags?.map((tag) => <button className="batch-tag-option" disabled={busy} key={tag.id} onClick={() => void run(() => api.batchAssignTag(nodeIds, tag.id))} type="button"><span><Icon name="tag" /></span><strong>{tag.name}</strong><small>{t("selection.applyExistingTag")}</small><Icon name="chevron" /></button>)}
         </div>
-        <footer className="modal-footer"><Icon name="shield" />{t("selection.tagFooter")}</footer>
       </section>
     </div>
   );

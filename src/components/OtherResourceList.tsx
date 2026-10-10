@@ -44,8 +44,8 @@ export function OtherResourceList({ expandedFolderIds, modifiedSort, files, fold
             <span className="resource-icon"><Icon name="folder-open" /></span>
             <span className="resource-copy">
               <strong>{folder.folderName}</strong>
-              <small>{t("resources.folder")} · {(folder.mediaKind === 'COMIC' || folder.mediaKind === 'EBOOK') && (folder.totalComicBookCount ?? 0) > 0 ? t('comic.readableCount', {count: folder.totalComicBookCount ?? 0}) : (folder.totalVideoCount ?? 0) > 0 ? t("resources.videoCount", { count: folder.totalVideoCount ?? 0 }) : t("resources.attachmentDirectory")}</small>
-              {expandedFolderIds?.includes(folder.id) && <small>{t(folder.mediaKind === 'COMIC' || folder.mediaKind === 'EBOOK' ? 'comic.expandedBooks' : "resources.expandedVideos")}</small>}
+              <small>{t("resources.folder")} · {(folder.mediaKind === 'COMIC' || folder.mediaKind === 'EBOOK' || (folder.mediaKind === 'DOUJIN' || folder.mediaKind === 'ARTBOOK')) && (folder.totalComicBookCount ?? 0) > 0 ? t('comic.readableCount', {count: folder.totalComicBookCount ?? 0}) : (folder.totalVideoCount ?? 0) > 0 ? t("resources.videoCount", { count: folder.totalVideoCount ?? 0 }) : t("resources.attachmentDirectory")}</small>
+              {expandedFolderIds?.includes(folder.id) && <small>{t(folder.mediaKind === 'COMIC' || folder.mediaKind === 'EBOOK' || (folder.mediaKind === 'DOUJIN' || folder.mediaKind === 'ARTBOOK') ? 'comic.expandedBooks' : "resources.expandedVideos")}</small>}
               <em title={folder.absolutePath}>{compactPath(folder.absolutePath, 96)}</em>
             </span>
             <Icon className="resource-chevron" name="chevron" />
@@ -55,7 +55,7 @@ export function OtherResourceList({ expandedFolderIds, modifiedSort, files, fold
       ))}
       {sortedFiles.map((file) => (
         <article className={`resource-row resource-${file.resourceType.toLocaleLowerCase()}`} key={`file-${file.id}`}>
-          <button className="resource-open" onDoubleClick={() => onOpenFile(file)} title={t("resources.doubleClickDefault")} type="button">
+          <button className="resource-open" onDoubleClick={() => onOpenFile(file)} title={t(['pdf','epub','txt','mobi','azw3','cbz','png','jpg','jpeg','webp','gif','bmp','avif'].includes(file.extension.replace(/^\./,'').toLowerCase())?'comic.doubleClickRead':'resources.doubleClickDefault')} type="button">
             <span className="resource-icon"><Icon name={resourceIcons[file.resourceType]} /></span>
             <span className="resource-copy">
               <strong>{file.fileName}</strong>

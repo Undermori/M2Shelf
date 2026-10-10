@@ -1,6 +1,6 @@
 [package]
 name = "m2shelf"
-version = "0.5.11"
+version = "0.5.13"
 description = "A read-only visual browser for local media collections"
 authors = ["森下Undermori"]
 edition = "2021"
@@ -20,11 +20,19 @@ name = "M2ShelfUpdater"
 path = "src/bin/m2shelf_updater.rs"
 
 [build-dependencies]
+cc = "1"
+zip = { version = "4", default-features = false, features = ["deflate"] }
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+zeroize = "1"
+m2shelf-smart-mixed-lab = { path = "../tools/smart-mixed-lab" }
+m2shelf-smart-mixed-shadow = { path = "../tools/smart-mixed-shadow", features = ["production"] }
 base64 = "0.22"
+encoding_rs = "0.8"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 regex = "1"
+scraper = "0.24"
 lopdf = { version = "0.38", default-features = false }
 roxmltree = "0.20"
 chrono = { version = "0.4", features = ["serde"] }
@@ -45,13 +53,17 @@ zip = { version = "4", default-features = false, features = ["deflate"] }
 windows-sys = { version = "0.60", features = [
     "Win32_Foundation",
     "Win32_Security",
+    "Win32_Security_Credentials",
+    "Win32_Graphics_Gdi",
     "Win32_Storage_FileSystem",
     "Win32_System_Com",
     "Win32_System_Threading",
+    "Win32_System_JobObjects",
     "Win32_UI_Shell",
     "Win32_UI_Shell_Common",
     "Win32_UI_WindowsAndMessaging",
 ] }
 
 [dev-dependencies]
+m2shelf-smart-mixed-shadow = { path = "../tools/smart-mixed-shadow", features = ["fixtures", "production"] }
 tempfile = "3"

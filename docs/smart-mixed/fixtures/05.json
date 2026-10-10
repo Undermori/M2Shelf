@@ -1,0 +1,73 @@
+{
+  "id": 5,
+  "title": "PDF and CBZ in one series",
+  "input": {
+    "root_id": "fixture-root",
+    "media_kind": "COMIC",
+    "complete": true,
+    "entries": [
+      {
+        "path": "作品A",
+        "kind": "DIRECTORY",
+        "hint": null
+      },
+      {
+        "path": "作品A/第01卷.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "作品A/第02卷.cbz",
+        "kind": "FILE",
+        "format": "CBZ",
+        "verified": true
+      }
+    ]
+  },
+  "expected": {
+    "units": [
+      {
+        "path": "作品A/第01卷.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "作品A/第02卷.cbz",
+        "kind": "FILE_BOOK",
+        "pages": []
+      }
+    ],
+    "root_paths": [
+      "作品A"
+    ],
+    "series": [
+      {
+        "directory": "作品A",
+        "title": "作品A",
+        "members": [
+          {
+            "path": "作品A/第01卷.pdf",
+            "volume": 1,
+            "chapter": null,
+            "role": "VOLUME",
+            "decision": "APPLY"
+          },
+          {
+            "path": "作品A/第02卷.cbz",
+            "volume": 2,
+            "chapter": null,
+            "role": "VOLUME",
+            "decision": "APPLY"
+          }
+        ],
+        "decision": "APPLY"
+      }
+    ],
+    "directory_roles": {},
+    "diagnostics": [],
+    "editions": 0,
+    "retained_prior": 0
+  },
+  "negative_assertion": "Mixed formats retain separate source identities"
+}

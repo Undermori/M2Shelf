@@ -1,0 +1,35 @@
+{
+  "id": 34,
+  "title": "Unsupported CBR RAR",
+  "input": {
+    "root_id": "fixture-root",
+    "media_kind": "COMIC",
+    "complete": true,
+    "entries": [
+      {
+        "path": "a.cbr",
+        "kind": "FILE",
+        "format": null,
+        "verified": false
+      },
+      {
+        "path": "b.rar",
+        "kind": "FILE",
+        "format": null,
+        "verified": false
+      }
+    ]
+  },
+  "expected": {
+    "units": [],
+    "root_paths": [],
+    "series": [],
+    "directory_roles": {},
+    "diagnostics": [
+      "UNSUPPORTED_OR_UNVERIFIED_FILE"
+    ],
+    "editions": 0,
+    "retained_prior": 0
+  },
+  "negative_assertion": "Neither file may be declared readable"
+}

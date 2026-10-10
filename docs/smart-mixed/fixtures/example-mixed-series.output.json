@@ -1,0 +1,481 @@
+{
+  "schema_version": 1,
+  "rules_version": "smart-mixed-lab-1",
+  "mode": "SMART_MIXED",
+  "root_id": "fixture-root",
+  "physical_tree": [
+    {
+      "path": "",
+      "parent": null,
+      "kind": "DIRECTORY",
+      "state": "AVAILABLE"
+    },
+    {
+      "path": "混合系列",
+      "parent": "",
+      "kind": "DIRECTORY",
+      "state": "AVAILABLE"
+    },
+    {
+      "path": "混合系列/特典",
+      "parent": "混合系列",
+      "kind": "DIRECTORY",
+      "state": "AVAILABLE"
+    },
+    {
+      "path": "混合系列/特典/附录.pdf",
+      "parent": "混合系列/特典",
+      "kind": "FILE",
+      "state": "AVAILABLE"
+    },
+    {
+      "path": "混合系列/第01卷.pdf",
+      "parent": "混合系列",
+      "kind": "FILE",
+      "state": "AVAILABLE"
+    },
+    {
+      "path": "混合系列/第02卷.cbz",
+      "parent": "混合系列",
+      "kind": "FILE",
+      "state": "AVAILABLE"
+    },
+    {
+      "path": "混合系列/第03卷",
+      "parent": "混合系列",
+      "kind": "DIRECTORY",
+      "state": "AVAILABLE"
+    },
+    {
+      "path": "混合系列/第03卷/001.png",
+      "parent": "混合系列/第03卷",
+      "kind": "FILE",
+      "state": "AVAILABLE"
+    },
+    {
+      "path": "混合系列/第03卷/002.png",
+      "parent": "混合系列/第03卷",
+      "kind": "FILE",
+      "state": "AVAILABLE"
+    },
+    {
+      "path": "混合系列/第04-06卷",
+      "parent": "混合系列",
+      "kind": "DIRECTORY",
+      "state": "AVAILABLE"
+    },
+    {
+      "path": "混合系列/第04-06卷/04.pdf",
+      "parent": "混合系列/第04-06卷",
+      "kind": "FILE",
+      "state": "AVAILABLE"
+    },
+    {
+      "path": "混合系列/第04-06卷/05.pdf",
+      "parent": "混合系列/第04-06卷",
+      "kind": "FILE",
+      "state": "AVAILABLE"
+    },
+    {
+      "path": "混合系列/第04-06卷/06.pdf",
+      "parent": "混合系列/第04-06卷",
+      "kind": "FILE",
+      "state": "AVAILABLE"
+    }
+  ],
+  "directories": [
+    {
+      "path": "",
+      "role": "ROOT",
+      "decision": "KEEP_SEPARATE",
+      "evidence": [
+        {
+          "rule_id": "D01",
+          "facts": [
+            "",
+            "role=Root"
+          ],
+          "explanation": "Root is fixed; explicit category/extra/container signals are kept separate from reading units. Other directories stay conservative until local membership evidence is evaluated."
+        }
+      ]
+    },
+    {
+      "path": "混合系列",
+      "role": "SERIES",
+      "decision": "REVIEW",
+      "evidence": [
+        {
+          "rule_id": "D01",
+          "facts": [
+            "混合系列",
+            "role=Ambiguous"
+          ],
+          "explanation": "Root is fixed; explicit category/extra/container signals are kept separate from reading units. Other directories stay conservative until local membership evidence is evaluated."
+        },
+        {
+          "rule_id": "S01",
+          "facts": [
+            "members=7"
+          ],
+          "explanation": "Local numbered members establish a series proposal."
+        }
+      ]
+    },
+    {
+      "path": "混合系列/特典",
+      "role": "EXTRAS",
+      "decision": "KEEP_SEPARATE",
+      "evidence": [
+        {
+          "rule_id": "D01",
+          "facts": [
+            "混合系列/特典",
+            "role=Extras"
+          ],
+          "explanation": "Root is fixed; explicit category/extra/container signals are kept separate from reading units. Other directories stay conservative until local membership evidence is evaluated."
+        }
+      ]
+    },
+    {
+      "path": "混合系列/第03卷",
+      "role": "BOOK_IMAGE_DIRECTORY",
+      "decision": "APPLY",
+      "evidence": [
+        {
+          "rule_id": "D01",
+          "facts": [
+            "混合系列/第03卷",
+            "role=BookImageDirectory"
+          ],
+          "explanation": "Root is fixed; explicit category/extra/container signals are kept separate from reading units. Other directories stay conservative until local membership evidence is evaluated."
+        }
+      ]
+    },
+    {
+      "path": "混合系列/第04-06卷",
+      "role": "INTERMEDIATE_CONTAINER",
+      "decision": "KEEP_SEPARATE",
+      "evidence": [
+        {
+          "rule_id": "D01",
+          "facts": [
+            "混合系列/第04-06卷",
+            "role=IntermediateContainer"
+          ],
+          "explanation": "Root is fixed; explicit category/extra/container signals are kept separate from reading units. Other directories stay conservative until local membership evidence is evaluated."
+        }
+      ]
+    }
+  ],
+  "reading_units": [
+    {
+      "source_ref": "[\"fixture-root\",\"FILE\",\"混合系列/特典/附录.pdf\"]",
+      "path": "混合系列/特典/附录.pdf",
+      "aliases": [],
+      "kind": "FILE_BOOK",
+      "format": "PDF",
+      "pages": [],
+      "decision": "APPLY",
+      "evidence": [
+        {
+          "rule_id": "B01",
+          "facts": [
+            "混合系列/特典/附录.pdf",
+            "Some(Pdf)"
+          ],
+          "explanation": "A caller-validated supported book is a reading unit independently of grouping."
+        }
+      ]
+    },
+    {
+      "source_ref": "[\"fixture-root\",\"FILE\",\"混合系列/第01卷.pdf\"]",
+      "path": "混合系列/第01卷.pdf",
+      "aliases": [],
+      "kind": "FILE_BOOK",
+      "format": "PDF",
+      "pages": [],
+      "decision": "APPLY",
+      "evidence": [
+        {
+          "rule_id": "B01",
+          "facts": [
+            "混合系列/第01卷.pdf",
+            "Some(Pdf)"
+          ],
+          "explanation": "A caller-validated supported book is a reading unit independently of grouping."
+        }
+      ]
+    },
+    {
+      "source_ref": "[\"fixture-root\",\"FILE\",\"混合系列/第02卷.cbz\"]",
+      "path": "混合系列/第02卷.cbz",
+      "aliases": [],
+      "kind": "FILE_BOOK",
+      "format": "CBZ",
+      "pages": [],
+      "decision": "APPLY",
+      "evidence": [
+        {
+          "rule_id": "B01",
+          "facts": [
+            "混合系列/第02卷.cbz",
+            "Some(Cbz)"
+          ],
+          "explanation": "A caller-validated supported book is a reading unit independently of grouping."
+        }
+      ]
+    },
+    {
+      "source_ref": "[\"fixture-root\",\"DIRECT_PAGES\",\"混合系列/第03卷\"]",
+      "path": "混合系列/第03卷",
+      "aliases": [],
+      "kind": "DIRECT_PAGES",
+      "format": null,
+      "pages": [
+        "混合系列/第03卷/001.png",
+        "混合系列/第03卷/002.png"
+      ],
+      "decision": "APPLY",
+      "evidence": [
+        {
+          "rule_id": "I01",
+          "facts": [
+            "混合系列/第03卷",
+            "page_count=2; order=ExistingIndexedNaturalOrder; numbered=true"
+          ],
+          "explanation": "Only validated direct pages in an explicitly supplied existing reading order form this image book; descendant pages remain separate."
+        }
+      ]
+    },
+    {
+      "source_ref": "[\"fixture-root\",\"FILE\",\"混合系列/第04-06卷/04.pdf\"]",
+      "path": "混合系列/第04-06卷/04.pdf",
+      "aliases": [],
+      "kind": "FILE_BOOK",
+      "format": "PDF",
+      "pages": [],
+      "decision": "APPLY",
+      "evidence": [
+        {
+          "rule_id": "B01",
+          "facts": [
+            "混合系列/第04-06卷/04.pdf",
+            "Some(Pdf)"
+          ],
+          "explanation": "A caller-validated supported book is a reading unit independently of grouping."
+        }
+      ]
+    },
+    {
+      "source_ref": "[\"fixture-root\",\"FILE\",\"混合系列/第04-06卷/05.pdf\"]",
+      "path": "混合系列/第04-06卷/05.pdf",
+      "aliases": [],
+      "kind": "FILE_BOOK",
+      "format": "PDF",
+      "pages": [],
+      "decision": "APPLY",
+      "evidence": [
+        {
+          "rule_id": "B01",
+          "facts": [
+            "混合系列/第04-06卷/05.pdf",
+            "Some(Pdf)"
+          ],
+          "explanation": "A caller-validated supported book is a reading unit independently of grouping."
+        }
+      ]
+    },
+    {
+      "source_ref": "[\"fixture-root\",\"FILE\",\"混合系列/第04-06卷/06.pdf\"]",
+      "path": "混合系列/第04-06卷/06.pdf",
+      "aliases": [],
+      "kind": "FILE_BOOK",
+      "format": "PDF",
+      "pages": [],
+      "decision": "APPLY",
+      "evidence": [
+        {
+          "rule_id": "B01",
+          "facts": [
+            "混合系列/第04-06卷/06.pdf",
+            "Some(Pdf)"
+          ],
+          "explanation": "A caller-validated supported book is a reading unit independently of grouping."
+        }
+      ]
+    }
+  ],
+  "groups": [
+    {
+      "proposal_ref": "[\"fixture-root\",\"SERIES\",\"混合系列\"]",
+      "title": "混合系列",
+      "kind": "SERIES",
+      "directory": "混合系列",
+      "members": [
+        {
+          "source_ref": "[\"fixture-root\",\"FILE\",\"混合系列/特典/附录.pdf\"]",
+          "role": "EXTRA",
+          "volume": null,
+          "chapter": null,
+          "decision": "APPLY",
+          "evidence": [
+            {
+              "rule_id": "N01",
+              "facts": [
+                "混合系列/特典/附录.pdf",
+                "role=Extra; volume=None; chapter=None"
+              ],
+              "explanation": "Only explicit markers or trusted metadata establish numbering; bare digits need explicit work context and review. Extras and collections are not numbered main volumes."
+            }
+          ]
+        },
+        {
+          "source_ref": "[\"fixture-root\",\"FILE\",\"混合系列/第01卷.pdf\"]",
+          "role": "VOLUME",
+          "volume": 1,
+          "chapter": null,
+          "decision": "APPLY",
+          "evidence": [
+            {
+              "rule_id": "N01",
+              "facts": [
+                "混合系列/第01卷.pdf",
+                "role=Volume; volume=Some(1); chapter=None"
+              ],
+              "explanation": "Only explicit markers or trusted metadata establish numbering; bare digits need explicit work context and review. Extras and collections are not numbered main volumes."
+            }
+          ]
+        },
+        {
+          "source_ref": "[\"fixture-root\",\"FILE\",\"混合系列/第02卷.cbz\"]",
+          "role": "VOLUME",
+          "volume": 2,
+          "chapter": null,
+          "decision": "APPLY",
+          "evidence": [
+            {
+              "rule_id": "N01",
+              "facts": [
+                "混合系列/第02卷.cbz",
+                "role=Volume; volume=Some(2); chapter=None"
+              ],
+              "explanation": "Only explicit markers or trusted metadata establish numbering; bare digits need explicit work context and review. Extras and collections are not numbered main volumes."
+            }
+          ]
+        },
+        {
+          "source_ref": "[\"fixture-root\",\"DIRECT_PAGES\",\"混合系列/第03卷\"]",
+          "role": "VOLUME",
+          "volume": 3,
+          "chapter": null,
+          "decision": "APPLY",
+          "evidence": [
+            {
+              "rule_id": "N01",
+              "facts": [
+                "混合系列/第03卷",
+                "role=Volume; volume=Some(3); chapter=None"
+              ],
+              "explanation": "Only explicit markers or trusted metadata establish numbering; bare digits need explicit work context and review. Extras and collections are not numbered main volumes."
+            }
+          ]
+        },
+        {
+          "source_ref": "[\"fixture-root\",\"FILE\",\"混合系列/第04-06卷/04.pdf\"]",
+          "role": "VOLUME",
+          "volume": 4,
+          "chapter": null,
+          "decision": "REVIEW",
+          "evidence": [
+            {
+              "rule_id": "N02",
+              "facts": [
+                "混合系列/第04-06卷/04.pdf",
+                "role=Volume; volume=Some(4); chapter=None"
+              ],
+              "explanation": "Only explicit markers or trusted metadata establish numbering; bare digits need explicit work context and review. Extras and collections are not numbered main volumes."
+            }
+          ]
+        },
+        {
+          "source_ref": "[\"fixture-root\",\"FILE\",\"混合系列/第04-06卷/05.pdf\"]",
+          "role": "VOLUME",
+          "volume": 5,
+          "chapter": null,
+          "decision": "REVIEW",
+          "evidence": [
+            {
+              "rule_id": "N02",
+              "facts": [
+                "混合系列/第04-06卷/05.pdf",
+                "role=Volume; volume=Some(5); chapter=None"
+              ],
+              "explanation": "Only explicit markers or trusted metadata establish numbering; bare digits need explicit work context and review. Extras and collections are not numbered main volumes."
+            }
+          ]
+        },
+        {
+          "source_ref": "[\"fixture-root\",\"FILE\",\"混合系列/第04-06卷/06.pdf\"]",
+          "role": "VOLUME",
+          "volume": 6,
+          "chapter": null,
+          "decision": "REVIEW",
+          "evidence": [
+            {
+              "rule_id": "N02",
+              "facts": [
+                "混合系列/第04-06卷/06.pdf",
+                "role=Volume; volume=Some(6); chapter=None"
+              ],
+              "explanation": "Only explicit markers or trusted metadata establish numbering; bare digits need explicit work context and review. Extras and collections are not numbered main volumes."
+            }
+          ]
+        }
+      ],
+      "decision": "REVIEW",
+      "evidence": [
+        {
+          "rule_id": "S01",
+          "facts": [
+            "混合系列",
+            "distinct_numbered_members=6"
+          ],
+          "explanation": "Compatible explicit volume/chapter evidence within this directory, traversing only organizational containers, proposes a series. Bare numbers and an unnumbered direct-page unit require review."
+        }
+      ]
+    }
+  ],
+  "editions": [],
+  "root_items": [
+    {
+      "target_ref": "[\"fixture-root\",\"SERIES\",\"混合系列\"]",
+      "path": "混合系列",
+      "title": "混合系列",
+      "kind": "SERIES",
+      "decision": "REVIEW"
+    }
+  ],
+  "details": [
+    {
+      "group_ref": "[\"fixture-root\",\"SERIES\",\"混合系列\"]",
+      "reading_sources": [
+        "[\"fixture-root\",\"FILE\",\"混合系列/特典/附录.pdf\"]",
+        "[\"fixture-root\",\"FILE\",\"混合系列/第01卷.pdf\"]",
+        "[\"fixture-root\",\"FILE\",\"混合系列/第02卷.cbz\"]",
+        "[\"fixture-root\",\"DIRECT_PAGES\",\"混合系列/第03卷\"]",
+        "[\"fixture-root\",\"FILE\",\"混合系列/第04-06卷/04.pdf\"]",
+        "[\"fixture-root\",\"FILE\",\"混合系列/第04-06卷/05.pdf\"]",
+        "[\"fixture-root\",\"FILE\",\"混合系列/第04-06卷/06.pdf\"]"
+      ],
+      "transparent_directories": [
+        "混合系列/特典",
+        "混合系列/第03卷",
+        "混合系列/第04-06卷"
+      ],
+      "remaining_directories": []
+    }
+  ],
+  "retained_prior": [],
+  "diagnostics": [],
+  "retention_policy": "PROPOSAL_ONLY_NO_DELETIONS_OR_PERSISTENT_MUTATIONS"
+}

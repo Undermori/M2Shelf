@@ -1,0 +1,91 @@
+{
+  "id": 6,
+  "title": "PDF EPUB TXT mixed volumes",
+  "input": {
+    "root_id": "fixture-root",
+    "media_kind": "EBOOK",
+    "complete": true,
+    "entries": [
+      {
+        "path": "作品A",
+        "kind": "DIRECTORY",
+        "hint": null
+      },
+      {
+        "path": "作品A/第01卷.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "作品A/第02卷.epub",
+        "kind": "FILE",
+        "format": "EPUB",
+        "verified": true
+      },
+      {
+        "path": "作品A/第03卷.txt",
+        "kind": "FILE",
+        "format": "TXT",
+        "verified": true
+      }
+    ]
+  },
+  "expected": {
+    "units": [
+      {
+        "path": "作品A/第01卷.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "作品A/第02卷.epub",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "作品A/第03卷.txt",
+        "kind": "FILE_BOOK",
+        "pages": []
+      }
+    ],
+    "root_paths": [
+      "作品A"
+    ],
+    "series": [
+      {
+        "directory": "作品A",
+        "title": "作品A",
+        "members": [
+          {
+            "path": "作品A/第01卷.pdf",
+            "volume": 1,
+            "chapter": null,
+            "role": "VOLUME",
+            "decision": "APPLY"
+          },
+          {
+            "path": "作品A/第02卷.epub",
+            "volume": 2,
+            "chapter": null,
+            "role": "VOLUME",
+            "decision": "APPLY"
+          },
+          {
+            "path": "作品A/第03卷.txt",
+            "volume": 3,
+            "chapter": null,
+            "role": "VOLUME",
+            "decision": "APPLY"
+          }
+        ],
+        "decision": "APPLY"
+      }
+    ],
+    "directory_roles": {},
+    "diagnostics": [],
+    "editions": 0,
+    "retained_prior": 0
+  },
+  "negative_assertion": "Three readable files, not one merged book"
+}

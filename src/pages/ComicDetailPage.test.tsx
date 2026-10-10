@@ -3,7 +3,7 @@ import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 import {cleanup, fireEvent, render, screen, within} from '@testing-library/react';
 import {ComicDetailPage} from './ComicDetailPage';
 import type {WorkDetailPageProps} from './WorkDetailPage';
-import type {MediaNode, NodeDetail} from '../types/media';
+import type {MediaNode, NodeDetail, ResourceFile} from '../types/media';
 import type {ComicBook} from '../types/comic';
 import {I18nProvider} from '../lib/i18n';
 
@@ -20,6 +20,23 @@ beforeEach(() => {vi.resetAllMocks(); mocks.reveal.mockResolvedValue(undefined);
 afterEach(cleanup);
 
 describe('complete indexed comic details', () => {
+  it('shows previously indexed MOBI/AZW3 attachments as readable files before their first open', () => {
+    const files = ['01.mobi', '02.AZW3', 'notes.zip'].map((fileName, index):ResourceFile=>({id:50+index,nodeId:1,fileName,extension:fileName.split('.').pop()!,absolutePath:`X:/Fixture/Original/${fileName}`,fileSize:1234,modifiedAt:'2026-01-01',lastSeenAt:'2026-01-01',resourceType:'OTHER'}));
+    const actions = props({...detail,comicBooks:[],children:[],resourceFiles:files});
+    const view=render(<I18nProvider><ComicDetailPage {...actions}/></I18nProvider>);
+    expect(document.querySelector('.detail-stats')?.textContent).toBe('2 项可阅读内容');
+    expect(document.querySelectorAll('.comic-book-row')).toHaveLength(2);
+    expect(document.querySelector('.comic-resource-section')?.textContent).toContain('notes.zip');
+    expect(document.querySelector('.comic-resource-section')?.textContent).not.toContain('01.mobi');
+    fireEvent.doubleClick(screen.getByText('01.mobi').closest('.comic-book-row')!);
+    expect(actions.onOpenResource).toHaveBeenCalledWith(files[0]);
+    expect(actions.onReadComic).not.toHaveBeenCalled();
+    const opened={...book(90),nodeId:1,sourceKind:'ZIP_ARCHIVE' as const,documentFormat:'MOBI' as const,displayName:'01.mobi',sourcePath:files[0].absolutePath};
+    view.rerender(<I18nProvider><ComicDetailPage {...props({...detail,comicBooks:[opened],children:[],resourceFiles:files})}/></I18nProvider>);
+    expect(document.querySelector('.detail-stats')?.textContent).toBe('2 项可阅读内容');
+    expect(document.querySelectorAll('.comic-book-row')).toHaveLength(2);
+    expect(screen.getAllByText('01.mobi')).toHaveLength(1);
+  });
   it('uses the same 14 owned books for both counts and keeps the 194-item continuation navigable', () => {
     const actions = props();
     render(<I18nProvider><ComicDetailPage {...actions}/></I18nProvider>);
@@ -28,10 +45,10 @@ describe('complete indexed comic details', () => {
     expect(document.querySelectorAll('.comic-book-row')).toHaveLength(14);
     expect(screen.queryByText('208 册')).toBeNull();
     expect(document.querySelector('.comic-resource-section')).toBeNull();
-    const child = screen.getByText('Original re').closest('button')!;
-    expect(within(child).getByText(/194 项可阅读内容/)).toBeTruthy();
+    const child = screen.getByText('Original re').closest('article')!;
+    expect(within(child).getByText(/194 项/)).toBeTruthy();
     expect(screen.queryByText(/附属资源目录/)).toBeNull();
-    fireEvent.click(child); expect(actions.onOpenChild).toHaveBeenCalledWith(continuation);
+    fireEvent.click(child.querySelector('.media-card-open') ?? child); expect(actions.onOpenChild).toHaveBeenCalledWith(continuation);
     fireEvent.doubleClick(screen.getByText('Volume 1').closest('.comic-book-row')!);
     expect(actions.onReadComic).toHaveBeenCalledWith(books[0]);
     expect(mocks.detail).not.toHaveBeenCalled();

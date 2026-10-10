@@ -1,115 +1,72 @@
-<p align="center">
-  <img src="./src-tauri/icons/128x128.png" width="96" height="96" alt="M²Shelf Logo">
-</p>
+# M²Shelf
 
-<h1 align="center">M²Shelf</h1>
+**MORI MEDIA SHELF**
 
-<p align="center"><strong>MORI MEDIA SHELF</strong></p>
+[English](./README.en-US.md) · [日本語](./README.ja-JP.md) · [한국어](./README.ko-KR.md)
 
-<p align="center"><a href="./README.en-US.md">English</a> · <a href="./README.ja-JP.md">日本語</a> · <a href="./README.ko-KR.md">한국어</a></p>
+M²Shelf 是 Windows 本地媒体收藏管理工具，支持动画、电影/剧集、漫画、电子书、同人本和设定集。添加硬盘、移动硬盘或 NAS 映射目录，扫描后即可用海报墙浏览、搜索、播放和阅读。
 
-<p align="center">完全由 GPT 完成，面向 Windows 本地媒体收藏的本地优先、媒体源只读浏览器。</p>
+## 功能
 
-M²Shelf 把本地硬盘、移动硬盘或 NAS 映射目录中的动画、电影及相关资源建立为独立索引，提供海报墙浏览、Bangumi 元数据、标签、收藏夹、观看记录和外部播放器入口。
+- **资源库**：管理多个目录，递归扫描、增量更新；支持按文件夹或单个文件识别，书籍另有智能混合识别，可整理系列、独立书籍和分类目录。
+- **浏览与搜索**：海报墙和列表、跨库浏览、媒体类型与标签筛选、多种排序；搜索本地名称、文件名及 Bangumi 多语言标题。
+- **元数据**：按资源类型自动匹配或手动绑定 Bangumi；真人电影支持 TMDb，识别双语片名、发布年份和常见压制命名，使用原始语言海报。可手动纠正绑定、修改显示名称和封面。
+- **整理**：自定义标签、命名收藏夹、批量编辑、隐藏与恢复条目。
+- **播放**：调用已配置的外部播放器；查看字幕、音频等附属文件，在资源管理器中打开目录或定位文件。
+- **阅读**：内置漫画与文字阅读器，保存阅读进度、书签和最近打开记录。
+- **封面**：本地缓存和后台缩略图生成，按显示尺寸选用；设置中查看进度、失败原因并重试。
+- **界面**：浅色、深色、跟随系统；简体中文、English、日本語、한국어；记忆窗口大小、排序及浏览位置。
 
-想了解软件怎样扫描、分类、匹配动画和同步信息，可以阅读面向使用者的[运行机制说明](docs/RUNTIME_GUIDE_zh-CN.md)，其中包含目录示例和常见问题的处理方法。
+## 内置阅读
 
-简单来说，可以让你在资源管理器中由于语言、编码、字幕组等差异以及文件名过长而难以区分的动漫合集，一键转换为易于阅读的海报视图，如下所示：
+支持图片文件夹、CBZ、PDF、EPUB、TXT、MOBI 和 AZW3。图片支持 JPG、JPEG、PNG、WebP、GIF、AVIF、BMP。
 
-<img width="1445" height="1226" alt="ff3acd6cec8b9a3b76d2e1d4b7737b29" src="https://github.com/user-attachments/assets/4e1a235c-ea75-4996-b7a7-5c890e0b0803" />
+- 漫画：单页/双页、横向翻页、连续滚动、Webtoon、左右阅读方向、缩放、适应窗口、背景颜色和全屏。
+- 文字书籍：翻页/滚动、目录、字体和字号、字重、行距、段距、正文宽度、边距和阅读配色。
+- 各类书籍共用阅读进度与书签；视频和书籍统一显示在最近打开中。
 
-在动画“作品”的详情页也依旧可以看到文件名显示，并可一键在资源管理器中打开：
-
-<img width="1445" height="1226" alt="8fcf460277f5bca26062e347984387fd" src="https://github.com/user-attachments/assets/9bac84e4-af4e-4b2a-8c5f-ecd05b06b34b" />
-
-动画“系列”的详情页展示：
-
-<img width="1445" height="1226" alt="08a0af8ef5a719090efdfa33cd88f944" src="https://github.com/user-attachments/assets/9bc04a4c-4184-4dd3-82dc-094ab32049f6" />
-
-**软件不会移动、删除、重命名或修改源媒体文件，也不要求整理现有目录。**
-
-## 主要功能
-
-- 管理多个媒体资源库并递归扫描任意深度目录；
-- 使用海报墙或列表浏览全部资源、单个资源库和真实目录层级；
-- 搜索本地名称、文件名、Bangumi 多语言标题和用户标签；
-- 自动识别作品、系列和其他资源，并保留人工分类；
-- 高置信度自动匹配 Bangumi，亦可手动搜索、纠正或重试封面；
-- 展示视频，以及字幕、图片、音频、文档、压缩包等附属资源；
-- 使用已配置的外部播放器播放，并在 Windows 资源管理器中定位文件；
-- 使用标签、一层命名收藏夹和编辑模式批量整理；
-- 按最近时间展示由 M²Shelf 成功启动播放的作品；
-- 支持简体中文、English、日本語、한국어；
-- 支持跟随系统、亮色和暗色主题；
-- 记忆窗口尺寸、排序选择和各浏览分区的会话内位置；
-- 支持自定义应用封面缓存位置。
-
-## 本地优先与隐私
-
-媒体目录始终视为只读。M²Shelf 的索引、显示名称、Bangumi 绑定、标签、收藏夹、观看记录和设置保存在应用自己的 SQLite 数据库中，封面保存在应用缓存中。
-
-Bangumi 搜索和封面下载需要联网；本地索引浏览与打开本地文件不依赖 Bangumi。项目不需要媒体服务器或云端账号，也不会把媒体文件上传到远程服务。
+MOBI/AZW3 支持未加密的 MOBI6/KF8，不支持 DRM；普通 ZIP、RAR、7Z 不作为内置书籍打开。
 
 ## 下载
 
-当前版本：**M²Shelf 0.5.11**（Windows x64）
+**M²Shelf 0.5.13 · Windows x64**
 
-- [下载 Portable 免安装版](https://github.com/Undermori/M2Shelf/releases/download/v0.5.11/M2Shelf-Portable-0.5.11-x64.zip)
-- [查看最新 Release](https://github.com/Undermori/M2Shelf/releases/latest)
-- [查看全部版本](https://github.com/Undermori/M2Shelf/releases)
+- [安装包](https://github.com/Undermori/M2Shelf/releases/download/v0.5.13/M2Shelf-Setup-0.5.13-x64.exe)
+- [Portable 压缩包](https://github.com/Undermori/M2Shelf/releases/download/v0.5.13/M2Shelf-Portable-0.5.13-x64.zip)
+- [最新 Release](https://github.com/Undermori/M2Shelf/releases/latest) · [全部版本](https://github.com/Undermori/M2Shelf/releases)
 
-Portable 使用方法：
+Portable 请完整解压后运行 `M2Shelf.exe`，不要直接在压缩包内运行。数据库、设置和默认缓存保存在 Windows 应用数据目录。旧五文件 Portable 请完整解压新版升级。
 
-1. 完整解压 ZIP，不要在压缩包内直接运行；
-2. 双击 `M2Shelf.exe`；
-3. 添加媒体目录并扫描；
-4. 按需设置外部播放器路径。
+运行需要 Microsoft Edge WebView2 Runtime。更新包使用 Ed25519 验证；这不等同于 Windows Authenticode，SmartScreen 仍可能提示未知发布者。
 
-Portable 表示应用本体无需安装。数据库、设置和默认封面缓存仍会写入 Windows 应用数据目录。当前构建未进行代码签名，Windows SmartScreen 可能提示“未知发布者”；运行界面依赖 Microsoft Edge WebView2 Runtime。
+## 本地数据
 
-## 当前边界
+媒体目录只读，不移动、删除、重命名或改写源文件。索引、显示名称、绑定、标签、收藏夹、历史记录和设置保存在应用自己的 SQLite 数据库中，封面保存在应用缓存中。
 
-M²Shelf 当前不提供内置播放器、在线视频、转码、媒体服务器、账号同步、自动字幕、续播进度，也不会自动移动或重命名媒体文件。
+Bangumi/TMDb 查询及下载封面需要联网，本地浏览和阅读不依赖在线服务。M²Shelf 不上传媒体文件，不需要媒体服务器或云端账号。视频使用外部播放器，目前不提供在线视频、转码、跨设备同步或视频断点续播。
 
 ## 开发
 
-
-技术栈：Tauri 2、Rust、React 19、TypeScript、Vite 和 SQLite。
+Tauri 2 · Rust · React 19 · TypeScript · Vite · SQLite
 
 ```powershell
-npm install
+npm ci
 npm run tauri dev
 ```
 
-提交前验证：
+验证：`npm run check`，以及 `AGENTS.md` 中的 Rust 格式、测试与 Clippy 检查。Windows 发布使用 `scripts/build_windows_release.ps1`。
 
-```powershell
-npm run typecheck
-npm run build
-npm run validate
-cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
-cargo test --manifest-path src-tauri/Cargo.toml --locked
-cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --locked -- -D warnings
-```
+## 文档
 
-面向 Windows 的正式产物通过 `scripts/build_windows_release.ps1` 构建。
-
-## 项目文档
-
+- [运行机制说明](./docs/RUNTIME_GUIDE_zh-CN.md)
 - [开发规则](./AGENTS.md)
 - [产品规格](./docs/PRODUCT_SPEC.md)
 - [当前实现](./docs/PROJECT_CONTEXT.md)
 - [长期决策](./docs/DECISIONS.md)
 - [快速项目说明](./PROJECT_DOCUMENTATION.md)
+- [Windows 本地开发](./docs/WINDOWS_DEVELOPMENT.md)
+- [更新与发布流程](./docs/UPDATE_RELEASE_PROCESS.md)
 
 ## 作者
 
-- [森下Undermori · Bilibili](https://space.bilibili.com/2903441)
-
-## 作品库与启动更新
-
-默认作品库跨目录平铺具有视频的作品，并按相同 Bangumi 条目聚合来源；系列负责目录组织，可切回文件夹浏览。FOLDER 模式下，明确的 CD1/CD2、Disc1/Disc2 等分卷按结构和标题证据归属外层作品；冲突绑定和人工分类保持独立。作品详情默认在“作品中的其他资源”中递归平铺所属子目录的视频，保留真实路径和播放、定位入口。
-
-聚合作品的 Bangumi 绑定、改绑、清除和自动封面重试作用于整组来源；分类、改名、隐藏、标签和收藏需选择明确来源。设置中的“已隐藏条目”支持搜索与恢复。启动自动更新的新库默认开启，旧库缺少保存设置时默认关闭，已有选择保留；首次开启可能需要完整枚举目录。扫描结果和最后成功时间可在资源库管理中查看，失败不清理未读到的索引，也不推进该库基线。历史别称补全每次应用运行最多尝试 32 个不同条目，失败消耗预算，下次启动轮换续跑。源媒体始终只读。
-
-前端与项目检查使用 `npm run check`，Rust 格式、测试和严格 Clippy 由独立 Windows PR workflow 验证。开发配置见 [Windows 本地开发](docs/WINDOWS_DEVELOPMENT.md)。
+[森下Undermori · Bilibili](https://space.bilibili.com/2903441)

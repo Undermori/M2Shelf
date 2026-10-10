@@ -32,7 +32,7 @@ export function FavoriteFolderDialog({ folder, busy, onClose, onSave }: Favorite
       <section aria-labelledby="favorite-folder-title" aria-modal="true" className="rename-dialog favorite-folder-dialog" role="dialog">
         <header className="modal-header">
           <span className="modal-heading-icon"><Icon name="bookmark" /></span>
-          <div><p className="eyebrow">{t("favorites.organizeEyebrow")}</p><h2 id="favorite-folder-title">{creating ? t("favorites.createTitle") : t("favorites.renameTitle")}</h2><p>{t("favorites.folderDialogDescription")}</p></div>
+          <div><p className="eyebrow">{t("favorites.organizeEyebrow")}</p><h2 id="favorite-folder-title">{creating ? t("favorites.createTitle") : t("favorites.renameTitle")}</h2></div>
           <button aria-label={t("common.close")} className="modal-close" disabled={busy} onClick={onClose} type="button"><Icon name="close" /></button>
         </header>
         <form onSubmit={(event) => { event.preventDefault(); const value = name.trim(); if (value && !busy) onSave(value); }}>

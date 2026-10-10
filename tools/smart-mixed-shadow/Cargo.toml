@@ -1,0 +1,21 @@
+[package]
+name = "m2shelf-smart-mixed-shadow"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Read-only index adapter. Phase 3 opts into schema 25 through production;
+# the standalone Shadow runner keeps its original schema-24 default.
+[workspace]
+
+[features]
+default = []
+fixtures = []
+production = []
+
+[dependencies]
+m2shelf-smart-mixed-lab = { path = "../smart-mixed-lab" }
+rusqlite = { version = "=0.32.1", features = ["bundled", "hooks"] }
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.151"
+sha2 = "=0.10.9"

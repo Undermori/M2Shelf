@@ -1,0 +1,67 @@
+{
+  "id": 31,
+  "title": "Existing natural order 1 2 10",
+  "input": {
+    "root_id": "fixture-root",
+    "media_kind": "COMIC",
+    "complete": true,
+    "entries": [
+      {
+        "path": "自然顺序",
+        "kind": "DIRECTORY",
+        "hint": null
+      },
+      {
+        "path": "自然顺序/1.png",
+        "kind": "FILE",
+        "format": "PNG",
+        "verified": true
+      },
+      {
+        "path": "自然顺序/2.png",
+        "kind": "FILE",
+        "format": "PNG",
+        "verified": true
+      },
+      {
+        "path": "自然顺序/10.png",
+        "kind": "FILE",
+        "format": "PNG",
+        "verified": true
+      }
+    ],
+    "page_orders": [
+      {
+        "directory": "自然顺序",
+        "pages": [
+          "自然顺序/1.png",
+          "自然顺序/2.png",
+          "自然顺序/10.png"
+        ],
+        "basis": "EXISTING_INDEXED_NATURAL_ORDER"
+      }
+    ]
+  },
+  "expected": {
+    "units": [
+      {
+        "path": "自然顺序",
+        "kind": "DIRECT_PAGES",
+        "pages": [
+          "自然顺序/1.png",
+          "自然顺序/2.png",
+          "自然顺序/10.png"
+        ]
+      }
+    ],
+    "root_paths": [
+      "自然顺序"
+    ],
+    "series": [],
+    "directory_roles": {},
+    "diagnostics": [],
+    "editions": 0,
+    "retained_prior": 0
+  },
+  "negative_assertion": "Do not lexically reorder to 1 10 2"
+}

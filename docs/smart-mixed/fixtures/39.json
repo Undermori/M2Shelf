@@ -1,0 +1,59 @@
+{
+  "id": 39,
+  "title": "Manual Category overrides series",
+  "input": {
+    "root_id": "fixture-root",
+    "media_kind": "COMIC",
+    "complete": true,
+    "entries": [
+      {
+        "path": "作品A",
+        "kind": "DIRECTORY",
+        "hint": null
+      },
+      {
+        "path": "作品A/第01卷.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "作品A/第02卷.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      }
+    ],
+    "overrides": [
+      {
+        "path": "作品A",
+        "role": "CATEGORY"
+      }
+    ]
+  },
+  "expected": {
+    "units": [
+      {
+        "path": "作品A/第01卷.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "作品A/第02卷.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      }
+    ],
+    "root_paths": [
+      "作品A"
+    ],
+    "series": [],
+    "directory_roles": {
+      "作品A": "CATEGORY"
+    },
+    "diagnostics": [],
+    "editions": 0,
+    "retained_prior": 0
+  },
+  "negative_assertion": "Explicit Category prevents automatic series and virtual regrouping"
+}

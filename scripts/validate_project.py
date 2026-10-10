@@ -117,6 +117,12 @@ def check_migrations() -> None:
         "0018_document_books.sql",
         "0019_ebook_library.sql",
         "0020_book_file_recognition.sql",
+        "0021_doujin_and_text_books.sql",
+        "0022_poster_cache_failures.sql",
+        "0023_readable_resources.sql",
+        "0024_artbook_matching_policy.sql",
+        "0025_smart_mixed.sql",
+        "0026_text_reader_positions.sql",
     ]
     if [path.name for path in migration_paths] != expected:
         fail(f"expected exactly migrations {expected}, got {[p.name for p in migration_paths]}")
@@ -1096,7 +1102,7 @@ def check_bangumi_contract() -> None:
             "resolve_confirmed_title_alias" in auto_match,
             "save_confirmed_binding_with_aliases" in commands,
             "confirmed_alias_candidates" in extractor,
-            "static HTTP_CLIENT: OnceLock<Client>" in source,
+            "static HTTP_CLIENT: OnceLock<std::sync::Mutex<Option<Client>>>" in source and "fn refreshed_client()" in source,
         )
     )
     if not alias_match_contract:
@@ -1186,6 +1192,7 @@ def check_phase2_contract() -> None:
 def check_next_phase_contract() -> None:
     app = read("src/App.tsx")
     settings_page = read("src/pages/SettingsPage.tsx")
+    poster_progress = read("src/components/PosterCacheProgress.tsx")
     frontend_api = read("src/lib/api.ts")
     frontend_models = read("src/types/media.ts")
     frontend_format = read("src/lib/format.ts")
@@ -1223,11 +1230,19 @@ def check_next_phase_contract() -> None:
         "list scroll restore": (app, "queueScroll(previous.scrollTop)"),
         "system theme listener": (app, 'matchMedia("(prefers-color-scheme: dark)")'),
         "resolved root theme": (app, "document.documentElement.dataset.theme"),
-        "settings failure isolation": (settings_page, "Promise.allSettled"),
-        "automatic settings change queue": (settings_page, "const changeSettings ="),
-        "serialized automatic settings persistence": (settings_page, "const drainAutoSave = async"),
+        "independent settings request": (settings_page, "void load().catch"),
+        "settings request releases loading": (settings_page, ".finally(() => active && setLoading(false))"),
+        "independent cache request": (settings_page, "void api.cacheStats().then"),
+        "stale cache statistics rejection": (settings_page, "request === cacheRequest.current"),
+        "background poster status": (poster_progress, "await api.posterCacheStatus()"),
+        "poster progress display": (poster_progress, 'aria-label={t("poster.title")}'),
+        "poster progress panel isolation": (settings_page, "<PosterCacheProgress"),
+        "poster failure explanations": (poster_progress, "await api.posterCacheFailures()"),
+        "poster explicit retry": (poster_progress, "await api.retryPosterCache()"),
+        "automatic settings change queue": (read("src/lib/settingsStore.tsx"), "this.requested = true"),
+        "serialized automatic settings persistence": (read("src/lib/settingsStore.tsx"), "if (this.inFlight) return"),
         "immediate cache persistence": (settings_page, "const chooseCacheDirectory = async"),
-        "settings persistence command": (settings_page, "api.updateSettings"),
+        "settings persistence command": (read("src/lib/settingsStore.tsx"), "save: api.updateSettings"),
         "dark theme selector": (css, ':root[data-theme="dark"]'),
         "semantic app surface": (css, "--surface-app"),
         "semantic raised surface": (css, "--surface-raised"),
@@ -1245,9 +1260,9 @@ def check_next_phase_contract() -> None:
         "custom cache/media overlap guard": (cache, "validate_cache_location"),
         "owned-name-only cache clear": (cache, "is_owned_cache_file"),
         "bounded signature-checked cover data": (cache, "cover_data_url"),
-        "typed cover data command": (commands, "pub fn get_cover_data_url"),
+        "typed cover data command": (commands, "pub async fn get_cover_data_url"),
         "registered cover data command": (lib, "commands::get_cover_data_url"),
-        "frontend Node-ID cover request": (frontend_api, 'call<string | null>("get_cover_data_url", { nodeId })'),
+        "frontend Node-ID cover request": (frontend_api, 'call<string | null>("get_cover_data_url", { nodeId, width })'),
     }
     missing = [label for label, (source, fragment) in required_fragments.items() if fragment not in source]
     if missing:
@@ -1641,6 +1656,9 @@ def check_brand_release_and_icons() -> None:
         "M2Shelf.portable.json",
         "README_zh-CN.txt",
         "SHA256SUMS.txt",
+        "M2ShelfMobi.exe",
+        "M2ShelfMobi-source.zip",
+        "THIRD-PARTY-NOTICES.txt",
     ]
 
     def rust_payload_array(name: str) -> list[str] | None:
@@ -1726,9 +1744,9 @@ def check_brand_release_and_icons() -> None:
         and "Portable 更新 ZIP 缺少 {required}" in portable_update_source
     )
     if any(token not in portable for token in portable_contract) or not portable_payload_contract:
-        fail("Portable builder/runtime does not enforce the exact five-file payload and helper identity")
+        fail("Portable builder/runtime does not enforce the exact eight-file payload and helper identity")
     else:
-        passed("exact five-file Portable payload with helper identity, PE, freshness, privacy, and checksums")
+        passed("exact eight-file Portable payload with helper identity, PE, freshness, privacy, and checksums")
 
     update_manifest = read("scripts/generate_update_manifest.ps1")
     update_manifest_contract = (
@@ -2070,6 +2088,9 @@ def check_brand_release_and_icons() -> None:
         'Assert-ExactProperties -Object $manifest.platforms -Expected @("windows-x64-nsis", "windows-x64-portable")',
         'Assert-ExactProperties -Object $manifestAsset -Expected @("fileName", "sha256", "signature", "size", "url")',
         "$actualSha256 -cne $provenanceSha256",
+        "$expectedInputFiles = [ordered]@{}",
+        "$pathsToLock = @($filePaths.Values)",
+        "foreach ($entry in $expectedInputFiles.GetEnumerator())",
         "Assert-HashSidecar -Path $contract.HashPath",
         "$manifestAsset.signature -cne $sidecarSignature",
         '$expectedUrl = "https://github.com/$repository/releases/download/$tag/$($contract.FileName)"',
@@ -2098,7 +2119,11 @@ def check_brand_release_and_icons() -> None:
         "secrets.",
         "--clobber",
     )
-    if any(token not in offline_publisher for token in offline_publisher_contract):
+    public_assets = re.search(r"\$uploadPaths = @\((.*?)\n\)", offline_publisher, re.S)
+    public_asset_names = re.findall(r"\$filePaths\.([A-Za-z]+)", public_assets.group(1)) if public_assets else []
+    if public_asset_names != ["portable", "nsis", "manifest"]:
+        fail("public release assets must be exactly Portable, NSIS and latest.json")
+    elif any(token not in offline_publisher for token in offline_publisher_contract):
         fail("offline publisher lacks exact provenance/manifest/assets, immutable tag, or draft verification")
     elif any(token in offline_publisher for token in offline_publisher_forbidden):
         fail("offline publisher may access signing material, CI secrets, or overwrite release assets")
@@ -2385,18 +2410,19 @@ def check_ui_windows_interaction_contract() -> None:
 
     settings_unmount_guard_ok = all(
         (
-            "onPersistenceFailure(candidate, rollback, errorMessage(error), appearanceRevision)"
-            in settings_page,
-            "parentAppearanceRevision.current = onAppearanceChange(next)" in settings_page,
-            "const handleSettingsPersistenceFailure = useCallback" in app,
-            "settingsAppearanceRevision.current === appearanceRevision" in app,
-            "onPersistenceFailure={handleSettingsPersistenceFailure}" in app,
+            "useAppSettings()" in settings_page,
+            "useAppSettings()" in read("src/components/WindowTitlebar.tsx"),
+            "if (revision !== this.revision) continue" in read("src/lib/settingsStore.tsx"),
+            "settings: this.persisted" in read("src/lib/settingsStore.tsx"),
+            "settingsFailure.sequence === reportedSettingsFailure.current" in app,
+            "if (sharedSettings) applySettingsAppearance(sharedSettings)" in app,
+            "AppSettingsProvider" in read("src/main.tsx"),
         )
     )
     if not settings_unmount_guard_ok:
         fail("settings autosave lacks parent-owned revision-safe rollback after unmount")
     else:
-        passed("settings autosave rolls back through a revision-safe parent callback after unmount")
+        passed("shared settings writer preserves revision-safe rollback after Settings unmount")
 
     context_menu_viewport_ok = all(
         (
@@ -2518,7 +2544,10 @@ def check_ui_windows_interaction_contract() -> None:
         passed("bound localized-title sorting and single-Node cover/binding refresh optimization")
 
     cover_command_region = rust_commands[
-        rust_commands.find("pub fn get_cover_data_url") : rust_commands.find("pub fn get_settings")
+        rust_commands.find("pub async fn get_cover_data_url") : rust_commands.find("pub fn get_settings")
+    ]
+    cover_context_region = rust_database[
+        rust_database.find("pub fn cover_read_context") : rust_database.find("pub(crate) fn poster_node_count")
     ]
     startup_cover_loading_ok = all(
         (
@@ -2526,8 +2555,12 @@ def check_ui_windows_interaction_contract() -> None:
             "get_node" not in cover_command_region,
             "list_roots" not in cover_command_region,
             "pub fn cover_read_context" in rust_database,
-            "SELECT cover_cache_path FROM nodes" in rust_database,
-            "SELECT path FROM library_roots" in rust_database,
+            "SELECT CASE WHEN n.cover_source='MANUAL' THEN n.cover_cache_path" in cover_context_region,
+            "SELECT t.cover_cache_path FROM tmdb_movie_bindings t WHERE t.node_id=n.id AND t.active=1" in cover_context_region,
+            "END FROM nodes n WHERE n.id=?1" in cover_context_region,
+            "SELECT path FROM library_roots" in cover_context_region,
+            "get_node(" not in cover_context_region,
+            "list_roots(" not in cover_context_region,
             "MAX_CONCURRENT_COVER_REQUESTS = 4" in cover_hook,
             "MAX_RESOLVED_COVER_ENTRIES = 128" in cover_hook,
             "MAX_RESOLVED_COVER_CHARACTERS = 32 * 1024 * 1024" in cover_hook,
@@ -2544,7 +2577,16 @@ def check_ui_windows_interaction_contract() -> None:
             "resolvedCoverEvictionListeners.delete(key)" in cover_hook,
             "resolvedCoverEvictionListeners.get(key) === listeners" in cover_hook,
             "latestCoverKeyByNode" in cover_hook,
-            "if (latestCoverKeyByNode.get(nodeId) === key) rememberResolvedCover(key, url)" in cover_hook,
+            'if (latestCoverKeyByNode.get(`${nodeId}:${width}`) === key) rememberResolvedCover(key, url)' in cover_hook,
+            "spawn_blocking" in cover_command_region,
+            "poster_cache::cover_data_url" in cover_command_region,
+            "usePosterThumbnailSize" in cover_hook,
+            "[256, 384, 512, 768]" in read("src/hooks/usePosterThumbnailSize.ts"),
+            "MAX_DISK_BYTES" in read("src-tauri/src/poster_cache.rs"),
+            "FilterType::Lanczos3" in read("src-tauri/src/poster_cache.rs"),
+            "M2THUMB1" in read("src-tauri/src/poster_cache.rs"),
+            "read_book_cover" in read("src-tauri/src/poster_cache.rs"),
+            "schedule_warmup" in rust_commands,
             "resolvedCoverUrls.get(cacheKey)" in cover_hook,
             "useLayoutEffect(() =>" in cover_hook,
             "if (enabled || !hasCachedCover || !cacheKey) return" in cover_hook,
@@ -2557,17 +2599,19 @@ def check_ui_windows_interaction_contract() -> None:
             "MAX_RETAINED_POSTERS = 64" in poster_viewport_hook,
             "retainedPosters = new Map" in poster_viewport_hook,
             "trimRetainedPosters" in poster_viewport_hook,
-            "!poster.nearViewport" in poster_viewport_hook,
+            "!entry[1].nearViewport" in poster_viewport_hook,
             "activationMarginPx: 1_000" in media_card,
             "retentionEnabled: hasCachedCover" in media_card,
             "retentionMarginPx: 1_800" in media_card,
             "updateRetainedPosterProximity" in poster_viewport_hook,
-            'image.decoding = "async"' in poster_image,
-            "canvasReady" in poster_image,
-            "poster-image-preview" in poster_image,
-            'loading={active ? "eager" : "lazy"}' in poster_image,
+            'decoding="async"' in poster_image,
+            'loading="eager"' in poster_image,
+            "<canvas" not in poster_image,
+            "createImageBitmap" not in poster_image,
             'loading="lazy"' not in media_card,
-            "new IntersectionObserver" in poster_viewport_hook,
+            "observePosterViewport" in poster_viewport_hook,
+            "new IntersectionObserver" in read("src/lib/posterViewportObserver.ts"),
+            "observerRoots" in read("src/lib/posterViewportObserver.ts"),
             "!enabled || state.key !== cacheKey || state.loading" in cover_hook,
         )
     )
@@ -2639,7 +2683,8 @@ def check_ui_windows_interaction_contract() -> None:
     search_cover_ok = all(
         (
             "function SearchResult" in search_page,
-            "useCoverDataUrl(hit.node, coverRevision, coverRequested)" in search_page,
+            "useCoverDataUrl(coverNode, coverRevision, coverRequested,coverNode?undefined:hit.comicBook??undefined)" in search_page,
+            'const coverNode=hit.comicBook' in search_page,
             "<PosterImage active={coverVisible}" in search_page,
             "usePosterViewportLifecycle" in search_page,
             "activationMarginPx: 800" in search_page,
@@ -2657,7 +2702,7 @@ def check_ui_windows_interaction_contract() -> None:
     if not search_cover_ok or not empty_search_placeholders or old_search_examples:
         fail("search cover rendering or empty four-locale placeholder contract is incomplete")
     else:
-        passed("search results use Node-ID covers and all four search placeholders are empty")
+        passed("search results use validated Node/book covers and all four search placeholders are empty")
 
     recent_watch_ok = all(
         (
@@ -2666,7 +2711,8 @@ def check_ui_windows_interaction_contract() -> None:
             "listRecentlyWatched" in frontend_api,
             "RecentlyWatchedEntry" in frontend_models,
             "RecentlyWatchedPage" in recent_page,
-            "watchedAtByNodeId" in recent_page,
+            "watchedAt={entry.watchedAt}" in recent_page,
+            "<BookPosterCard" in recent_page and "onReadBook(entry.comicBook!)" in recent_page,
             "watchedAt={props.watchedAtByNodeId?.get(node.id)}" in poster_grid,
             'className="media-card-watch-time"' in media_card,
             't("comic.openedAt"' in media_card,
@@ -2850,16 +2896,10 @@ def check_ui_windows_interaction_contract() -> None:
         match.group(1)
         for match in re.finditer(r'"favorites\.folderDescription":\s*"([^"]*)"', i18n)
     }
-    expected_favorite_folder_descriptions = {
-        "移出收藏夹不会删除索引或硬盘文件。",
-        "Removing one never deletes its index or files.",
-        "外してもインデックスやファイルは削除されません。",
-        "제거해도 색인이나 파일은 삭제되지 않습니다.",
-    }
-    if favorite_folder_descriptions != expected_favorite_folder_descriptions:
-        fail("Favorites folder descriptions must contain only the four localized removal-safety sentences")
+    if favorite_folder_descriptions or 't("favorites.folderDescription")' in favorite_page:
+        fail("Favorites folders must omit redundant removal-safety helper copy")
     else:
-        passed("Favorites folder descriptions omit the redundant work-introduction sentence in all locales")
+        passed("Favorites folders omit redundant helper copy in all locales")
 
     solid_responsive_background_ok = all(
         (
@@ -2904,7 +2944,7 @@ def check_ui_windows_interaction_contract() -> None:
         '.media-card-grid .quick-bind' in workspace_css,
         'radial-gradient(' not in workspace_css,
         'linear-gradient(' not in workspace_css,
-        all(value.strip() == "none" for value in re.findall(r'transform:\s*([^;]+);', workspace_css)),
+        all(value.strip() == "none" for value in re.findall(r'transform:\s*([^;]+);', re.sub(r'(?:\.select-trigger\[aria-expanded="true"\] > svg|\.content-scroll\.navigation-hidden \.detail-toolbar|\.navigation-hidden \.library-breadcrumb-toolbar)\s*\{[^{}]*\}|@keyframes result-binding-spin\s*\{\s*to\s*\{[^{}]*\}\s*\}', '', workspace_css))),
     ))
     if workspace_style_ok:
         passed("workspace skin preserves artwork, intrinsic headers and independent About credits")
@@ -2993,7 +3033,7 @@ def check_ui_windows_interaction_contract() -> None:
     ):
         fail("poster system labels are not limited to Work/Series/Other resources")
     else:
-        passed("three structural poster labels retained beneath composed media-kind badges")
+        passed("three structural poster labels retained in composed media-kind badges")
 
     css_without_comments = re.sub(r"/\*.*?\*/", "", css, flags=re.DOTALL)
     poster_css_rules: list[tuple[str, dict[str, str]]] = []
@@ -3104,84 +3144,25 @@ def check_ui_windows_interaction_contract() -> None:
             not transformed_poster_selectors,
             not degraded_interpolation,
             "shouldContainPosterArtwork" in poster_helper,
-            "posterRenderLayout" in poster_helper,
             re.search(r"naturalWidth\s*/\s*naturalHeight", poster_helper) is not None,
             "<PosterImage" in media_card,
             "<PosterImage" in work_detail,
-            'resizeQuality: "high"' in poster_image,
-            'context.imageSmoothingQuality = "high"' in poster_image,
-            "context.imageSmoothingEnabled = true" in poster_image,
-            "window.devicePixelRatio" in poster_image,
-            "MAX_DEVICE_PIXEL_RATIO = 2" in poster_image,
-            "MAX_DOWNSCALE_RATIO_PER_PASS = 2" in poster_image,
-            "createProgressivelyDownscaledBitmap" in poster_image,
-            "const firstWidth = nextDimension(sourceWidth, destinationWidth)" in poster_image,
-            "resizeWidth: firstWidth" in poster_image,
-            "shouldCancel: () => boolean" in poster_image,
-            "if (cancelled())" in poster_image,
-            "next.close()" in poster_image,
-            "current.close()" in poster_image,
-            "MAX_CONCURRENT_POSTER_RENDERS = 2" in poster_image,
-            "MAX_CACHED_POSTER_BITMAPS = 128" in poster_image,
-            "MAX_CACHED_POSTER_BITMAP_BYTES = 128 * 1024 * 1024" in poster_image,
-            "cachedPosterBitmaps" in poster_image,
-            "cachedPosterBitmapBytes" in poster_image,
-            "getCachedPosterBitmap" in poster_image,
-            "rememberCachedPosterBitmap" in poster_image,
-            "existing.bitmap.close()" in poster_image,
-            "bytes: bitmap.width * bitmap.height * 4" in poster_image,
-            "drawCachedPosterBitmap" in poster_image,
-            "isInsideVisibleScrollport" in poster_image,
-            "renderGenerationRef" in poster_image,
-            "renderGenerationRef.current !== renderGeneration" in poster_image,
-            "useLayoutEffect(() => () =>" in poster_image,
-            poster_image.count("renderGenerationRef.current += 1") >= 2,
-            "key={cacheKey}" in poster_image,
-            "errorHandlerRef.current()" in poster_image,
-            poster_image.count("errorHandlerRef.current()") == 1,
-            "posterRenderQueue.indexOf(queued)" in poster_image,
-            "scheduledRenderTask?.cancel()" in poster_image,
-            "devicePixelContentBoxSize" in poster_image,
-            'box: "device-pixel-content-box"' in poster_image,
-            "new ResizeObserver((entries)" in poster_image,
-            'window.addEventListener("resize", scheduleRender)' in poster_image,
-            'resolutionQuery?.addEventListener("change", handleResolutionChange)' in poster_image,
-            "bitmap?.close()" in poster_image,
-            'image.removeAttribute("src")' in poster_image,
-            "canvas.width = 1" in poster_image,
-            "canvas.height = 1" in poster_image,
-            "useLayoutEffect" in poster_image,
-            "!canvasReady" in poster_image,
-            "poster-image-preview" in poster_image,
-            'loading={active ? "eager" : "lazy"}' in poster_image,
-            "cacheKey={coverCacheKey}" in media_card,
-            "cacheKey={coverCacheKey}" in search_page,
-            "cacheKey={coverCacheKey}" in work_detail,
-            "<PosterImage active={coverVisible}" in media_card,
-            "<PosterImage active={coverVisible}" in search_page,
-            re.search(
-                r"\.poster-image\s*\{[^}]*display:\s*block;[^}]*width:\s*100%;[^}]*height:\s*100%;[^}]*image-rendering:\s*auto",
-                css,
-            ) is not None,
-            ".poster-image-preview.is-wide-artwork" in css,
-            re.search(
-                r"\.cover-frame\s+\.poster-image,\s*\.detail-cover\s+\.poster-image,\s*\.search-hit-cover\s+\.poster-image\s*\{[^}]*position:\s*absolute;[^}]*inset:\s*0",
-                css,
-            ) is not None,
-            re.search(r"\.cover-frame\s*\{[^}]*border:\s*0", css) is not None,
-            re.search(r"\.detail-cover\s*\{[^}]*border:\s*0", css) is not None,
-            ".cover-frame::after, .detail-cover::after" in css,
-            re.search(
-                r"\.poster-grid-grid\s*\{\s*grid-template-columns:\s*repeat\(auto-fill,\s*\d+px\)",
-                css,
-            )
-            is not None,
-            re.search(
-                r"\.poster-grid-grid\s*\{[^}]*grid-template-columns:[^}]*\b1fr\b",
-                css,
-            )
-            is None,
-            "--poster-aspect-ratio: 2 / 2.82" in css,
+            "<PosterImage" in read("src/pages/ComicDetailPage.tsx"),
+            "<PosterImage" in search_page,
+            poster_image.count("<img") == 1,
+            "<canvas" not in poster_image,
+            "createImageBitmap" not in poster_image,
+            "ResizeObserver" not in poster_image,
+            "addEventListener" not in poster_image,
+            'decoding="async"' in poster_image,
+            'loading="eager"' in poster_image,
+            'visibility: ready ? "visible" : "hidden"' in poster_image,
+            'key={cacheKey}' in poster_image,
+            'FilterType::Lanczos3' in read("src-tauri/src/poster_cache.rs"),
+            'WIDTHS: [u32; 4] = [256, 384, 512, 768]' in read("src-tauri/src/poster_cache.rs"),
+            'M2THUMB1' in read("src-tauri/src/poster_cache.rs"),
+            '.poster-image.is-wide-artwork' in css,
+            'scrollbar-gutter: stable' in css,
             re.search(
                 r"\.cover-frame\s*\{[^}]*aspect-ratio:\s*var\(--poster-aspect-ratio\)",
                 css,
@@ -3196,9 +3177,9 @@ def check_ui_windows_interaction_contract() -> None:
         )
     )
     if not poster_image_quality_ok:
-        fail("poster images must use bounded DPR-aware high-quality sampling, shared frame geometry, one lazy-load gate, and no transformed hover surface")
+        fail("posters must display one prepared local image, preserve frame/fit geometry and bounded DPR thumbnails, with no Canvas replacement or transformed surface")
     else:
-        passed("bounded DPR-aware poster sampling, shared geometry, and non-transformed rendering contract")
+        passed("persistent DPR thumbnail, single-image display, stable geometry, and non-transformed rendering contract")
 
     poster_overlay_controls_ok = (
         re.search(r"\.quick-bind\s*\{[^}]*z-index:\s*5", css) is not None

@@ -165,6 +165,10 @@ try {
   Assert-X64Pe -Path $releaseUpdater
   Assert-NoPrivateBuildPath -Path $releaseExecutable
   Assert-NoPrivateBuildPath -Path $releaseUpdater
+  $releaseMobi = Join-Path $buildTargetDirectory 'release\M2ShelfMobi.exe'
+  Assert-PlainFile -Path $releaseMobi -Label 'M2ShelfMobi worker' | Out-Null
+  Assert-X64Pe -Path $releaseMobi
+  Assert-NoPrivateBuildPath -Path $releaseMobi
   if ($Bundles -eq "nsis") {
     $installerName = "${productName}_${version}_x64-setup.exe"
     $installerPath = Join-Path $buildTargetDirectory "release\bundle\nsis\$installerName"

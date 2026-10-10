@@ -1,0 +1,73 @@
+{
+  "id": 18,
+  "title": "Bare numbers with explicit work context",
+  "input": {
+    "root_id": "fixture-root",
+    "media_kind": "COMIC",
+    "complete": true,
+    "entries": [
+      {
+        "path": "作品A",
+        "kind": "DIRECTORY",
+        "hint": "WORK"
+      },
+      {
+        "path": "作品A/01.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "作品A/02.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      }
+    ]
+  },
+  "expected": {
+    "units": [
+      {
+        "path": "作品A/01.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "作品A/02.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      }
+    ],
+    "root_paths": [
+      "作品A"
+    ],
+    "series": [
+      {
+        "directory": "作品A",
+        "title": "作品A",
+        "members": [
+          {
+            "path": "作品A/01.pdf",
+            "volume": 1,
+            "chapter": null,
+            "role": "VOLUME",
+            "decision": "REVIEW"
+          },
+          {
+            "path": "作品A/02.pdf",
+            "volume": 2,
+            "chapter": null,
+            "role": "VOLUME",
+            "decision": "REVIEW"
+          }
+        ],
+        "decision": "REVIEW"
+      }
+    ],
+    "directory_roles": {},
+    "diagnostics": [],
+    "editions": 0,
+    "retained_prior": 0
+  },
+  "negative_assertion": "Bare-number proposal must be REVIEW"
+}

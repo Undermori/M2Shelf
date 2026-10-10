@@ -1,0 +1,64 @@
+{
+  "id": 45,
+  "title": "Ebook author mixed formats",
+  "input": {
+    "root_id": "fixture-root",
+    "media_kind": "EBOOK",
+    "complete": true,
+    "entries": [
+      {
+        "path": "某作者",
+        "kind": "DIRECTORY",
+        "hint": "AUTHOR"
+      },
+      {
+        "path": "某作者/小说.epub",
+        "kind": "FILE",
+        "format": "EPUB",
+        "verified": true
+      },
+      {
+        "path": "某作者/随笔.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "某作者/漫画.cbz",
+        "kind": "FILE",
+        "format": "CBZ",
+        "verified": true
+      }
+    ]
+  },
+  "expected": {
+    "units": [
+      {
+        "path": "某作者/小说.epub",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "某作者/随笔.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "某作者/漫画.cbz",
+        "kind": "FILE_BOOK",
+        "pages": []
+      }
+    ],
+    "root_paths": [
+      "某作者"
+    ],
+    "series": [],
+    "directory_roles": {
+      "某作者": "CATEGORY"
+    },
+    "diagnostics": [],
+    "editions": 0,
+    "retained_prior": 0
+  },
+  "negative_assertion": "Mixed formats and common author do not imply Series"
+}

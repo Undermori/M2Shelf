@@ -1,0 +1,459 @@
+{
+  "recorded_at_utc": "2026-10-09T05:29:36.291360+00:00",
+  "cli_golden_passed": 49,
+  "cli_golden_failed": 0,
+  "checks": [
+    {
+      "id": 1,
+      "passed": true,
+      "units": 1,
+      "root_items": 1,
+      "series": 0
+    },
+    {
+      "id": 2,
+      "passed": true,
+      "units": 300,
+      "root_items": 300,
+      "series": 0
+    },
+    {
+      "id": 3,
+      "passed": true,
+      "units": 104,
+      "root_items": 102,
+      "series": 2
+    },
+    {
+      "id": 4,
+      "passed": true,
+      "units": 2,
+      "root_items": 1,
+      "series": 1
+    },
+    {
+      "id": 5,
+      "passed": true,
+      "units": 2,
+      "root_items": 1,
+      "series": 1
+    },
+    {
+      "id": 6,
+      "passed": true,
+      "units": 3,
+      "root_items": 1,
+      "series": 1
+    },
+    {
+      "id": 7,
+      "passed": true,
+      "units": 3,
+      "root_items": 1,
+      "series": 1
+    },
+    {
+      "id": 8,
+      "passed": true,
+      "units": 3,
+      "root_items": 1,
+      "series": 1
+    },
+    {
+      "id": 9,
+      "passed": true,
+      "units": 2,
+      "root_items": 1,
+      "series": 1
+    },
+    {
+      "id": 10,
+      "passed": true,
+      "units": 2,
+      "root_items": 1,
+      "series": 0
+    },
+    {
+      "id": 11,
+      "passed": true,
+      "units": 2,
+      "root_items": 1,
+      "series": 0
+    },
+    {
+      "id": 12,
+      "passed": true,
+      "units": 1,
+      "root_items": 1,
+      "series": 0
+    },
+    {
+      "id": 13,
+      "passed": true,
+      "units": 1,
+      "root_items": 1,
+      "series": 0
+    },
+    {
+      "id": 14,
+      "passed": true,
+      "units": 1,
+      "root_items": 1,
+      "series": 0
+    },
+    {
+      "id": 15,
+      "passed": true,
+      "units": 2,
+      "root_items": 1,
+      "series": 1
+    },
+    {
+      "id": 16,
+      "passed": true,
+      "units": 1,
+      "root_items": 1,
+      "series": 0
+    },
+    {
+      "id": 17,
+      "passed": true,
+      "units": 2,
+      "root_items": 2,
+      "series": 0
+    },
+    {
+      "id": 18,
+      "passed": true,
+      "units": 2,
+      "root_items": 1,
+      "series": 1
+    },
+    {
+      "id": 19,
+      "passed": true,
+      "units": 2,
+      "root_items": 1,
+      "series": 1
+    },
+    {
+      "id": 20,
+      "passed": true,
+      "units": 2,
+      "root_items": 1,
+      "series": 0
+    },
+    {
+      "id": 21,
+      "passed": true,
+      "units": 2,
+      "root_items": 2,
+      "series": 0
+    },
+    {
+      "id": 22,
+      "passed": true,
+      "units": 3,
+      "root_items": 1,
+      "series": 1
+    },
+    {
+      "id": 23,
+      "passed": true,
+      "units": 3,
+      "root_items": 1,
+      "series": 1
+    },
+    {
+      "id": 24,
+      "passed": true,
+      "units": 3,
+      "root_items": 1,
+      "series": 1
+    },
+    {
+      "id": 25,
+      "passed": true,
+      "units": 1,
+      "root_items": 1,
+      "series": 0
+    },
+    {
+      "id": 26,
+      "passed": true,
+      "units": 0,
+      "root_items": 1,
+      "series": 0
+    },
+    {
+      "id": 27,
+      "passed": true,
+      "units": 1,
+      "root_items": 1,
+      "series": 0
+    },
+    {
+      "id": 28,
+      "passed": true,
+      "units": 2,
+      "root_items": 1,
+      "series": 0
+    },
+    {
+      "id": 29,
+      "passed": true,
+      "units": 2,
+      "root_items": 1,
+      "series": 1
+    },
+    {
+      "id": 30,
+      "passed": true,
+      "units": 0,
+      "root_items": 1,
+      "series": 0
+    },
+    {
+      "id": 31,
+      "passed": true,
+      "units": 1,
+      "root_items": 1,
+      "series": 0
+    },
+    {
+      "id": 32,
+      "passed": true,
+      "units": 0,
+      "root_items": 1,
+      "series": 0
+    },
+    {
+      "id": 33,
+      "passed": true,
+      "units": 1,
+      "root_items": 1,
+      "series": 0
+    },
+    {
+      "id": 34,
+      "passed": true,
+      "units": 0,
+      "root_items": 0,
+      "series": 0
+    },
+    {
+      "id": 35,
+      "passed": true,
+      "units": 2,
+      "root_items": 2,
+      "series": 0
+    },
+    {
+      "id": 36,
+      "passed": true,
+      "units": 2,
+      "root_items": 1,
+      "series": 1
+    },
+    {
+      "id": 37,
+      "passed": true,
+      "units": 2,
+      "root_items": 1,
+      "series": 1
+    },
+    {
+      "id": 38,
+      "passed": true,
+      "units": 0,
+      "root_items": 1,
+      "series": 0
+    },
+    {
+      "id": 39,
+      "passed": true,
+      "units": 2,
+      "root_items": 1,
+      "series": 0
+    },
+    {
+      "id": 40,
+      "passed": true,
+      "units": 2,
+      "root_items": 1,
+      "series": 1
+    },
+    {
+      "id": 41,
+      "passed": true,
+      "units": 2,
+      "root_items": 1,
+      "series": 1
+    },
+    {
+      "id": 42,
+      "passed": true,
+      "units": 3,
+      "root_items": 1,
+      "series": 1
+    },
+    {
+      "id": 43,
+      "passed": true,
+      "units": 2,
+      "root_items": 1,
+      "series": 1
+    },
+    {
+      "id": 44,
+      "passed": true,
+      "units": 4,
+      "root_items": 1,
+      "series": 1
+    },
+    {
+      "id": 45,
+      "passed": true,
+      "units": 3,
+      "root_items": 1,
+      "series": 0
+    },
+    {
+      "id": 46,
+      "passed": true,
+      "units": 0,
+      "root_items": 0,
+      "series": 0
+    },
+    {
+      "id": 47,
+      "passed": true,
+      "units": 2,
+      "root_items": 2,
+      "series": 0
+    },
+    {
+      "id": 48,
+      "passed": true,
+      "units": 3,
+      "root_items": 2,
+      "series": 1
+    },
+    {
+      "id": 49,
+      "passed": true,
+      "units": 7,
+      "root_items": 1,
+      "series": 1
+    }
+  ],
+  "benchmarks": [
+    {
+      "files": 1000,
+      "median_elapsed_ms": 11.9203,
+      "max_peak_working_set_bytes": 10088448,
+      "runs": [
+        {
+          "elapsed_ms": 12.3703,
+          "groups": 1000,
+          "input_files": 1000,
+          "memory_scope": "whole fresh process, includes input and output; excludes JSON serialization",
+          "peak_working_set_bytes": 10043392,
+          "reading_units": 1000,
+          "rules_version": "smart-mixed-lab-1"
+        },
+        {
+          "elapsed_ms": 11.9203,
+          "groups": 1000,
+          "input_files": 1000,
+          "memory_scope": "whole fresh process, includes input and output; excludes JSON serialization",
+          "peak_working_set_bytes": 10088448,
+          "reading_units": 1000,
+          "rules_version": "smart-mixed-lab-1"
+        },
+        {
+          "elapsed_ms": 11.322000000000001,
+          "groups": 1000,
+          "input_files": 1000,
+          "memory_scope": "whole fresh process, includes input and output; excludes JSON serialization",
+          "peak_working_set_bytes": 10088448,
+          "reading_units": 1000,
+          "rules_version": "smart-mixed-lab-1"
+        }
+      ]
+    },
+    {
+      "files": 10000,
+      "median_elapsed_ms": 114.8511,
+      "max_peak_working_set_bytes": 43999232,
+      "runs": [
+        {
+          "elapsed_ms": 116.8591,
+          "groups": 10000,
+          "input_files": 10000,
+          "memory_scope": "whole fresh process, includes input and output; excludes JSON serialization",
+          "peak_working_set_bytes": 43855872,
+          "reading_units": 10000,
+          "rules_version": "smart-mixed-lab-1"
+        },
+        {
+          "elapsed_ms": 114.8511,
+          "groups": 10000,
+          "input_files": 10000,
+          "memory_scope": "whole fresh process, includes input and output; excludes JSON serialization",
+          "peak_working_set_bytes": 43679744,
+          "reading_units": 10000,
+          "rules_version": "smart-mixed-lab-1"
+        },
+        {
+          "elapsed_ms": 112.53670000000001,
+          "groups": 10000,
+          "input_files": 10000,
+          "memory_scope": "whole fresh process, includes input and output; excludes JSON serialization",
+          "peak_working_set_bytes": 43999232,
+          "reading_units": 10000,
+          "rules_version": "smart-mixed-lab-1"
+        }
+      ]
+    },
+    {
+      "files": 100000,
+      "median_elapsed_ms": 1215.897,
+      "max_peak_working_set_bytes": 363585536,
+      "runs": [
+        {
+          "elapsed_ms": 1215.897,
+          "groups": 100000,
+          "input_files": 100000,
+          "memory_scope": "whole fresh process, includes input and output; excludes JSON serialization",
+          "peak_working_set_bytes": 363503616,
+          "reading_units": 100000,
+          "rules_version": "smart-mixed-lab-1"
+        },
+        {
+          "elapsed_ms": 1215.3618,
+          "groups": 100000,
+          "input_files": 100000,
+          "memory_scope": "whole fresh process, includes input and output; excludes JSON serialization",
+          "peak_working_set_bytes": 363585536,
+          "reading_units": 100000,
+          "rules_version": "smart-mixed-lab-1"
+        },
+        {
+          "elapsed_ms": 1219.5642,
+          "groups": 100000,
+          "input_files": 100000,
+          "memory_scope": "whole fresh process, includes input and output; excludes JSON serialization",
+          "peak_working_set_bytes": 363573248,
+          "reading_units": 100000,
+          "rules_version": "smart-mixed-lab-1"
+        }
+      ]
+    }
+  ],
+  "invalid_cli_exit": 2,
+  "notes": [
+    "Synthetic caller-verified evidence; no decoder or production-library acceptance claim.",
+    "Fresh release process each run; elapsed covers recognize() only; peak includes process, input, output and regex initialization; no JSON serialization."
+  ]
+}

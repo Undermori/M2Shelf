@@ -1,5 +1,9 @@
+import {TmdbDiagnostics} from "../components/TmdbDiagnostics";
+import tmdbLogo from "../assets/tmdb-logo.svg";
+import {Select} from '../components/Select';
 import { useEffect, useRef, useState } from "react";
 import type { AppBootstrap, AppLanguage, AppSettings, AppTheme, CacheStats, LibraryRoot, UpdateDownloadStatus } from "../types/media";
+import {PosterCacheProgress} from "../components/PosterCacheProgress";
 import { LibraryScanHealth } from "../components/LibraryScanHealth";
 import { EmptyState } from "../components/EmptyState";
 import { Icon } from "../components/Icon";
@@ -8,8 +12,11 @@ import { api, chooseCoverCacheDirectory, choosePlayerExecutable, desktopAvailabl
 import { compactPath, errorMessage, formatBytes, formatDate } from "../lib/format";
 import { useI18n } from "../lib/i18n";
 import {defaultComicReaderSettings,type ComicReaderSettings} from '../types/comic';
+import { useAppSettings } from '../lib/settingsStore';
 
 interface SettingsPageProps {
+  aboutRequest?:number;
+  onRootPolicy?:(root:LibraryRoot,enabled:boolean)=>Promise<void>;
   roots: LibraryRoot[];
   bootstrap: AppBootstrap | null;
   onAddRoot: () => void;
@@ -17,36 +24,63 @@ interface SettingsPageProps {
   onRemoveRoot: (root: LibraryRoot) => void;
   onScanRoot: (root: LibraryRoot) => void;
   onIgnoreScanWarnings?: (root: LibraryRoot) => void;
-  onAppearanceChange: (settings: AppSettings) => number;
-  onPersistenceFailure: (failed: AppSettings, rollback: AppSettings | null, message: string, appearanceRevision: number) => void;
   updateDownloadStatus: UpdateDownloadStatus;
   onCheckForUpdate: () => void;
   onError: (message: string) => void;
   onSuccess: (message: string) => void;
 }
 
-export function SettingsPage({ roots, bootstrap, onAddRoot, onHiddenNodes, onRemoveRoot, onScanRoot, onIgnoreScanWarnings, onAppearanceChange, onPersistenceFailure, updateDownloadStatus, onCheckForUpdate, onError, onSuccess }: SettingsPageProps) {
+export function SettingsPage({ aboutRequest=0, onRootPolicy, roots, bootstrap, onAddRoot, onHiddenNodes, onRemoveRoot, onScanRoot, onIgnoreScanWarnings, updateDownloadStatus, onCheckForUpdate, onError, onSuccess }: SettingsPageProps) {
   const { t } = useI18n();
-  const [settings, setSettings] = useState<AppSettings | null>(null);
-  const [cache, setCache] = useState<CacheStats | null>(null);
+  const { settings, saving, savedSequence, load, change: changeSettings } = useAppSettings();
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
+  const [policyBusy,setPolicyBusy]=useState<number|null>(null);
+  useEffect(()=>{if(!loading&&aboutRequest)document.getElementById("settings-about")?.scrollIntoView({block:"start"});},[aboutRequest,loading]);
+  const [cache, setCache] = useState<CacheStats | null>(null);
+  const [posterEpoch, setPosterEpoch] = useState(0);
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "fading">("idle");
   const [testing, setTesting] = useState(false);
   const [extensionDraft, setExtensionDraft] = useState("");
   const reader=settings?.comicReader??defaultComicReaderSettings;
-  const persistedSettings = useRef<AppSettings | null>(null);
   const latestSettings = useRef<AppSettings | null>(null);
-  const settingsRevision = useRef(0);
-  const parentAppearanceRevision = useRef(0);
-  const saveInFlight = useRef(false);
-  const saveRequested = useRef(false);
+  latestSettings.current = settings;
+  const observedSave = useRef(savedSequence);
   const mounted = useRef(true);
+  const cacheRequest = useRef(0);
+  const cacheDirectory = useRef(settings?.coverCacheDirectory);
+
+  const refreshCacheStats = (expectedDirectory?: string) => {
+    const request = ++cacheRequest.current;
+    const isCurrent = () => mounted.current && request === cacheRequest.current
+      && (!expectedDirectory || expectedDirectory === latestSettings.current?.coverCacheDirectory);
+    void api.cacheStats().then((next) => {
+      if (isCurrent()) setCache(next);
+    }).catch((error) => {
+      if (isCurrent()) onError(errorMessage(error));
+    });
+  };
 
   useEffect(() => {
     mounted.current = true;
     return () => { mounted.current = false; };
   }, []);
+
+  useEffect(() => {
+    if (saving) setSaveState("saving");
+    else if (savedSequence !== observedSave.current) setSaveState("saved");
+    else setSaveState("idle");
+    observedSave.current = savedSequence;
+  }, [saving, savedSequence]);
+
+  useEffect(() => {
+    if (cacheDirectory.current === settings?.coverCacheDirectory) return;
+    cacheDirectory.current = settings?.coverCacheDirectory;
+    cacheRequest.current += 1;
+    setCache(null);
+    if (settings) refreshCacheStats(settings.coverCacheDirectory);
+  // Cache reads follow the shared, revision-safe settings value, including rollback.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settings?.coverCacheDirectory]);
 
   // A receipt is shown only for an actual save, never for the initial settings read.
   useEffect(() => {
@@ -58,95 +92,14 @@ export function SettingsPage({ roots, bootstrap, onAddRoot, onHiddenNodes, onRem
   useEffect(() => {
     let active = true;
     if (!desktopAvailable) { setLoading(false); return; }
-    void Promise.allSettled([api.getSettings(), api.cacheStats()]).then(([settingsResult, cacheResult]) => {
-      if (!active) return;
-      if (settingsResult.status === "fulfilled") {
-        persistedSettings.current = settingsResult.value;
-        latestSettings.current = settingsResult.value;
-        setSettings(settingsResult.value);
-      }
-      else onError(errorMessage(settingsResult.reason));
-      if (cacheResult.status === "fulfilled") setCache(cacheResult.value);
-      else onError(errorMessage(cacheResult.reason));
+    void load().catch((error) => {
+      if (active) onError(errorMessage(error));
     }).finally(() => active && setLoading(false));
-    return () => { active = false; };
+    refreshCacheStats();
+    return () => { active = false; cacheRequest.current += 1; };
   // Settings are loaded when this page is mounted; parent notification callbacks do not affect the request.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  const applyAppearance = (next: AppSettings) => {
-    parentAppearanceRevision.current = onAppearanceChange(next);
-  };
-
-  const drainAutoSave = async () => {
-    if (saveInFlight.current) return;
-    saveInFlight.current = true;
-    if (mounted.current) {
-      setSaving(true);
-      setSaveState("saving");
-    }
-    let lastSaveSucceeded = false;
-    try {
-      while (saveRequested.current) {
-        saveRequested.current = false;
-        const candidate = latestSettings.current;
-        if (!candidate) continue;
-        const revision = settingsRevision.current;
-        const appearanceRevision = parentAppearanceRevision.current;
-        const previousPersisted = persistedSettings.current;
-        try {
-          const saved = await api.updateSettings(candidate);
-          lastSaveSucceeded = true;
-          persistedSettings.current = saved;
-          if (previousPersisted?.coverCacheDirectory !== saved.coverCacheDirectory) {
-            try {
-              const nextCache = await api.cacheStats();
-              if (mounted.current) setCache(nextCache);
-            } catch (error) {
-              if (mounted.current) onError(errorMessage(error));
-            }
-          }
-          if (revision === settingsRevision.current) {
-            latestSettings.current = saved;
-            if (mounted.current) setSettings(saved);
-            if (mounted.current) applyAppearance(saved);
-          }
-        } catch (error) {
-          if (revision !== settingsRevision.current) continue;
-          lastSaveSucceeded = false;
-          const rollback = persistedSettings.current;
-          settingsRevision.current += 1;
-          saveRequested.current = false;
-          latestSettings.current = rollback;
-          if (rollback) {
-            if (mounted.current) setSettings(rollback);
-          }
-          // The parent outlives this page. It must restore persisted appearance/update-check state
-          // and surface the error even if navigation unmounted Settings while the IPC was pending.
-          onPersistenceFailure(candidate, rollback, errorMessage(error), appearanceRevision);
-        }
-      }
-    } finally {
-      saveInFlight.current = false;
-      if (mounted.current) {
-        setSaving(false);
-        setSaveState(lastSaveSucceeded ? "saved" : "idle");
-      }
-    }
-  };
-
-  const changeSettings = (update: (current: AppSettings) => AppSettings) => {
-    const current = latestSettings.current;
-    if (!current) return;
-    const next = update(current);
-    latestSettings.current = next;
-    settingsRevision.current += 1;
-    saveRequested.current = true;
-    setSettings(next);
-    setSaveState("saving");
-    applyAppearance(next);
-    void drainAutoSave();
-  };
 
   const choosePlayer = async () => {
     try {
@@ -170,7 +123,12 @@ export function SettingsPage({ roots, bootstrap, onAddRoot, onHiddenNodes, onRem
     setExtensionDraft("");
   };
   const clearCache = async () => {
-    try { setCache(await api.clearCoverCache()); onSuccess(t("settings.cacheCleared")); }
+    const request = ++cacheRequest.current;
+    try {
+      const next = await api.clearCoverCache();
+      if (mounted.current && request === cacheRequest.current) {setCache(next);setPosterEpoch((epoch)=>epoch+1);}
+      onSuccess(t("settings.cacheCleared"));
+    }
     catch (error) { onError(errorMessage(error)); }
   };
   const chooseCacheDirectory = async () => {
@@ -197,32 +155,33 @@ export function SettingsPage({ roots, bootstrap, onAddRoot, onHiddenNodes, onRem
   if (loading) return <LoadingState label={t("settings.loading")} />;
   return (
     <section className="settings-page">
-      <header className="settings-header"><p className="eyebrow">{t("brand.name")}</p><div className="settings-title-row"><h1>{t("settings.title")}</h1><span className={`settings-save-status${saveState === "saved" || saveState === "saving" ? " is-visible" : ""}`} role="status" aria-live="polite" aria-atomic="true">{saveState !== "idle" && <><Icon name={saving || saveState === "saving" ? "refresh" : "check"} />{saving || saveState === "saving" ? t("settings.autoSaving") : t("settings.autoSaved")}</>}</span></div><p>{t("settings.description")}</p></header>
+      <header className="settings-header"><div className="settings-title-row"><h1>{t("settings.title")}</h1><span className={`settings-save-status${saveState === "saved" || saveState === "saving" ? " is-visible" : ""}`} role="status" aria-live="polite" aria-atomic="true">{saveState !== "idle" && <><Icon name={saving || saveState === "saving" ? "refresh" : "check"} />{saving || saveState === "saving" ? t("settings.autoSaving") : t("settings.autoSaved")}</>}</span></div></header>
       {!desktopAvailable && <div className="preview-banner"><Icon name="info" /><span><strong>{t("settings.previewTitle")}</strong><small>{t("settings.previewDescription")}</small></span></div>}
 
       <div className="settings-layout">
         <section className="settings-section">
-          <div className="settings-section-heading"><span className="settings-symbol coral"><Icon name="folder" /></span><div><h2>{t("settings.rootsTitle")}</h2><p>{t("settings.rootsDescription")}</p></div><button className="button secondary" disabled={!desktopAvailable} onClick={onAddRoot} type="button"><Icon name="plus" />{t("settings.addDirectory")}</button></div>
+          <div className="settings-section-heading"><span className="settings-symbol coral"><Icon name="folder" /></span><div><h2>{t("settings.rootsTitle")}</h2></div><button className="button secondary" disabled={!desktopAvailable} onClick={onAddRoot} type="button"><Icon name="plus" />{t("settings.addDirectory")}</button></div>
           <div className="settings-section-body">
           {roots.length === 0 ? <EmptyState compact icon="folder" title={t("settings.noDirectory")} description={t("settings.noDirectoryDescription")} /> : <div className="settings-root-list">{roots.map((root) => (
-            <article className="settings-root" key={root.id}><span><Icon name="folder-open" /></span><div><strong>{root.displayName}</strong><p title={root.path}>{compactPath(root.path, 74)}</p><small>{t(root.mediaKind==='ANIMATION'?'comic.animation':root.mediaKind==='LIVE_ACTION'?'library.liveAction':root.mediaKind==='EBOOK'?'ebook.name':root.mediaKind==='COMIC'?'comic.name':'comic.unboundVideo')} · {t(root.recognitionMode==='VIDEO_FILE'?(root.mediaKind==='COMIC'||root.mediaKind==='EBOOK'?'bookMode.fileTitle':'rootMode.videoFileTitle'):'rootMode.folderTitle')}</small><small>{t("settings.lastScan", { date: formatDate(root.lastScanAt) })}</small><LibraryScanHealth health={root.scanHealth} /></div><div className="settings-root-actions">{root.scanHealth && root.scanHealth.outcome !== 'SUCCESS' && <button className="icon-button" aria-pressed={!!root.scanHealth.warningsIgnored} aria-label={t(root.scanHealth.warningsIgnored?'comic.restoreWarnings':'comic.ignoreWarnings')} title={t(root.scanHealth.warningsIgnored?'comic.restoreWarnings':'comic.ignoreWarnings')} disabled={!onIgnoreScanWarnings} onClick={()=>onIgnoreScanWarnings?.(root)} type="button"><Icon name={root.scanHealth.warningsIgnored?'warning':'close'}/></button>}<button aria-label={t("settings.scanNamed", { name: root.displayName })} onClick={() => onScanRoot(root)} title={t("settings.scanLibrary")} type="button"><Icon name="refresh" /></button><button className="danger-icon" aria-label={t("settings.removeNamed", { name: root.displayName })} onClick={() => onRemoveRoot(root)} title={t("settings.removeIndexOnly")} type="button"><Icon name="trash" /></button></div></article>
+            <article className="settings-root" key={root.id}><span><Icon name="folder-open" /></span><div><strong>{root.displayName}</strong><p title={root.path}>{compactPath(root.path, 74)}</p><small>{t(root.mediaKind==='ARTBOOK'?'artbook.name':root.mediaKind==='DOUJIN'?'doujin.name':root.mediaKind==='ANIMATION'?'comic.animation':root.mediaKind==='LIVE_ACTION'?'library.liveAction':root.mediaKind==='EBOOK'?'ebook.name':root.mediaKind==='COMIC'?'comic.name':'comic.unboundVideo')} · {t(root.bookOrganizationStrategy==='SMART_MIXED'?'smart.title':root.recognitionMode==='VIDEO_FILE'?(root.mediaKind==='COMIC'||root.mediaKind==='EBOOK'||(root.mediaKind==='DOUJIN' || root.mediaKind === 'ARTBOOK')?'bookMode.fileTitle':'rootMode.videoFileTitle'):'rootMode.folderTitle')}</small><small>{t("settings.lastScan", { date: formatDate(root.lastScanAt) })}</small><LibraryScanHealth health={root.scanHealth} />{['COMIC','EBOOK','DOUJIN','ARTBOOK'].includes(root.mediaKind??'') && <label className="root-policy-inline"><input type="checkbox" disabled={!onRootPolicy||policyBusy!==null} checked={root.autoBangumi===false || root.autoBangumi===undefined&&root.mediaKind==='DOUJIN'} onChange={event=>{setPolicyBusy(root.id);void onRootPolicy?.(root,!event.target.checked).finally(()=>setPolicyBusy(null));}} />{t('library.noAutoBangumi')}</label>}</div><div className="settings-root-actions">{root.scanHealth && root.scanHealth.outcome !== 'SUCCESS' && <button className="icon-button" aria-pressed={!!root.scanHealth.warningsIgnored} aria-label={t(root.scanHealth.warningsIgnored?'comic.restoreWarnings':'comic.ignoreWarnings')} title={t(root.scanHealth.warningsIgnored?'comic.restoreWarnings':'comic.ignoreWarnings')} disabled={!onIgnoreScanWarnings} onClick={()=>onIgnoreScanWarnings?.(root)} type="button"><Icon name={root.scanHealth.warningsIgnored?'warning':'close'}/></button>}<button aria-label={t("settings.scanNamed", { name: root.displayName })} onClick={() => onScanRoot(root)} title={t("settings.scanLibrary")} type="button"><Icon name="refresh" /></button><button className="danger-icon" aria-label={t("settings.removeNamed", { name: root.displayName })} onClick={() => onRemoveRoot(root)} title={t("settings.removeIndexOnly")} type="button"><Icon name="trash" /></button></div></article>
           ))}</div>}
           <div className="settings-hidden-entry"><div><strong>{t("hidden.title")}</strong><p>{t("settings.hiddenDescription")}</p></div><button className="button secondary" disabled={!desktopAvailable} onClick={onHiddenNodes} type="button" aria-haspopup="dialog"><Icon name="eye-off" />{t("hidden.title")}</button></div>
-          <p className="safety-copy"><Icon name="shield" />{t("settings.removeSafety")}</p>
           </div>
         </section>
 
         <section className="settings-section">
-          <div className="settings-section-heading"><span className="settings-symbol navy"><Icon name="play" /></span><div><h2>{t("settings.playerTitle")}</h2><p>{t("settings.playerDescription")}</p></div></div>
+          <div className="settings-section-heading"><span className="settings-symbol navy"><Icon name="play" /></span><div><h2>{t("settings.playerTitle")}</h2></div></div>
           <div className="settings-section-body">
           <div className="setting-form-row"><label><span>{t("settings.playerPath")}</span><div className="path-input"><input disabled={!settings} onChange={(event) => changeSettings((current) => ({ ...current, mpvPath: event.target.value || null }))} placeholder={t("settings.playerPlaceholder")} value={settings?.mpvPath ?? ""} /><button disabled={!desktopAvailable} onClick={() => void choosePlayer()} type="button">{t("common.chooseEllipsis")}</button></div></label><button className="button secondary" disabled={!settings?.mpvPath || testing} onClick={() => void testMpv()} type="button">{testing ? t("settings.testing") : t("settings.testPlayer")}</button></div>
           </div>
         </section>
 
         <section className="settings-section">
-          <div className="settings-section-heading"><span className="settings-symbol gold"><Icon name="settings" /></span><div><h2>{t("settings.browseScanTitle")}</h2><p>{t("settings.browseScanDescription")}</p></div></div>
+          <div className="settings-section-heading"><span className="settings-symbol gold"><Icon name="settings" /></span><div><h2>{t("settings.browseScanTitle")}</h2></div></div>
           <div className="settings-section-body">
-          <div className="settings-preference-list"><label className="field-label"><span>{t("settings.defaultView")}</span><select disabled={!settings} onChange={(event) => changeSettings((current) => ({ ...current, defaultViewMode: event.target.value as "GRID" | "LIST" }))} value={settings?.defaultViewMode ?? "GRID"}><option value="GRID">{t("settings.posterGrid")}</option><option value="LIST">{t("settings.compactList")}</option></select></label><label className="switch-field settings-switch-row"><span><strong>{t("settings.enableBangumi")}</strong><small>{t("settings.bangumiNetwork")}</small></span><input aria-label={t("settings.enableBangumi")} checked={settings?.bangumiSearchEnabled ?? false} disabled={!settings} onChange={(event) => changeSettings((current) => ({ ...current, bangumiSearchEnabled: event.target.checked }))} type="checkbox" /><i /></label>
+          <div className="settings-preference-list"><label className="field-label"><span>{t("settings.defaultView")}</span><Select disabled={!settings} onChange={(event) => changeSettings((current) => ({ ...current, defaultViewMode: event.target.value as "GRID" | "LIST" }))} value={settings?.defaultViewMode ?? "GRID"}><option value="GRID">{t("settings.posterGrid")}</option><option value="LIST">{t("settings.compactList")}</option></Select></label><label className="switch-field settings-switch-row"><span><strong>{t("settings.enableBangumi")}</strong><small>{t("settings.bangumiNetwork")}</small></span><input aria-label={t("settings.enableBangumi")} checked={settings?.bangumiSearchEnabled ?? false} disabled={!settings} onChange={(event) => changeSettings((current) => ({ ...current, bangumiSearchEnabled: event.target.checked }))} type="checkbox" /><i /></label>
+          <div className="tmdb-credits settings-metadata"><img src={tmdbLogo} alt="TMDB"/><div><p>{t('tmdb.notice')}</p><p>{t('tmdb.license')}</p><div className="settings-metadata-actions"><button className="button secondary" disabled={!desktopAvailable} onClick={()=>void openAuthorLink('https://www.themoviedb.org')} type="button">TMDB <Icon name="external"/></button><button className="button secondary" disabled={!desktopAvailable} onClick={()=>void api.tmdbConfigure(t('tmdb.token'),t('tmdb.credentialsHelp')).catch(()=>onError(t('tmdb.error')))} type="button">{t('tmdb.configure')}</button></div></div></div>
+          <TmdbDiagnostics/>
           <label className="switch-field settings-switch-row"><span><strong>{t("settings.autoScanOnStartup")}</strong><small>{t("settings.autoScanOnStartupDescription")}</small></span><input aria-label={t("settings.autoScanOnStartup")} checked={settings?.autoScanOnStartup ?? true} disabled={!settings} onChange={(event) => changeSettings((current) => ({ ...current, autoScanOnStartup: event.target.checked }))} type="checkbox" /><i /></label>
           <label className="switch-field settings-switch-row"><span><strong>{t("settings.allResourcesFlattened")}</strong><small>{t("settings.allResourcesFlattenedDescription")}</small></span><input aria-label={t("settings.allResourcesFlattened")} checked={settings?.allResourcesFlattened ?? false} disabled={!settings} onChange={(event) => changeSettings((current) => ({ ...current, allResourcesFlattened: event.target.checked }))} type="checkbox" /><i /></label>
           </div>
@@ -231,34 +190,35 @@ export function SettingsPage({ roots, bootstrap, onAddRoot, onHiddenNodes, onRem
         </section>
 
         <section className="settings-section comic-settings">
-          <div className="settings-section-heading"><span className="settings-symbol navy"><Icon name="work"/></span><div><h2>{t('comic.defaults')}</h2><p>{t('comic.defaultsHelp')}</p></div></div>
+          <div className="settings-section-heading"><span className="settings-symbol navy"><Icon name="work"/></span><div><h2>{t('comic.defaults')}</h2><p>{t('comic.emptyHelp')}</p></div></div>
           <div className="settings-section-body">
           <div className="settings-columns">
-            <label className="field-label"><span>{t('comic.direction')}</span><select disabled={!settings} value={reader.direction} onChange={e=>changeSettings(s=>({...s,comicReader:{...(s.comicReader??defaultComicReaderSettings),direction:e.target.value as ComicReaderSettings['direction']}}))}><option value="RTL">{t('comic.rtl')}</option><option value="LTR">{t('comic.ltr')}</option></select></label>
-            <label className="field-label"><span>{t('comic.layout')}</span><select disabled={!settings} value={reader.layout} onChange={e=>changeSettings(s=>({...s,comicReader:{...(s.comicReader??defaultComicReaderSettings),layout:e.target.value as ComicReaderSettings['layout']}}))}><option value="DOUBLE">{t('comic.double')}</option><option value="SINGLE">{t('comic.single')}</option></select></label>
-            <label className="field-label"><span>{t('comic.mode')}</span><select disabled={!settings} value={reader.mode} onChange={e=>changeSettings(s=>({...s,comicReader:{...(s.comicReader??defaultComicReaderSettings),mode:e.target.value as ComicReaderSettings['mode']}}))}><option value="PAGED">{t('comic.paged')}</option><option value="SCROLL">{t('comic.scroll')}</option><option value="WEBTOON">{t('comic.webtoon')}</option></select></label>
+            <label className="field-label"><span>{t('comic.direction')}</span><Select disabled={!settings} value={reader.direction} onChange={e=>changeSettings(s=>({...s,comicReader:{...(s.comicReader??defaultComicReaderSettings),direction:e.target.value as ComicReaderSettings['direction']}}))}><option value="RTL">{t('comic.rtl')}</option><option value="LTR">{t('comic.ltr')}</option></Select></label>
+            <label className="field-label"><span>{t('comic.layout')}</span><Select disabled={!settings} value={reader.layout} onChange={e=>changeSettings(s=>({...s,comicReader:{...(s.comicReader??defaultComicReaderSettings),layout:e.target.value as ComicReaderSettings['layout']}}))}><option value="DOUBLE">{t('comic.double')}</option><option value="SINGLE">{t('comic.single')}</option></Select></label>
+            <label className="field-label"><span>{t('comic.mode')}</span><Select disabled={!settings} value={reader.mode} onChange={e=>changeSettings(s=>({...s,comicReader:{...(s.comicReader??defaultComicReaderSettings),mode:e.target.value as ComicReaderSettings['mode']}}))}><option value="PAGED">{t('comic.paged')}</option><option value="SCROLL">{t('comic.scroll')}</option><option value="WEBTOON">{t('comic.webtoon')}</option></Select></label>
           </div><label className="switch-field settings-switch-row"><span><strong>{t('comic.wideAlone')}</strong></span><input disabled={!settings} type="checkbox" checked={reader.widePageAlone} onChange={e=>changeSettings(s=>({...s,comicReader:{...(s.comicReader??defaultComicReaderSettings),widePageAlone:e.target.checked}}))}/><i/></label>
           </div>
         </section>
         <section className="settings-section">
-          <div className="settings-section-heading"><span className="settings-symbol coral"><Icon name="globe" /></span><div><h2>{t("settings.appearanceTitle")}</h2><p>{t("settings.appearanceDescription")}</p></div></div>
+          <div className="settings-section-heading"><span className="settings-symbol coral"><Icon name="globe" /></span><div><h2>{t("settings.appearanceTitle")}</h2></div></div>
           <div className="settings-section-body">
           <div className="settings-columns">
-            <label className="field-label"><span>{t("settings.language")}</span><select disabled={!settings} onChange={(event) => changeSettings((current) => ({ ...current, language: event.target.value as AppLanguage }))} value={settings?.language ?? "zh-CN"}><option value="zh-CN">{t("settings.languageZh")}</option><option value="en-US">{t("settings.languageEn")}</option><option value="ja-JP">{t("settings.languageJa")}</option><option value="ko-KR">{t("settings.languageKo")}</option></select></label>
-            <label className="field-label"><span>{t("settings.theme")}</span><select disabled={!settings} onChange={(event) => changeSettings((current) => ({ ...current, theme: event.target.value as AppTheme }))} value={settings?.theme ?? "system"}><option value="system">{t("settings.themeSystem")}</option><option value="light">{t("settings.themeLight")}</option><option value="dark">{t("settings.themeDark")}</option></select></label>
+            <label className="field-label"><span>{t("settings.language")}</span><Select disabled={!settings} onChange={(event) => changeSettings((current) => ({ ...current, language: event.target.value as AppLanguage }))} value={settings?.language ?? "zh-CN"}><option value="zh-CN">{t("settings.languageZh")}</option><option value="en-US">{t("settings.languageEn")}</option><option value="ja-JP">{t("settings.languageJa")}</option><option value="ko-KR">{t("settings.languageKo")}</option></Select></label>
+            <label className="field-label"><span>{t("settings.theme")}</span><Select disabled={!settings} onChange={(event) => changeSettings((current) => ({ ...current, theme: event.target.value as AppTheme }))} value={settings?.theme ?? "system"}><option value="system">{t("settings.themeSystem")}</option><option value="light">{t("settings.themeLight")}</option><option value="dark">{t("settings.themeDark")}</option></Select></label>
           </div>
           </div>
         </section>
 
         <section className="settings-section">
-          <div className="settings-section-heading"><span className="settings-symbol green"><Icon name="database" /></span><div><h2>{t("settings.cacheTitle")}</h2><p>{t("settings.cacheDescription")}</p></div></div>
+          <div className="settings-section-heading"><span className="settings-symbol green"><Icon name="database" /></span><div><h2>{t("settings.cacheTitle")}</h2></div></div>
           <div className="settings-section-body">
-          <label className="field-label cache-directory-field"><span>{t("settings.cacheDirectory")}</span><div className="path-input"><input disabled={!settings} readOnly title={settings?.coverCacheDirectory} value={settings?.coverCacheDirectory ?? ""} /><button disabled={!desktopAvailable || !settings} onClick={() => void chooseCacheDirectory()} type="button">{t("settings.change")}</button><button disabled={!desktopAvailable} onClick={() => void openCache()} type="button">{t("common.open")}</button></div><small>{t("settings.cachePathHelp")}</small></label>
-          <div className="maintenance-grid"><article><Icon name="image" /><div><strong>{t("settings.coverCache")}</strong><p>{cache ? t("settings.cacheFileSummary", { count: cache.fileCount, size: formatBytes(cache.totalBytes) }) : t("common.unknown")}</p><small title={cache?.cacheDirectory}>{cache ? compactPath(cache.cacheDirectory, 55) : t("common.notAvailable")}</small></div><span className="maintenance-actions"><button disabled={!desktopAvailable} onClick={() => void openCache()} type="button">{t("common.open")}</button><button disabled={!desktopAvailable} onClick={() => void clearCache()} type="button">{t("common.clean")}</button></span></article><article><Icon name="refresh" /><div><strong>{t("settings.rebuildIndex")}</strong><p>{t("settings.rebuildDescription")}</p><small>{t("settings.noMediaChanges")}</small></div><button disabled={!desktopAvailable || roots.length === 0} onClick={() => void rebuild()} type="button">{t("common.rebuild")}</button></article></div>
+          <label className="field-label cache-directory-field"><span>{t("settings.cacheDirectory")}</span><div className="path-input"><input disabled={!settings} readOnly title={settings?.coverCacheDirectory} value={settings?.coverCacheDirectory ?? ""} /><button disabled={!desktopAvailable || !settings} onClick={() => void chooseCacheDirectory()} type="button">{t("settings.change")}</button><button disabled={!desktopAvailable} onClick={() => void openCache()} type="button">{t("common.open")}</button></div></label>
+          <PosterCacheProgress key={posterEpoch} cacheDirectory={settings?.coverCacheDirectory} onCompleted={()=>refreshCacheStats()} />
+          <div className="maintenance-grid"><article><Icon name="image" /><div><strong>{t("settings.coverCache")}</strong><p>{cache ? t("settings.cacheFileSummary", { count: cache.fileCount, size: formatBytes(cache.totalBytes) }) : t("common.unknown")}</p><small title={cache?.cacheDirectory}>{cache ? compactPath(cache.cacheDirectory, 55) : t("common.notAvailable")}</small></div><span className="maintenance-actions"><button disabled={!desktopAvailable} onClick={() => void openCache()} type="button">{t("common.open")}</button><button disabled={!desktopAvailable} onClick={() => void clearCache()} type="button">{t("common.clean")}</button></span></article><article><Icon name="refresh" /><div><strong>{t("settings.rebuildIndex")}</strong><p>{t("settings.rebuildDescription")}</p></div><button disabled={!desktopAvailable || roots.length === 0} onClick={() => void rebuild()} type="button">{t("common.rebuild")}</button></article></div>
           </div>
         </section>
 
-        <section className="settings-section about-section">
+        <section id="settings-about" className="settings-section about-section">
           <div className="settings-section-heading"><span className="settings-symbol coral"><Icon name="info" /></span><div><h2>{t("settings.aboutTitle")}</h2><p>{t("settings.aboutDescription")}</p></div></div>
           <div className="settings-section-body">
           <div className="about-brand"><strong>{t("brand.name")}</strong><span>{t("brand.subtitle")}</span></div>

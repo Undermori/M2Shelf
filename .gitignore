@@ -13,6 +13,8 @@ output/playwright/
 bundle/
 src-tauri/target/
 src-tauri/gen/
+src-tauri/binaries/*.exe
+src-tauri/resources/M2ShelfMobi-source.zip
 coverage/
 __pycache__/
 *.py[cod]

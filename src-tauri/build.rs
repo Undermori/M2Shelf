@@ -1,4 +1,8 @@
+#[path = "native/build_mobi.rs"]
+mod build_mobi;
+
 fn main() {
+    build_mobi::build();
     println!("cargo:rerun-if-env-changed=M2SHELF_BUILD_DATE");
     println!("cargo:rerun-if-changed=windows-app-manifest.xml");
     let build_date = std::env::var("M2SHELF_BUILD_DATE").unwrap_or_else(|_| "unknown".to_string());

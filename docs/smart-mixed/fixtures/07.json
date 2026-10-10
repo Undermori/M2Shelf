@@ -1,0 +1,115 @@
+{
+  "id": 7,
+  "title": "File and image volumes",
+  "input": {
+    "root_id": "fixture-root",
+    "media_kind": "COMIC",
+    "complete": true,
+    "entries": [
+      {
+        "path": "作品A",
+        "kind": "DIRECTORY",
+        "hint": null
+      },
+      {
+        "path": "作品A/第01卷.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "作品A/第02卷.cbz",
+        "kind": "FILE",
+        "format": "CBZ",
+        "verified": true
+      },
+      {
+        "path": "作品A/第03卷",
+        "kind": "DIRECTORY",
+        "hint": null
+      },
+      {
+        "path": "作品A/第03卷/001.png",
+        "kind": "FILE",
+        "format": "PNG",
+        "verified": true
+      },
+      {
+        "path": "作品A/第03卷/002.png",
+        "kind": "FILE",
+        "format": "PNG",
+        "verified": true
+      }
+    ],
+    "page_orders": [
+      {
+        "directory": "作品A/第03卷",
+        "pages": [
+          "作品A/第03卷/001.png",
+          "作品A/第03卷/002.png"
+        ],
+        "basis": "EXISTING_INDEXED_NATURAL_ORDER"
+      }
+    ]
+  },
+  "expected": {
+    "units": [
+      {
+        "path": "作品A/第01卷.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "作品A/第02卷.cbz",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "作品A/第03卷",
+        "kind": "DIRECT_PAGES",
+        "pages": [
+          "作品A/第03卷/001.png",
+          "作品A/第03卷/002.png"
+        ]
+      }
+    ],
+    "root_paths": [
+      "作品A"
+    ],
+    "series": [
+      {
+        "directory": "作品A",
+        "title": "作品A",
+        "members": [
+          {
+            "path": "作品A/第01卷.pdf",
+            "volume": 1,
+            "chapter": null,
+            "role": "VOLUME",
+            "decision": "APPLY"
+          },
+          {
+            "path": "作品A/第02卷.cbz",
+            "volume": 2,
+            "chapter": null,
+            "role": "VOLUME",
+            "decision": "APPLY"
+          },
+          {
+            "path": "作品A/第03卷",
+            "volume": 3,
+            "chapter": null,
+            "role": "VOLUME",
+            "decision": "APPLY"
+          }
+        ],
+        "decision": "APPLY"
+      }
+    ],
+    "directory_roles": {},
+    "diagnostics": [],
+    "editions": 0,
+    "retained_prior": 0
+  },
+  "negative_assertion": "Child images never become parent pages"
+}

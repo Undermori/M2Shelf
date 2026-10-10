@@ -118,6 +118,13 @@ if (-not $SkipBuild) {
 }
 
 $releaseDirectory = Join-Path $repoRoot "src-tauri\target\release"
+$workerPayloadFiles = @('M2ShelfMobi.exe', 'M2ShelfMobi-source.zip', 'THIRD-PARTY-NOTICES.txt')
+foreach ($name in $workerPayloadFiles) {
+  $workerFile = Get-Item -LiteralPath (Join-Path $releaseDirectory $name)
+  if (-not ($workerFile -is [System.IO.FileInfo]) -or ($workerFile.Attributes -band [System.IO.FileAttributes]::ReparsePoint)) { throw "Invalid worker payload: $name" }
+}
+Assert-PeArchitecture -Path (Join-Path $releaseDirectory 'M2ShelfMobi.exe') -ExpectedArchitecture $Architecture
+Assert-NoPrivateBuildPath -Path (Join-Path $releaseDirectory 'M2ShelfMobi.exe')
 $binaryCandidates = @(
   (Join-Path $releaseDirectory "m2shelf.exe"),
   (Join-Path $releaseDirectory "M2Shelf.exe")
@@ -198,7 +205,9 @@ $freshnessDirectories = @(
   (Join-Path $repoRoot "src"),
   (Join-Path $repoRoot "src-tauri\capabilities"),
   (Join-Path $repoRoot "src-tauri\migrations"),
-  (Join-Path $repoRoot "src-tauri\src")
+  (Join-Path $repoRoot "src-tauri\src"),
+  (Join-Path $repoRoot "src-tauri\native"),
+  (Join-Path $repoRoot "src-tauri\vendor")
 )
 foreach ($directory in $freshnessDirectories) {
   if (Test-Path -LiteralPath $directory -PathType Container) {
@@ -242,6 +251,7 @@ try {
   $portableReadme = Join-Path $resolvedStage "README_zh-CN.txt"
   Copy-Item -LiteralPath $sourceBinary -Destination $portableExe -Force
   Copy-Item -LiteralPath $sourceUpdater -Destination $portableUpdater -Force
+  foreach ($name in $workerPayloadFiles) { Copy-Item -LiteralPath (Join-Path $releaseDirectory $name) -Destination (Join-Path $resolvedStage $name) }
 
   $marker = [ordered]@{
     schemaVersion = 1
@@ -261,6 +271,7 @@ try {
     "$(Get-FileHash -LiteralPath $portableReadme -Algorithm SHA256 | Select-Object -ExpandProperty Hash)  README_zh-CN.txt"
   )
   $checksumPath = Join-Path $resolvedStage "SHA256SUMS.txt"
+  foreach ($name in $workerPayloadFiles) { $checksumLines += "$(Get-FileHash -LiteralPath (Join-Path $resolvedStage $name) -Algorithm SHA256 | Select-Object -ExpandProperty Hash)  $name" }
   [System.IO.File]::WriteAllLines($checksumPath, $checksumLines, [System.Text.UTF8Encoding]::new($false))
 
   $requiredStageFiles = @(
@@ -268,7 +279,10 @@ try {
     "M2ShelfUpdater.exe",
     "M2Shelf.portable.json",
     "README_zh-CN.txt",
-    "SHA256SUMS.txt"
+    "SHA256SUMS.txt",
+    "M2ShelfMobi.exe",
+    "M2ShelfMobi-source.zip",
+    "THIRD-PARTY-NOTICES.txt"
   )
   $actualStageFiles = Get-ChildItem -LiteralPath $resolvedStage -File | Select-Object -ExpandProperty Name
   $missingStageFiles = $requiredStageFiles | Where-Object { $_ -notin $actualStageFiles }

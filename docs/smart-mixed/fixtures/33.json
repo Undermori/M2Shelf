@@ -1,0 +1,43 @@
+{
+  "id": 33,
+  "title": "ZIP attachment and CBZ book",
+  "input": {
+    "root_id": "fixture-root",
+    "media_kind": "COMIC",
+    "complete": true,
+    "entries": [
+      {
+        "path": "archive.zip",
+        "kind": "FILE",
+        "format": null,
+        "verified": false
+      },
+      {
+        "path": "comic.cbz",
+        "kind": "FILE",
+        "format": "CBZ",
+        "verified": true
+      }
+    ]
+  },
+  "expected": {
+    "units": [
+      {
+        "path": "comic.cbz",
+        "kind": "FILE_BOOK",
+        "pages": []
+      }
+    ],
+    "root_paths": [
+      "comic.cbz"
+    ],
+    "series": [],
+    "directory_roles": {},
+    "diagnostics": [
+      "UNSUPPORTED_OR_UNVERIFIED_FILE"
+    ],
+    "editions": 0,
+    "retained_prior": 0
+  },
+  "negative_assertion": "ZIP stays traceable physical attachment"
+}

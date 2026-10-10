@@ -27,7 +27,142 @@ use crate::{
 };
 
 const BILIBILI_URL: &str = "https://space.bilibili.com/2903441";
+
+#[tauri::command]
+pub async fn get_book_catalogue(
+    root_id: i64,
+    state: State<'_, AppState>,
+) -> AppResult<crate::smart_mixed::Catalogue> {
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || crate::smart_mixed::catalogue(&database, root_id))
+        .await
+        .map_err(|_| "SMART_READ_FAILED")?
+}
+#[tauri::command]
+pub async fn correct_book_organization(
+    root_id: i64,
+    relative_path: String,
+    action: crate::smart_mixed::Correction,
+    target: Option<String>,
+    expected_revision: i64,
+    app: AppHandle,
+) -> AppResult<()> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let _lifecycle = lock_scan_lifecycle(&state);
+        ensure_no_active_scan(&state)?;
+        crate::smart_mixed::correct(
+            &state.database,
+            root_id,
+            &relative_path,
+            action,
+            target.as_deref(),
+            expected_revision,
+        )
+    })
+    .await
+    .map_err(|_| "SMART_CORRECTION_FAILED")?
+}
 const X_URL: &str = "https://x.com/f_undermori";
+
+#[tauri::command]
+pub async fn tmdb_retry_cover(
+    node_id: i64,
+    state: State<'_, AppState>,
+) -> AppResult<crate::tmdb::Binding> {
+    let db = state.database.clone();
+    let root = active_cover_cache_directory(&state)?;
+    tauri::async_runtime::spawn_blocking(move || crate::tmdb::retry_cover(&db, node_id, &root))
+        .await
+        .map_err(|_| "TMDB_BIND_FAILED")?
+}
+#[tauri::command]
+pub fn tmdb_cancel() {
+    crate::tmdb::cancel_mutation();
+}
+#[tauri::command]
+pub fn tmdb_status() -> bool {
+    crate::tmdb_credentials::read().is_ok()
+}
+#[tauri::command]
+pub fn tmdb_match_diagnostics(
+    state: State<'_, AppState>,
+) -> AppResult<Vec<crate::tmdb::MatchDiagnostic>> {
+    crate::tmdb::diagnostics(&state.database)
+}
+#[tauri::command]
+pub fn tmdb_open_page(node_id: i64, state: State<'_, AppState>) -> AppResult<()> {
+    let binding = crate::tmdb::binding(&state.database.connect()?, node_id)?
+        .filter(|binding| binding.active)
+        .ok_or("TMDB_BINDING_REQUIRED")?;
+    player::open_external_url(&tmdb_movie_url(binding.movie.id)?)
+}
+fn tmdb_movie_url(id: i64) -> AppResult<String> {
+    if id <= 0 {
+        return Err("TMDB_INVALID_ID".into());
+    }
+    Ok(format!("https://www.themoviedb.org/movie/{id}"))
+}
+#[tauri::command]
+pub async fn tmdb_configure(title: String, message: String, app: AppHandle) -> AppResult<bool> {
+    #[cfg(windows)]
+    let parent = app
+        .get_webview_window("main")
+        .and_then(|w| w.hwnd().ok())
+        .map_or(0, |h| h.0 as usize);
+    #[cfg(not(windows))]
+    let parent = 0;
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        crate::tmdb_credentials::configure(parent, &title, &message)
+    })
+    .await
+    .map_err(|_| "TMDB_CREDENTIAL_DIALOG_FAILED")??;
+    if result {
+        crate::tmdb::invalidate_search_cache();
+    }
+    Ok(result)
+}
+#[tauri::command]
+pub async fn tmdb_search(
+    node_id: i64,
+    query: String,
+    year: Option<u16>,
+    language: String,
+    state: State<'_, AppState>,
+) -> AppResult<crate::tmdb::Search> {
+    let db = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::tmdb::search(&db, node_id, &query, year, &language)
+    })
+    .await
+    .map_err(|_| "TMDB_SEARCH_FAILED")?
+}
+#[tauri::command]
+pub async fn tmdb_detail(movie_id: i64, language: String) -> AppResult<crate::tmdb::Movie> {
+    tauri::async_runtime::spawn_blocking(move || crate::tmdb::detail(movie_id, &language))
+        .await
+        .map_err(|_| "TMDB_DETAIL_FAILED")?
+}
+#[tauri::command]
+pub async fn tmdb_bind(
+    node_id: i64,
+    movie_id: i64,
+    language: String,
+    expected_snapshot: String,
+    state: State<'_, AppState>,
+) -> AppResult<crate::tmdb::Binding> {
+    let db = state.database.clone();
+    let root = active_cover_cache_directory(&state)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::tmdb::bind(&db, node_id, movie_id, &language, &expected_snapshot, &root)
+    })
+    .await
+    .map_err(|_| "TMDB_BIND_FAILED")?
+}
+#[tauri::command]
+pub fn tmdb_clear(node_id: i64, state: State<'_, AppState>) -> AppResult<()> {
+    crate::tmdb::deactivate(&state.database, node_id)
+}
 const MAX_BINDING_TITLE_CHARS: usize = 500;
 
 #[tauri::command]
@@ -103,12 +238,13 @@ fn same_path(left: &Path, right: &Path) -> bool {
 }
 
 fn active_cover_cache_directory(state: &AppState) -> AppResult<PathBuf> {
-    let settings = state
-        .database
-        .get_settings(&state.default_cover_cache_dir)?;
-    let configured = PathBuf::from(&settings.cover_cache_directory);
-    let validated = cache::validate_cache_location(&configured, library_root_paths(state)?)?;
-    if same_path(&validated, &state.default_cover_cache_dir) {
+    active_cover_cache_directory_for(&state.database, &state.default_cover_cache_dir)
+}
+
+fn active_cover_cache_directory_for(database: &Database, default: &Path) -> AppResult<PathBuf> {
+    let configured = database.poster_cache_root(default)?;
+    let validated = cache::validate_cache_location(&configured, database.library_paths()?)?;
+    if same_path(&validated, default) {
         cache::ensure_directories(&validated)?;
     } else {
         cache::initialize_custom_cache(&validated)?;
@@ -202,6 +338,12 @@ pub fn show_main_window(app: AppHandle, state: State<'_, AppState>) -> AppResult
         // user can change application-owned metadata through the uncommitted version.
         app.exit(1);
         return Err(error);
+    }
+    if let Ok(cache_root) = state
+        .database
+        .poster_cache_root(&state.default_cover_cache_dir)
+    {
+        crate::poster_cache::resume_warmup(&state.database, &cache_root);
     }
     if let Err(error) = window.show() {
         // A Portable helper may already have observed the health marker above. Exiting inside its
@@ -363,11 +505,16 @@ pub fn open_comic_in_explorer(comic_book_id: i64, state: State<'_, AppState>) ->
     crate::comic_reader::reveal(&state.database, comic_book_id)
 }
 #[tauri::command]
-pub fn open_comic_book(
+pub async fn open_comic_book(
     comic_book_id: i64,
     state: State<'_, AppState>,
 ) -> AppResult<crate::comics::ComicOpenResult> {
-    crate::comic_reader::open(&state.database, comic_book_id)
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::comic_reader::open(&database, comic_book_id)
+    })
+    .await
+    .map_err(|_| "COMIC_READ_FAILED".to_string())?
 }
 #[tauri::command]
 pub async fn read_comic_page(
@@ -428,17 +575,42 @@ pub async fn read_book_document(
 }
 
 #[tauri::command]
+pub async fn read_epub_illustration(
+    comic_book_id: i64,
+    page_index: i64,
+    expected_revision: String,
+    block_index: usize,
+    state: State<'_, AppState>,
+) -> AppResult<tauri::ipc::Response> {
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::comic_reader::read_epub_image(
+            &database,
+            comic_book_id,
+            page_index,
+            &expected_revision,
+            block_index,
+        )
+        .map(tauri::ipc::Response::new)
+    })
+    .await
+    .map_err(|_| "COMIC_READ_FAILED")?
+}
+
+#[tauri::command]
 pub fn update_comic_progress(
     comic_book_id: i64,
     page_index: i64,
     expected_revision: Option<String>,
+    text_position: Option<crate::comics::TextPosition>,
     state: State<'_, AppState>,
 ) -> AppResult<()> {
-    crate::comic_reader::progress_at_revision(
+    crate::comic_reader::progress_with_position_at_revision(
         &state.database,
         comic_book_id,
         page_index,
         expected_revision.as_deref(),
+        text_position,
     )
 }
 #[tauri::command]
@@ -450,14 +622,16 @@ pub fn add_comic_bookmark(
     comic_book_id: i64,
     page_index: i64,
     expected_revision: Option<String>,
+    text_position: Option<crate::comics::TextPosition>,
     state: State<'_, AppState>,
 ) -> AppResult<Vec<i64>> {
-    crate::comic_reader::bookmark_at_revision(
+    crate::comic_reader::bookmark_with_position_at_revision(
         &state.database,
         comic_book_id,
         page_index,
         true,
         expected_revision.as_deref(),
+        text_position,
     )
 }
 #[tauri::command]
@@ -481,7 +655,9 @@ pub fn add_library_root(
     path: String,
     display_name: Option<String>,
     media_kind: Option<LibraryMediaKind>,
+    auto_bangumi: Option<bool>,
     recognition_mode: LibraryRecognitionMode,
+    book_organization_strategy: Option<String>,
     state: State<'_, AppState>,
 ) -> AppResult<LibraryRoot> {
     // Reject duplicate, ancestor and descendant roots before any other setup. `add_root` repeats
@@ -496,11 +672,14 @@ pub fn add_library_root(
         state.update_manager.cache_dir(),
         library_root_paths(&state)?,
     )?;
-    state.database.add_root_with_kind(
+    let kind = media_kind.unwrap_or_default();
+    state.database.add_root_with_strategy(
         &canonical,
         display_name,
-        media_kind.unwrap_or_default(),
+        kind,
         recognition_mode,
+        auto_bangumi.unwrap_or(!kind.is_book()),
+        book_organization_strategy.as_deref().unwrap_or("LEGACY"),
     )
 }
 
@@ -526,6 +705,15 @@ pub fn update_library_root_name(
 pub fn open_library_root_in_explorer(root_id: i64, state: State<'_, AppState>) -> AppResult<()> {
     let root = state.database.get_root(root_id)?;
     player::reveal(Path::new(&root.path))
+}
+
+#[tauri::command]
+pub fn set_library_auto_bangumi(
+    root_id: i64,
+    enabled: bool,
+    state: State<'_, AppState>,
+) -> AppResult<LibraryRoot> {
+    state.database.set_root_auto_bangumi(root_id, enabled)
 }
 
 #[tauri::command]
@@ -743,6 +931,7 @@ pub fn match_existing_content(
         .name("m2shelf-existing-match".into())
         .spawn(move || {
             let _worker_activity = worker_activity;
+            let poster_root = cache_root.clone().ok();
             scanner::run_existing_content_match(
                 Some(&app),
                 &database,
@@ -750,7 +939,12 @@ pub fn match_existing_content(
                 &control,
                 cache_root,
                 write_mode,
-            )
+            );
+            if !control.cancel.load(Ordering::Relaxed) {
+                if let Some(root) = poster_root {
+                    crate::poster_cache::schedule_warmup(&database, &root);
+                }
+            }
         })
     {
         *state
@@ -934,6 +1128,18 @@ pub fn get_bangumi_search_prefill(
             candidates: crate::auto_match::match_queries(&e),
         });
     }
+    if node.media_kind == LibraryMediaKind::LiveAction {
+        let evidence = title_extractor::movie_evidence_for_node(
+            &node,
+            &media_file_names,
+            &state.database.get_root(node.library_root_id)?,
+        );
+        return Ok(BangumiSearchPrefill {
+            original_name: node.folder_name,
+            extracted_name: evidence.primary_title.clone(),
+            candidates: crate::auto_match::match_queries(&evidence),
+        });
+    }
     Ok(title_extractor::build_search_prefill(
         &node.folder_name,
         &node.display_name,
@@ -1029,6 +1235,7 @@ pub async fn bind_bangumi(
     let active_cache = active_cover_cache_directory(&state);
     let previous_path =
         database.save_confirmed_binding_with_aliases(node_id, &subject, &confirmed_aliases)?;
+    crate::tmdb::deactivate(&database, node_id)?;
     if detail_synced {
         database.complete_provider_alias_sync(&subject)?;
     }
@@ -1080,6 +1287,9 @@ pub async fn bind_work_bangumi(
     let changed = state
         .database
         .change_work_binding(&target, Some(&subject))?;
+    for id in &target.source_node_ids {
+        crate::tmdb::deactivate(&state.database, *id)?;
+    }
     if let Some(detail) = enriched {
         state.database.complete_provider_alias_sync(&detail)?;
     }
@@ -1228,6 +1438,9 @@ fn refresh_work_cover(
         }
     }
     result?;
+    if let Ok(root) = &cache_root {
+        crate::poster_cache::schedule_warmup(database, root);
+    }
     let mut binding = database
         .get_binding(target.source_node_ids[0])?
         .ok_or_else(|| "WORK_TARGET_STALE".to_string())?;
@@ -1360,6 +1573,7 @@ fn refresh_bound_cover(
             )?;
         }
     }
+    crate::poster_cache::schedule_warmup(database, cache_root);
     database
         .get_binding(node_id)?
         .ok_or_else(|| "保存 Bangumi 绑定失败。".to_string())
@@ -1403,6 +1617,7 @@ pub fn set_container_cover(
     state
         .database
         .set_node_cover(node_id, CoverSource::Manual, Some(&destination))?;
+    crate::poster_cache::schedule_warmup(&state.database, &cache_root);
     if let Some(old_path) = node.cover_cache_path.as_deref() {
         let old_path = Path::new(old_path);
         if old_path != destination {
@@ -1436,18 +1651,81 @@ pub fn clear_node_cover(node_id: i64, state: State<'_, AppState>) -> AppResult<M
 }
 
 #[tauri::command]
-pub fn get_cover_data_url(node_id: i64, state: State<'_, AppState>) -> AppResult<Option<String>> {
-    let cache_operation = cache::begin_cover_cache_operation();
-    let (cover_path, library_roots) = state.database.cover_read_context(node_id)?;
-    let Some(path) = cover_path else {
-        return Ok(None);
-    };
-    for root in library_roots {
-        if cache::is_equal_or_within(&path, &root) {
-            return Err("拒绝从媒体资源库读取封面数据。".into());
+pub async fn get_cover_data_url(
+    node_id: i64,
+    width: Option<u32>,
+    state: State<'_, AppState>,
+) -> AppResult<Option<String>> {
+    let database = state.database.clone();
+    let cache_root = database.poster_cache_root(&state.default_cover_cache_dir)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let width = width.unwrap_or(512);
+        if !crate::poster_cache::WIDTHS.contains(&width) {
+            return Err("缩略图尺寸无效。".into());
         }
-    }
-    cache::cover_data_url(&cache_operation, &path).map(Some)
+        match crate::poster_cache::cover_data_url(&database, &cache_root, node_id, width) {
+            Ok(value) => Ok(value),
+            Err(_) => {
+                // Unwritable/disconnected custom caches must not hide a retained original cover.
+                let operation = cache::begin_cover_cache_operation();
+                let (path, roots) = database.cover_read_context(node_id)?;
+                if let Some(path) = path {
+                    for root in roots {
+                        if cache::is_equal_or_within_checked(&path, &root)? {
+                            return Err("拒绝从媒体资源库读取缓存封面。".into());
+                        }
+                    }
+                    cache::cover_data_url(&operation, &path).map(Some)
+                } else {
+                    crate::comic_reader::first_image_cover(&database, node_id)
+                }
+            }
+        }
+    })
+    .await
+    .map_err(|e| format!("封面读取任务失败：{e}"))?
+}
+
+#[tauri::command]
+pub async fn get_book_cover_data_url(
+    comic_book_id: i64,
+    expected_revision: String,
+    width: u32,
+    state: State<'_, AppState>,
+) -> AppResult<Option<String>> {
+    let database = state.database.clone();
+    let cache_root = database.poster_cache_root(&state.default_cover_cache_dir)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        if !crate::poster_cache::WIDTHS.contains(&width) {
+            return Err("缩略图尺寸无效。".into());
+        }
+        match crate::poster_cache::book_cover_data_url(
+            &database,
+            &cache_root,
+            comic_book_id,
+            &expected_revision,
+            width,
+        ) {
+            Ok(value) => Ok(value),
+            Err(_) => {
+                use base64::Engine;
+                crate::comic_reader::read_book_cover(&database, comic_book_id, &expected_revision)
+                    .map(|bytes| {
+                        bytes.map(|bytes| {
+                            let mime = image::guess_format(&bytes)
+                                .map(|format| format.to_mime_type())
+                                .unwrap_or("image/jpeg");
+                            format!(
+                                "data:{mime};base64,{}",
+                                base64::engine::general_purpose::STANDARD.encode(bytes)
+                            )
+                        })
+                    })
+            }
+        }
+    })
+    .await
+    .map_err(|_| "COMIC_READ_FAILED")?
 }
 
 #[tauri::command]
@@ -1489,11 +1767,19 @@ pub fn update_settings(
         return Err("主题仅支持 system、light 或 dark。".into());
     }
     let cache_directory = prepare_cover_cache_directory(&state, &settings.cover_cache_directory)?;
+    let previous_cache = state
+        .database
+        .poster_cache_root(&state.default_cover_cache_dir)?;
     let mut settings = settings;
     settings.cover_cache_directory = cache_directory.to_string_lossy().into_owned();
-    state
+    let saved = state
         .database
-        .update_settings(&settings, &state.default_cover_cache_dir)
+        .update_settings(&settings, &state.default_cover_cache_dir)?;
+    if !same_path(&previous_cache, &cache_directory) {
+        crate::poster_cache::cancel_warmup();
+        crate::poster_cache::schedule_warmup(&state.database, &cache_directory);
+    }
+    Ok(saved)
 }
 
 #[tauri::command]
@@ -1562,9 +1848,22 @@ pub fn open_media_in_explorer(media_file_id: i64, state: State<'_, AppState>) ->
 }
 
 #[tauri::command]
-pub fn open_resource_file(resource_file_id: i64, state: State<'_, AppState>) -> AppResult<()> {
-    let resource = state.database.get_resource_file(resource_file_id)?;
-    player::open_with_default_application(Path::new(&resource.absolute_path))
+pub async fn open_resource_file(
+    resource_file_id: i64,
+    state: State<'_, AppState>,
+) -> AppResult<Option<crate::comics::ComicBook>> {
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        if let Some(book) = crate::comic_reader::open_resource(&database, resource_file_id)? {
+            return Ok(Some(book));
+        }
+        let resource = database.get_resource_file(resource_file_id)?;
+        database.read_snapshot(|c| crate::db::ensure_node_visible_conn(c, resource.node_id))?;
+        player::open_with_default_application(Path::new(&resource.absolute_path))?;
+        Ok(None)
+    })
+    .await
+    .map_err(|_| "COMIC_READ_FAILED".to_string())?
 }
 
 #[tauri::command]
@@ -1610,6 +1909,8 @@ fn allowed_external_url(url: &str) -> Option<&'static str> {
     let url = url.trim();
     if url.trim_end_matches('/') == BILIBILI_URL {
         Some(BILIBILI_URL)
+    } else if url == "https://www.themoviedb.org" {
+        Some("https://www.themoviedb.org")
     } else if url == X_URL {
         Some(X_URL)
     } else {
@@ -1618,9 +1919,39 @@ fn allowed_external_url(url: &str) -> Option<&'static str> {
 }
 
 #[tauri::command]
-pub fn get_cache_stats(state: State<'_, AppState>) -> AppResult<CacheStats> {
-    let _cache_operation = cache::begin_cover_cache_operation();
-    cache::stats(&active_cover_cache_directory(&state)?)
+pub async fn get_cache_stats(state: State<'_, AppState>) -> AppResult<CacheStats> {
+    let database = state.database.clone();
+    let default = state.default_cover_cache_dir.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let _cache_operation = cache::begin_cover_cache_operation();
+        cache::stats(&active_cover_cache_directory_for(&database, &default)?)
+    })
+    .await
+    .map_err(|error| format!("缓存统计任务失败：{error}"))?
+}
+
+#[tauri::command]
+pub fn get_poster_cache_status(state: State<'_, AppState>) -> crate::models::PosterCacheStatus {
+    crate::poster_cache::status(&state.database)
+}
+
+#[tauri::command]
+pub async fn get_poster_cache_failures(
+    state: State<'_, AppState>,
+) -> AppResult<Vec<crate::models::PosterCacheFailure>> {
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || database.poster_failures())
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub fn retry_poster_cache(state: State<'_, AppState>) -> AppResult<()> {
+    let root = state
+        .database
+        .poster_cache_root(&state.default_cover_cache_dir)?;
+    crate::poster_cache::retry_warmup(&state.database, &root);
+    Ok(())
 }
 
 #[tauri::command]
@@ -1637,6 +1968,8 @@ pub fn clear_cover_cache(state: State<'_, AppState>) -> AppResult<CacheStats> {
         .collect::<Vec<_>>();
     cache::clear_cover_cache(&cache_clear, &cache_root)?;
     state.database.clear_cover_paths_for_nodes(&affected)?;
+    state.database.clear_poster_checkpoint()?;
+    crate::poster_cache::forget_status(&state.database);
     cache::stats(&cache_root)
 }
 
@@ -1749,6 +2082,10 @@ fn start_scan_internal(
     let auto_match_cache_root = settings
         .bangumi_search_enabled
         .then(|| active_cover_cache_directory(state));
+    let poster_cache_root = state
+        .database
+        .poster_cache_root(&state.default_cover_cache_dir)
+        .ok();
     let mut inserted_any = false;
     for target in &targets {
         if let Err(error) = state.database.start_scan_run(&scan_id, target.root.id) {
@@ -1776,7 +2113,17 @@ fn start_scan_internal(
                 &control,
                 &extensions,
                 auto_match_cache_root,
-            )
+            );
+            if !control.cancel.load(Ordering::Relaxed) {
+                if let Some(root) = poster_cache_root {
+                    let progress = control.progress();
+                    if progress.background && progress.library_changed == Some(false) {
+                        crate::poster_cache::resume_warmup(&database, &root);
+                    } else {
+                        crate::poster_cache::schedule_warmup(&database, &root);
+                    }
+                }
+            }
         })
     {
         *state
@@ -1875,6 +2222,16 @@ mod tests {
     use super::*;
 
     #[test]
+    fn tmdb_bound_movie_link_uses_only_the_official_movie_path() {
+        assert_eq!(
+            tmdb_movie_url(27205).unwrap(),
+            "https://www.themoviedb.org/movie/27205"
+        );
+        assert!(tmdb_movie_url(0).is_err());
+        assert!(tmdb_movie_url(-1).is_err());
+    }
+
+    #[test]
     fn bound_subject_link_uses_only_the_official_subject_path() {
         assert_eq!(
             bangumi_subject_url(174584).unwrap(),
@@ -1956,6 +2313,14 @@ mod tests {
             None
         );
         assert_eq!(allowed_external_url("https://example.com"), None);
+        assert_eq!(
+            allowed_external_url("https://www.themoviedb.org"),
+            Some("https://www.themoviedb.org")
+        );
+        assert_eq!(
+            allowed_external_url("https://www.themoviedb.org.evil.example"),
+            None
+        );
     }
 
     #[test]
@@ -2103,4 +2468,18 @@ mod tests {
             node_id
         );
     }
+}
+
+#[tauri::command]
+pub fn get_text_reader_settings(
+    state: State<'_, AppState>,
+) -> AppResult<crate::text_reader_settings::TextReaderSettings> {
+    crate::text_reader_settings::get(&state.database)
+}
+#[tauri::command]
+pub fn update_text_reader_settings(
+    settings: crate::text_reader_settings::TextReaderSettings,
+    state: State<'_, AppState>,
+) -> AppResult<crate::text_reader_settings::TextReaderSettings> {
+    crate::text_reader_settings::save(&state.database, settings)
 }

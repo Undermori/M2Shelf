@@ -5,6 +5,14 @@ import {comicMessages} from './comicMessages';
 describe('comic layout and bounded binary previews',()=>{
  beforeEach(()=>{vi.stubGlobal('Image',class{src='';naturalWidth=600;naturalHeight=900;decode(){return Promise.resolve();}});Object.defineProperty(URL,'createObjectURL',{configurable:true,value:vi.fn(()=>`blob:page-${Math.random()}`)});Object.defineProperty(URL,'revokeObjectURL',{configurable:true,value:vi.fn()});});
  afterEach(()=>vi.unstubAllGlobals());
+ it('lets the decoder detect native-validated image bytes regardless of the page suffix',async()=>{
+   const read=vi.fn(async()=>new Uint8Array([0xff,0xd8,0xff,0xe0]).buffer);
+   const cache=new ComicPageCache(1,[{pageIndex:0,pageName:'01.PNG'}],vi.fn(),read);
+   await cache.load(0);
+   const blob=vi.mocked(URL.createObjectURL).mock.calls[0][0] as Blob;
+   expect(blob.type).toBe('');expect(blob.size).toBe(4);
+   cache.dispose();
+ });
  it('keeps wide pages alone and resumes pairing after them',()=>{const sizes=new Map([[1,{width:1800,height:900}]]);expect(comicSpreads(6,true,true,sizes)).toEqual([[0],[1],[2,3],[4,5]]);expect(comicSpreads(4,true,false,sizes)).toEqual([[0,1],[2,3]]);expect(comicSpreads(3,false,true,sizes)).toEqual([[0],[1],[2]]);expect(isWide({width:1200,height:1000})).toBe(false);});
  it('maps direction keys without changing PageUp/Down order',()=>{expect(readerKeyStep('ArrowLeft',true)).toBe(1);expect(readerKeyStep('ArrowRight',true)).toBe(-1);expect(readerKeyStep('ArrowRight',false)).toBe(1);expect(readerKeyStep('PageDown',true)).toBe(1);expect(readerKeyStep('PageUp',false)).toBe(-1);expect(readerKeyStep(' ',true)).toBe(1);expect(readerKeyStep('b',true)).toBe(0);});
  it('reuses a page, evicts old URLs, and revokes all on unmount',async()=>{const read=vi.fn(async()=>new ArrayBuffer(1));const cache=new ComicPageCache(1,Array.from({length:30},(_,i)=>({pageIndex:i,pageName:`${i}.png`})),vi.fn(),read);const first=await cache.load(0);await cache.load(0);expect(read).toHaveBeenCalledTimes(1);for(let i=1;i<20;i++)await cache.load(i);expect(cache.peek(0)).toBeUndefined();expect(URL.revokeObjectURL).toHaveBeenCalledWith(first?.url);cache.dispose();expect(URL.revokeObjectURL).toHaveBeenCalledTimes(20);});

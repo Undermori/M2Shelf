@@ -1,0 +1,101 @@
+{
+  "id": 42,
+  "title": "Same volume across format containers",
+  "input": {
+    "root_id": "fixture-root",
+    "media_kind": "COMIC",
+    "complete": true,
+    "entries": [
+      {
+        "path": "作品A",
+        "kind": "DIRECTORY",
+        "hint": null
+      },
+      {
+        "path": "作品A/pdf",
+        "kind": "DIRECTORY",
+        "hint": null
+      },
+      {
+        "path": "作品A/cbz",
+        "kind": "DIRECTORY",
+        "hint": null
+      },
+      {
+        "path": "作品A/pdf/第01卷.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "作品A/cbz/第01卷.cbz",
+        "kind": "FILE",
+        "format": "CBZ",
+        "verified": true
+      },
+      {
+        "path": "作品A/pdf/第02卷.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      }
+    ]
+  },
+  "expected": {
+    "units": [
+      {
+        "path": "作品A/pdf/第01卷.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "作品A/cbz/第01卷.cbz",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "作品A/pdf/第02卷.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      }
+    ],
+    "root_paths": [
+      "作品A"
+    ],
+    "series": [
+      {
+        "directory": "作品A",
+        "title": "作品A",
+        "members": [
+          {
+            "path": "作品A/pdf/第01卷.pdf",
+            "volume": 1,
+            "chapter": null,
+            "role": "VOLUME",
+            "decision": "APPLY"
+          },
+          {
+            "path": "作品A/cbz/第01卷.cbz",
+            "volume": 1,
+            "chapter": null,
+            "role": "VOLUME",
+            "decision": "APPLY"
+          },
+          {
+            "path": "作品A/pdf/第02卷.pdf",
+            "volume": 2,
+            "chapter": null,
+            "role": "VOLUME",
+            "decision": "APPLY"
+          }
+        ],
+        "decision": "APPLY"
+      }
+    ],
+    "directory_roles": {},
+    "diagnostics": [],
+    "editions": 1,
+    "retained_prior": 0
+  },
+  "negative_assertion": "Same number in different containers cannot overwrite source refs"
+}

@@ -32,6 +32,9 @@ export class ComicPageCache{
   private active=0;
   private disposed=false;
   private cost=0;
+  private listeners=new Set<()=>void>();
+  subscribe(listener:()=>void){this.listeners.add(listener);return()=>{this.listeners.delete(listener);};}
+  private notify(){this.changed();for(const listener of this.listeners)listener();}
   private protectedPages=new Set<number>();
   constructor(private bookId:number,private pages:ComicPage[],private changed:()=>void,private read=api.readComicPage){}
   peek(index:number){return this.entries.get(index);}
@@ -60,9 +63,9 @@ export class ComicPageCache{
       const bytes=await this.read(this.bookId,task.index);
       if(this.disposed){task.resolve(undefined);return;}
       if(bytes.byteLength>64*1024*1024)throw new Error('COMIC_PAGE_LIMIT');
-      const ext=this.pages[task.index].pageName.split('.').pop()?.toLowerCase();
-      const type=ext==='jpg'||ext==='jpeg'?'image/jpeg':ext==='avif'?'image/avif':`image/${ext}`;
-      url=URL.createObjectURL(new Blob([bytes],{type}));
+      // Native validation accepts supported image signatures, including mislabeled suffixes.
+      // Let the image decoder detect the validated bytes instead of assigning a suffix MIME.
+      url=URL.createObjectURL(new Blob([bytes]));
       const img=new Image();img.src=url;await img.decode();
       if(this.disposed){URL.revokeObjectURL(url);task.resolve(undefined);return;}
       const width=img.naturalWidth,height=img.naturalHeight;
@@ -83,7 +86,7 @@ export class ComicPageCache{
       const entry={url,width,height,cost};
       this.entries.set(task.index,entry);this.sizes.set(task.index,{width:entry.width,height:entry.height});this.cost+=cost;
       this.trim(task.index);
-      this.changed();task.resolve(this.entries.get(task.index));
+      this.notify();task.resolve(this.entries.get(task.index));
     }catch(error){if(url)URL.revokeObjectURL(url);task.reject(error);}
   }
   private trim(newPage?:number){
@@ -91,8 +94,8 @@ export class ComicPageCache{
       const index=[...this.entries.keys()].find(i=>!this.protectedPages.has(i)&&i!==newPage)
         ?? [...this.entries.keys()].find(i=>i!==newPage);
       if(index===undefined)break;
-      const entry=this.entries.get(index)!;URL.revokeObjectURL(entry.url);this.cost-=entry.cost;this.entries.delete(index);
+      const entry=this.entries.get(index)!;URL.revokeObjectURL(entry.url);this.cost-=entry.cost;this.entries.delete(index);for(const listener of this.listeners)listener();
     }
   }
-  dispose(){this.disposed=true;for(const entry of this.entries.values())URL.revokeObjectURL(entry.url);this.entries.clear();this.cost=0;for(const task of this.queue)task.resolve(undefined);this.queue=[];this.pending.clear();}
+  dispose(){this.disposed=true;this.listeners.clear();for(const entry of this.entries.values())URL.revokeObjectURL(entry.url);this.entries.clear();this.cost=0;for(const task of this.queue)task.resolve(undefined);this.queue=[];this.pending.clear();}
 }

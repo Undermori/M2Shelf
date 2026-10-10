@@ -1,0 +1,85 @@
+{
+  "root_id": "fixture-root",
+  "media_kind": "COMIC",
+  "complete": true,
+  "entries": [
+    {
+      "path": "混合系列",
+      "kind": "DIRECTORY",
+      "hint": "WORK"
+    },
+    {
+      "path": "混合系列/第01卷.pdf",
+      "kind": "FILE",
+      "format": "PDF",
+      "verified": true
+    },
+    {
+      "path": "混合系列/第02卷.cbz",
+      "kind": "FILE",
+      "format": "CBZ",
+      "verified": true
+    },
+    {
+      "path": "混合系列/第03卷",
+      "kind": "DIRECTORY",
+      "hint": null
+    },
+    {
+      "path": "混合系列/第03卷/001.png",
+      "kind": "FILE",
+      "format": "PNG",
+      "verified": true
+    },
+    {
+      "path": "混合系列/第03卷/002.png",
+      "kind": "FILE",
+      "format": "PNG",
+      "verified": true
+    },
+    {
+      "path": "混合系列/第04-06卷",
+      "kind": "DIRECTORY",
+      "hint": null
+    },
+    {
+      "path": "混合系列/特典",
+      "kind": "DIRECTORY",
+      "hint": null
+    },
+    {
+      "path": "混合系列/特典/附录.pdf",
+      "kind": "FILE",
+      "format": "PDF",
+      "verified": true
+    },
+    {
+      "path": "混合系列/第04-06卷/04.pdf",
+      "kind": "FILE",
+      "format": "PDF",
+      "verified": true
+    },
+    {
+      "path": "混合系列/第04-06卷/05.pdf",
+      "kind": "FILE",
+      "format": "PDF",
+      "verified": true
+    },
+    {
+      "path": "混合系列/第04-06卷/06.pdf",
+      "kind": "FILE",
+      "format": "PDF",
+      "verified": true
+    }
+  ],
+  "page_orders": [
+    {
+      "directory": "混合系列/第03卷",
+      "pages": [
+        "混合系列/第03卷/001.png",
+        "混合系列/第03卷/002.png"
+      ],
+      "basis": "EXISTING_INDEXED_NATURAL_ORDER"
+    }
+  ]
+}

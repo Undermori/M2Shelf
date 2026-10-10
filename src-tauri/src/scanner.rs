@@ -93,6 +93,43 @@ pub fn run_scan_with_auto_match(
     extensions: &[String],
     auto_match_cache_root: Option<Result<PathBuf, String>>,
 ) {
+    run_scan_with_matcher(
+        app,
+        database,
+        targets,
+        control,
+        extensions,
+        auto_match_cache_root,
+        |targets, cache_root| {
+            auto_match::run_auto_match(
+                database,
+                targets,
+                &control
+                    .unchanged_directories
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()),
+                cache_root,
+                |current, total, node, report| {
+                    update_auto_match_progress(app, control, current, total, node, report)
+                },
+                || control.cancel.load(Ordering::Relaxed),
+            )
+        },
+    );
+}
+
+// Keep the production scan lifecycle intact while allowing deterministic providers in tests.
+pub(crate) fn run_scan_with_matcher<F>(
+    app: Option<&AppHandle>,
+    database: &Database,
+    targets: Vec<ScanTarget>,
+    control: &ScanControl,
+    extensions: &[String],
+    auto_match_cache_root: Option<Result<PathBuf, String>>,
+    matcher: F,
+) where
+    F: FnOnce(&[ScanTarget], Result<&Path, &str>) -> auto_match::AutoMatchReport,
+{
     let extension_set = extensions
         .iter()
         .map(|value| value.trim_start_matches('.').to_ascii_lowercase())
@@ -191,7 +228,8 @@ pub fn run_scan_with_auto_match(
         }
         scan_targets.retain(|target| {
             root_results.get(&target.root.id).is_some_and(|result| {
-                scan_outcome_allows_matching(&result.0, target.root.media_kind)
+                target.root.auto_bangumi
+                    && scan_outcome_allows_matching(&result.0, target.root.media_kind)
             })
         });
         Ok(())
@@ -202,21 +240,12 @@ pub fn run_scan_with_auto_match(
         if result.is_ok() && !scan_targets.is_empty() && !control.cancel.load(Ordering::Relaxed) {
             auto_match_cache_root.as_ref().map(|cache_root| {
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    auto_match::run_auto_match(
-                        database,
+                    matcher(
                         &scan_targets,
-                        &control
-                            .unchanged_directories
-                            .lock()
-                            .unwrap_or_else(|e| e.into_inner()),
                         cache_root
                             .as_ref()
                             .map(PathBuf::as_path)
                             .map_err(String::as_str),
-                        |current, total, node, report| {
-                            update_auto_match_progress(app, control, current, total, node, report)
-                        },
-                        || control.cancel.load(Ordering::Relaxed),
                     )
                 }))
                 .unwrap_or(auto_match::AutoMatchReport {
@@ -335,6 +364,30 @@ pub fn run_scan_with_auto_match(
                 detail,
                 background,
             );
+        }
+    }
+    // Logical organization stays inside the existing serialized worker lifetime. A failed,
+    // cancelled or partial physical scan retains the previous catalogue and physical fallback.
+    let mut organized = HashSet::new();
+    for target in &targets {
+        if organized.insert(target.root.id)
+            && root_results
+                .get(&target.root.id)
+                .is_some_and(|r| r.0 == "SUCCESS")
+            && !control.cancel.load(Ordering::Relaxed)
+        {
+            if let Err(error) =
+                crate::smart_mixed::rebuild(database, target.root.id, control.cancel.clone())
+            {
+                let _ = database.connect().and_then(|c| {
+                    c.execute(
+                        "UPDATE book_organization_state SET status=?2 WHERE root_id=?1",
+                        params![target.root.id, error],
+                    )
+                    .map(|_| ())
+                    .map_err(|e| e.to_string())
+                });
+            }
         }
     }
     if let Some(app) = app {
@@ -1716,8 +1769,10 @@ pub fn resource_type_for_extension(extension: &str) -> ResourceType {
         "zip" | "rar" | "7z" | "tar" | "gz" | "bz2" | "xz" => ResourceType::Archive,
         "ttf" | "otf" | "ttc" | "woff" | "woff2" => ResourceType::Font,
         "m3u" | "m3u8" | "pls" | "cue" | "mpls" => ResourceType::Playlist,
-        "pdf" | "txt" | "log" | "nfo" | "xml" | "json" | "md" | "html" | "htm" | "doc" | "docx"
-        | "rtf" | "csv" | "yaml" | "yml" => ResourceType::Document,
+        "pdf" | "epub" | "mobi" | "azw3" | "txt" | "log" | "nfo" | "xml" | "json" | "md"
+        | "html" | "htm" | "doc" | "docx" | "rtf" | "csv" | "yaml" | "yml" => {
+            ResourceType::Document
+        }
         _ => ResourceType::Other,
     }
 }
@@ -2035,6 +2090,7 @@ mod tests {
             })),
         };
         let node = crate::models::MediaNode {
+            tmdb_binding: None,
             media_kind: crate::models::LibraryMediaKind::Video,
             direct_comic_book_count: 0,
             child_comic_branch_count: 0,

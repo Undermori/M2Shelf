@@ -399,6 +399,10 @@ fn populate_owned_content_conn(
     });
     detail.expanded_folder_ids.sort_unstable();
     detail.expanded_folder_ids.dedup();
+    detail.comic_books = Some(crate::comics::books_for_resources(
+        connection,
+        &detail.resource_files,
+    )?);
     Ok(())
 }
 

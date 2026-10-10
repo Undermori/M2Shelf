@@ -1,3 +1,4 @@
+import {Select} from '../components/Select';
 import {BookmarkSelect} from '../components/BookmarkSelect';
 import {useCallback,useEffect,useLayoutEffect,useMemo,useRef,useState} from 'react';
 import type {ComicOpenResult,ComicReaderSettings} from '../types/comic';
@@ -8,8 +9,9 @@ import {useI18n} from '../lib/i18n';
 import {errorMessage} from '../lib/format';
 import {Icon} from '../components/Icon';
 import {DocumentReaderPage} from './DocumentReaderPage';
+import type {ReaderMenuActions} from '../types/readerMenu';
 
-export function ComicReaderPage({bookId,initialPage,onBack,onProgress}:{bookId:number;initialPage?:number;onBack:()=>void;onProgress:()=>void}){
+export function ComicReaderPage({bookId,initialPage,onBack,onProgress,onMenuActions}:{bookId:number;initialPage?:number;onBack:()=>void;onProgress:()=>void;onMenuActions?:(actions:ReaderMenuActions|null)=>void}){
  const {t}=useI18n();const [opened,setOpened]=useState<ComicOpenResult|null>(null);const [page,setPage]=useState(0);
  const [settings,setSettings]=useState<ComicReaderSettings>(defaultComicReaderSettings);const [fit,setFit]=useState<'PAGE'|'WIDTH'|'NATIVE'>('PAGE');const [zoom,setZoom]=useState(1);const [background,setBackground]=useState('GRAY');
  const [revision,setRevision]=useState(0);const [error,setError]=useState('');const [panel,setPanel]=useState<'SETTINGS'|null>(null);const [bookmarks,setBookmarks]=useState<number[]>([]);const [bookmarkBusy,setBookmarkBusy]=useState(false);
@@ -83,9 +85,12 @@ export function ComicReaderPage({bookId,initialPage,onBack,onProgress}:{bookId:n
  const toggleBookmark=useCallback(async()=>{if(bookmarkBusy||!cache?.peek(page))return;setBookmarkBusy(true);const token=generation.current;try{const result=await (bookmarks.includes(page)?api.removeComicBookmark(bookId,page,opened?.book.revision):api.addComicBookmark(bookId,page,opened?.book.revision));if(token===generation.current)setBookmarks(result);}catch(e){if(token===generation.current)setError(errorMessage(e));}finally{if(token===generation.current)setBookmarkBusy(false);}},[bookId,bookmarks,page,bookmarkBusy,cache]);
  const fullscreen=useCallback(async()=>{try{if(document.fullscreenElement)await document.exitFullscreen();else await rootRef.current?.requestFullscreen();}catch(e){setError(errorMessage(e));}},[]);
  const exit=useCallback(async()=>{await flush();if(document.fullscreenElement)await document.exitFullscreen().catch(()=>undefined);onBack();},[flush,onBack]);
+ useEffect(()=>{if(!opened||opened.book.documentFormat)return;onMenuActions?.({previous:()=>void turn(-1),next:()=>void turn(1),fullscreen:()=>void fullscreen(),bookmark:()=>void toggleBookmark(),canPrevious:!!count&&(!paged||page>0),canNext:!!count&&(!paged||spreadIndex<spreads.length-1),canBookmark:!bookmarkBusy&&!!cache?.peek(page)});},[opened,onMenuActions,turn,fullscreen,toggleBookmark,count,paged,page,spreadIndex,spreads.length,bookmarkBusy,cache,revision]);
+ useEffect(()=>()=>onMenuActions?.(null),[onMenuActions]);
  useEffect(()=>{const key=(event:KeyboardEvent)=>{
    if(opened?.book.documentFormat)return;
-   if(event.target instanceof HTMLElement&&(event.target.isContentEditable||event.target.closest('input,textarea,select')))return;
+   if(event.target instanceof HTMLElement&&event.target.closest('[role=menu]'))return;
+   if(event.target instanceof HTMLElement&&(event.target.isContentEditable||event.target.closest('input,textarea,select,[role=combobox],[role=listbox]')))return;
    if(event.altKey||event.ctrlKey||event.metaKey)return;
    const step=readerKeyStep(event.key,settings.direction==='RTL');if(step){event.preventDefault();void turn(step);return;}
    if(event.key==='Home'||event.key==='End'){event.preventDefault();jump(event.key==='Home'?0:count-1);}
@@ -100,8 +105,8 @@ export function ComicReaderPage({bookId,initialPage,onBack,onProgress}:{bookId:n
    const scale=(fit==='NATIVE'?1:fit==='WIDTH'?viewport.width/Math.max(1,visual.length)/size.width:Math.min(viewport.height/size.height,viewport.width/Math.max(1,visual.length)/size.width))*zoom;
    return {index,width:size.width*scale,height:size.height*scale};
  });
- const settingSelect=(label:'comic.direction'|'comic.layout'|'comic.mode',field:'direction'|'layout'|'mode',options:[string,'comic.rtl'|'comic.ltr'|'comic.single'|'comic.double'|'comic.paged'|'comic.scroll'|'comic.webtoon'][])=> <label><span>{t(label)}</span><select value={settings[field]} onChange={e=>{if(field==='mode')desiredScroll.current=page;setSettings(v=>({...v,[field]:e.target.value}));}}>{options.map(([value,key])=><option value={value} key={value}>{t(key)}</option>)}</select></label>;
- if(opened?.book.documentFormat)return <DocumentReaderPage opened={opened} initialPage={initialPage} onBack={onBack} onProgress={onProgress}/>;
+ const settingSelect=(label:'comic.direction'|'comic.layout'|'comic.mode',field:'direction'|'layout'|'mode',options:[string,'comic.rtl'|'comic.ltr'|'comic.single'|'comic.double'|'comic.paged'|'comic.scroll'|'comic.webtoon'][])=> <label><span>{t(label)}</span><Select value={settings[field]} onChange={e=>{if(field==='mode')desiredScroll.current=page;setSettings(v=>({...v,[field]:e.target.value}));}}>{options.map(([value,key])=><option value={value} key={value}>{t(key)}</option>)}</Select></label>;
+ if(opened?.book.documentFormat)return <DocumentReaderPage opened={opened} initialPage={initialPage} onBack={onBack} onProgress={onProgress} onMenuActions={onMenuActions}/>;
  return <section className={`comic-reader controls-visible reader-bg-${background.toLowerCase()}`} aria-label={opened?.book.displayName??t('comic.loading')} ref={rootRef}>
  <header className="reader-topbar"><button className="button secondary" onClick={()=>void exit()} type="button"><Icon name="arrow-left"/>{t('comic.back')}</button><strong>{opened?.book.displayName??t('comic.loading')}</strong><button className="icon-button" type="button" onClick={()=>setPanel(panel==='SETTINGS'?null:'SETTINGS')} title={t('comic.controls')} aria-label={t('comic.controls')}><Icon name="settings"/></button><button className="button secondary" type="button" onClick={()=>void fullscreen()}>{t('comic.fullscreen')}</button></header>
  <div className={`reader-viewport ${paged?'is-paged':'is-scroll'} fit-${fit.toLowerCase()}`} ref={viewportRef} tabIndex={0} onScroll={e=>{const top=e.currentTarget.scrollTop;anchor.current={index:atOffset(top),offset:top-offsets[atOffset(top)]};setViewport(v=>({...v,top}));if(!paged)setPage(atOffset(top+Math.min(120,viewport.height*0.25)));}} onTouchStart={e=>{const p=e.touches[0];touchStart.current={x:p.clientX,y:p.clientY};}} onTouchEnd={e=>{const start=touchStart.current;touchStart.current=null;if(!paged||!start)return;const p=e.changedTouches[0],dx=p.clientX-start.x,dy=p.clientY-start.y;if(Math.abs(dx)>60&&Math.abs(dx)>Math.abs(dy)*1.5)void turn((dx<0?1:-1)*(settings.direction==='RTL'?-1:1));}}>
@@ -113,9 +118,9 @@ export function ComicReaderPage({bookId,initialPage,onBack,onProgress}:{bookId:n
  {panel&&<aside className="reader-panel" aria-label={t('comic.controls')}><div className="reader-panel-heading"><strong>{t('comic.controls')}</strong><button className="icon-button" aria-label={t('comic.close')} onClick={()=>setPanel(null)} type="button"><Icon name="close"/></button></div>
  <>
  {settingSelect('comic.direction','direction',[['RTL','comic.rtl'],['LTR','comic.ltr']])}{settingSelect('comic.layout','layout',[['SINGLE','comic.single'],['DOUBLE','comic.double']])}{settingSelect('comic.mode','mode',[['PAGED','comic.paged'],['SCROLL','comic.scroll'],['WEBTOON','comic.webtoon']])}
- <label><span>{t('comic.fit')}</span><select value={fit} onChange={e=>setFit(e.target.value as typeof fit)}><option value="PAGE">{t('comic.fitPage')}</option><option value="WIDTH">{t('comic.fitWidth')}</option><option value="NATIVE">{t('comic.native')}</option></select></label>
+ <label><span>{t('comic.fit')}</span><Select value={fit} onChange={e=>setFit(e.target.value as typeof fit)}><option value="PAGE">{t('comic.fitPage')}</option><option value="WIDTH">{t('comic.fitWidth')}</option><option value="NATIVE">{t('comic.native')}</option></Select></label>
  <label><span>{t('comic.zoom')}</span><input type="range" min={0.25} max={3} step={0.05} value={zoom} onChange={e=>setZoom(Number(e.target.value))}/></label><button className="button secondary" type="button" onClick={()=>setZoom(1)}>{t('comic.reset')}</button>
- <label><span>{t('comic.background')}</span><select value={background} onChange={e=>setBackground(e.target.value)}><option value="BLACK">{t('comic.black')}</option><option value="GRAY">{t('comic.gray')}</option><option value="WHITE">{t('comic.white')}</option></select></label><label className="switch-field settings-switch-row"><span>{t('comic.wideAlone')}</span><input type="checkbox" checked={settings.widePageAlone} onChange={e=>setSettings(s=>({...s,widePageAlone:e.target.checked}))}/><i/></label>
+ <label><span>{t('comic.background')}</span><Select value={background} onChange={e=>setBackground(e.target.value)}><option value="BLACK">{t('comic.black')}</option><option value="GRAY">{t('comic.gray')}</option><option value="WHITE">{t('comic.white')}</option></Select></label><label className="switch-field settings-switch-row"><span>{t('comic.wideAlone')}</span><input type="checkbox" checked={settings.widePageAlone} onChange={e=>setSettings(s=>({...s,widePageAlone:e.target.checked}))}/><i/></label>
  </></aside>}
  </section>;
 }

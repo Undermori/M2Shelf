@@ -77,6 +77,231 @@ pub fn extract_search_keyword(raw_name: &str) -> String {
     }
 }
 
+/// Movie queries share the existing cleaner. Locate a release boundary before removing codecs:
+/// otherwise unknown groups, audio-channel fragments and language names can strand the year.
+pub fn movie_query_title(raw: &str) -> (String, Option<i32>) {
+    let normalized = normalize_release_separators(&normalize_release_brackets(
+        &strip_known_extension(raw.trim()).nfkc().collect::<String>(),
+    ));
+    let (prefix, year) = movie_release_prefix(&normalized);
+    let film_group = movie_broadcast_title(&normalized);
+    let source = film_group.as_deref().unwrap_or(prefix);
+    let (cleaned, _) = extract_keyword_with_mode(source, true);
+    if year.is_some() {
+        return (cleaned, year);
+    }
+    let tokens = cleaned.split_whitespace().collect::<Vec<_>>();
+    let release_atom = |token: &str| {
+        let atom = token.trim_matches(|c: char| !c.is_alphanumeric());
+        let first = atom.split(['-', '_']).next().unwrap_or(atom);
+        (!first.chars().all(|c| c.is_ascii_digit()) && is_technical_atom(first))
+            || matches!(first.to_ascii_lowercase().as_str(), "dubbed" | "subbed")
+    };
+    // Search from the end: title numbers such as 1917 / 2001 survive before the release year.
+    for index in (1..tokens.len()).rev() {
+        let marker = tokens[index].trim_matches(['(', ')', '[', ']']);
+        let year = marker
+            .parse::<i32>()
+            .ok()
+            .filter(|y| (1900..=2099).contains(y));
+        if let Some(year) = year {
+            if tokens[index + 1..].iter().all(|token| release_atom(token)) {
+                return (tokens[..index].join(" "), Some(year));
+            }
+        }
+    }
+    // The normal cleaner removes recognized codecs but cannot remove a compound AAC-GROUP.
+    // Only trim such compounds after a recognizable technical boundary, never arbitrary words.
+    let title = tokens
+        .iter()
+        .take_while(|token| !release_atom(token))
+        .copied()
+        .collect::<Vec<_>>()
+        .join(" ");
+    (if title.is_empty() { cleaned } else { title }, None)
+}
+
+fn movie_release_metadata(value: &str) -> bool {
+    static MARKER: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    MARKER.get_or_init(|| regex::Regex::new(
+        r"(?i)(?:^|[^a-z0-9])(?:(?:bd|hd)?(?:480|576|720|1080|1440|2160|4320)[pi]|\d{3,4}x\d{3,4}|blu[ ._-]?ray|bd(?:rip)?|web[ ._-]?(?:dl|rip)|hdtv|remux|[hx][ .]?26[45]|hevc|avc|uhd|4k)(?:$|[^a-z0-9]|[\p{Han}])"
+    ).expect("movie release boundary")).is_match(value)
+}
+
+fn movie_release_prefix(value: &str) -> (&str, Option<i32>) {
+    static YEAR: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let year = YEAR.get_or_init(|| {
+        regex::Regex::new(r"(?:^|[\s._(\[\-])(?P<year>(?:19|20)\d{2})").expect("movie release year")
+    });
+    for capture in year
+        .captures_iter(value)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+    {
+        let found = capture.name("year").unwrap();
+        if value[found.end()..]
+            .chars()
+            .next()
+            .is_some_and(|c| !c.is_whitespace() && !"._)]-".contains(c))
+        {
+            continue;
+        }
+        let prefix = value[..found.start()].trim_end_matches([' ', '.', '-', '_', '(', '[']);
+        let tail = value[found.end()..].trim_matches([' ', '.', '-', '_', ')', ']']);
+        if !prefix.is_empty() && (tail.is_empty() || movie_release_metadata(tail)) {
+            return (prefix, found.as_str().parse().ok());
+        }
+    }
+    (value, None)
+}
+
+fn movie_broadcast_title(value: &str) -> Option<String> {
+    if !movie_release_metadata(value) {
+        return None;
+    }
+    let chars = value.chars().collect::<Vec<_>>();
+    for (start, c) in chars.iter().enumerate() {
+        if *c != '[' {
+            continue;
+        }
+        let Some(end) = find_matching_square_bracket(&chars, start) else {
+            continue;
+        };
+        let group = chars[start + 1..end].iter().collect::<String>();
+        if let Some(title) = group.trim().strip_prefix("映画 ") {
+            return Some(title.to_string());
+        }
+    }
+    None
+}
+
+fn movie_title_candidates(raw: &str) -> (Vec<String>, Option<i32>) {
+    let (title, year) = movie_query_title(raw);
+    let parts = extract_parallel_title_candidates_with(&title, true);
+    let mut titles = if parts.len() >= 2 { parts } else { vec![title] };
+    // Nested bilingual broadcast titles carry the original and English name in one film group.
+    // Actor/programme/channel brackets outside that group are not title aliases.
+    let normalized = normalize_release_brackets(&raw.nfkc().collect::<String>());
+    if let Some(group) = movie_broadcast_title(&normalized) {
+        for part in extract_parallel_title_candidates_with(&movie_query_title(&group).0, true) {
+            push_unique(&mut titles, part);
+        }
+    }
+    for title in &mut titles {
+        *title = title.trim_matches([' ', '(', ')', '[', ']']).to_string();
+    }
+    (titles, year)
+}
+
+pub fn build_movie_match_evidence(
+    folder: &str,
+    display: &str,
+    files: &[String],
+    mode: crate::models::LibraryRecognitionMode,
+) -> MatchEvidence {
+    let mut evidence = build_match_evidence(folder, display, None, files);
+    let useful = |title: &str| {
+        let lower = normalize_title_for_match(title);
+        is_safe_movie_query(title)
+            && !matches!(
+                lower.as_str(),
+                "movies"
+                    | "movie"
+                    | "films"
+                    | "film"
+                    | "video"
+                    | "videos"
+                    | "main"
+                    | "电影"
+                    | "電影"
+                    | "影视"
+                    | "影視"
+            )
+    };
+    let folder_title = movie_title_candidates(folder);
+    let file_title = files.first().map(|name| movie_title_candidates(name));
+    let custom = (display.trim() != folder.trim()).then(|| movie_title_candidates(display));
+    let file_first = matches!(mode, crate::models::LibraryRecognitionMode::VideoFile);
+    let ordered = if file_first {
+        [custom.as_ref(), file_title.as_ref(), Some(&folder_title)]
+    } else {
+        [custom.as_ref(), Some(&folder_title), file_title.as_ref()]
+    };
+    let candidates = ordered
+        .into_iter()
+        .flatten()
+        .flat_map(|(titles, year)| {
+            titles
+                .iter()
+                .filter(|title| useful(title))
+                .map(move |title| (title.clone(), *year))
+        })
+        .collect::<Vec<_>>();
+    if let Some((title, own_year)) = candidates.first() {
+        evidence.primary_title = title.clone();
+        evidence.folder_title = candidates
+            .iter()
+            .skip(1)
+            .find(|(other, _)| other != title)
+            .map(|v| v.0.clone());
+        evidence.alternate_titles = candidates
+            .iter()
+            .map(|v| v.0.clone())
+            .filter(|v| v != title)
+            .collect();
+        evidence.alternate_titles.dedup();
+        evidence.alternate_titles.truncate(8);
+        evidence.frequent_file_title = file_title
+            .as_ref()
+            .and_then(|v| v.0.iter().find(|title| useful(title)).cloned());
+        let years = candidates
+            .iter()
+            .filter_map(|v| v.1)
+            .collect::<std::collections::HashSet<_>>();
+        evidence.year =
+            own_year.or_else(|| (years.len() == 1).then(|| *years.iter().next().unwrap()));
+        evidence.year_is_strong = evidence.year.is_some() && years.len() <= 1;
+    } else {
+        evidence.primary_title.clear();
+        evidence.year = None;
+        evidence.year_is_strong = false;
+    }
+    evidence.parent_title = None;
+    evidence
+}
+
+pub fn movie_evidence_for_node(
+    node: &crate::models::MediaNode,
+    files: &[String],
+    root: &crate::models::LibraryRoot,
+) -> MatchEvidence {
+    let mut evidence = build_movie_match_evidence(
+        &node.folder_name,
+        &node.display_name,
+        files,
+        root.recognition_mode.clone(),
+    );
+    // Flat file Nodes sit under the hidden Root, but their indexed source path still supplies
+    // a specific enclosing movie folder for generic filenames. Never use the Library Root.
+    if matches!(
+        root.recognition_mode.clone(),
+        crate::models::LibraryRecognitionMode::VideoFile
+    ) && evidence.primary_title.is_empty()
+    {
+        if let Some(parent) = std::path::Path::new(&node.absolute_path)
+            .parent()
+            .filter(|p| *p != std::path::Path::new(&root.path))
+        {
+            if let Some(name) = parent.file_name().and_then(|v| v.to_str()) {
+                evidence =
+                    build_movie_match_evidence(name, name, files, root.recognition_mode.clone());
+            }
+        }
+    }
+    evidence
+}
+
 /// Builds the evidence consumed by the confidence matcher. `parent_name` is optional because a
 /// Library Root or a stale parent can legitimately have no displayable parent Node.
 pub fn build_match_evidence(
@@ -870,6 +1095,9 @@ enum TitleScriptFamily {
 /// evidence, but also expose each script run as an alternate title for the existing bounded
 /// three-query recall and unchanged confidence scorer.
 fn extract_parallel_title_candidates(value: &str) -> Vec<String> {
+    extract_parallel_title_candidates_with(value, false)
+}
+fn extract_parallel_title_candidates_with(value: &str, movie: bool) -> Vec<String> {
     let mut candidates = Vec::new();
     let mut buffer = String::new();
     let mut active_family = None;
@@ -885,7 +1113,7 @@ fn extract_parallel_title_candidates(value: &str) -> Vec<String> {
         }
         if let (Some(active), Some(next)) = (active_family, family) {
             if active != next {
-                push_parallel_title_candidate(&mut candidates, &buffer);
+                push_parallel_title_candidate(&mut candidates, &buffer, movie);
                 buffer.clear();
                 active_family = Some(next);
             }
@@ -894,7 +1122,7 @@ fn extract_parallel_title_candidates(value: &str) -> Vec<String> {
         }
         buffer.push(character);
     }
-    push_parallel_title_candidate(&mut candidates, &buffer);
+    push_parallel_title_candidate(&mut candidates, &buffer, movie);
 
     if saw_latin && saw_east_asian {
         candidates
@@ -915,7 +1143,7 @@ fn title_script_family(character: char) -> Option<TitleScriptFamily> {
     .then_some(TitleScriptFamily::EastAsian)
 }
 
-fn push_parallel_title_candidate(candidates: &mut Vec<String>, value: &str) {
+fn push_parallel_title_candidate(candidates: &mut Vec<String>, value: &str, movie: bool) {
     let candidate = value
         .trim_matches(|character: char| {
             character.is_whitespace()
@@ -927,7 +1155,7 @@ fn push_parallel_title_candidate(candidates: &mut Vec<String>, value: &str) {
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ");
-    if is_safe_match_query(&candidate) {
+    if is_safe_match_query(&candidate) || movie && is_safe_movie_query(&candidate) {
         push_unique(candidates, candidate);
     }
 }
@@ -1769,6 +1997,18 @@ pub fn is_safe_match_query(value: &str) -> bool {
         && !is_generic_title(trimmed)
 }
 
+pub fn is_safe_movie_query(value: &str) -> bool {
+    let normalized = normalize_title_for_match(value);
+    is_safe_match_query(value)
+        || is_four_digit_numeric_title(value)
+        || (normalized.chars().count() == 2
+            && normalized
+                .chars()
+                .all(|c| title_script_family(c) == Some(TitleScriptFamily::EastAsian))
+            && !is_generic_title(value)
+            && !matches!(normalized.as_str(), "映画" | "本編" | "中字"))
+}
+
 pub fn is_four_digit_numeric_title(value: &str) -> bool {
     let normalized = normalize_title_for_match(value);
     normalized.len() == 4
@@ -1804,6 +2044,111 @@ fn deduplicate_strings(values: &mut Vec<String>) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn movie_release_boundaries_do_not_keep_audio_groups_or_drop_title_numbers() {
+        for (raw, title, year) in [
+            (
+                "Example.Feature.2009.2160p.UHD.BluRay.x265.10bit.HDR.DTS-HD.MA.5.1-GROUP",
+                "Example Feature",
+                2009,
+            ),
+            (
+                "Example Feature (2011) (1080p BluRay x265 r00t)",
+                "Example Feature",
+                2011,
+            ),
+            (
+                "Example.Feature.2011.Extended.Cut.Bluray.1080p.MNHD-12345@SITE.COM",
+                "Example Feature",
+                2011,
+            ),
+            (
+                "Example.Feature.2014.JAPANESE.1080p.BluRay.H264.AAC-VXT",
+                "Example Feature",
+                2014,
+            ),
+            (
+                "Example.Feature.2014.BD1080P.X264.AAC.Cantonese&Mandarin.CHS.Mp4Ba",
+                "Example Feature",
+                2014,
+            ),
+            (
+                "Example.Feature.2013.2160p.iTunes.WEB-DL.DD5.1.DV.HDR.H.265-GROUP",
+                "Example Feature",
+                2013,
+            ),
+            (
+                "Blade.Runner.2049.2017.1080p.BluRay",
+                "Blade Runner 2049",
+                2017,
+            ),
+            ("1917.2019.1080p", "1917", 2019),
+            (
+                "2001.A.Space.Odyssey.1968.1080p",
+                "2001 A Space Odyssey",
+                1968,
+            ),
+            (
+                "[发布站www.example.com]示例电影2-2022_BD法语中字",
+                "示例电影2",
+                2022,
+            ),
+        ] {
+            assert_eq!(
+                super::movie_query_title(raw),
+                (title.to_string(), Some(year)),
+                "{raw}"
+            );
+        }
+        assert_eq!(
+            super::movie_query_title("Class of 1999 II").0,
+            "Class of 1999 II"
+        );
+        assert_eq!(super::movie_query_title("K.O.2").0, "K.O.2");
+    }
+
+    #[test]
+    fn movie_bilingual_and_broadcast_queries_exclude_programme_and_publisher_names() {
+        use crate::models::LibraryRecognitionMode::Folder;
+        let e=super::build_movie_match_evidence("【发布站 www.example.com】小姐[国韩多音轨+中文字幕].The.Handmaiden.2016.Extended.BluRay.REMUX.1080p.AVC.DTS-HD.MA5.1.2Audio-GROUP", "", &[], Folder);
+        assert_eq!(e.primary_title, "小姐");
+        assert_eq!(e.year, Some(2016));
+        assert!(e.alternate_titles.iter().any(|s| s == "The Handmaiden"));
+        let raw="[Apple&Kuno-V2 7000K][RAW][映画 小さき勇者たち～ガメラ～(Gamera the Brave)][夏帆(KAHO THE MOVIE 2006)](NECO-HD 1440x1080 H264 AAC)";
+        let e = super::build_movie_match_evidence(raw, raw, &[], Folder);
+        assert_eq!(e.year, Some(2006));
+        assert!(e.alternate_titles.iter().any(|s| s == "Gamera the Brave"));
+        assert!(crate::auto_match::match_queries(&e)
+            .iter()
+            .all(|s| !s.contains("KAHO") && !s.contains("NECO") && !s.contains("Apple")));
+    }
+    #[test]
+    fn audit_optional_local_movie_names() {
+        let Ok(input) = std::env::var("M2SHELF_MOVIE_NAMES_INPUT") else {
+            return;
+        };
+        let output = std::env::var("M2SHELF_MOVIE_NAMES_OUTPUT").expect("audit output");
+        let data: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(input).unwrap()).unwrap();
+        let mut rows = Vec::new();
+        for case in data["cases"].as_array().unwrap() {
+            let folder = case["folder"].as_str().unwrap();
+            let files = case["files"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|f| f.as_str().unwrap().to_string())
+                .collect::<Vec<_>>();
+            for mode in [
+                crate::models::LibraryRecognitionMode::Folder,
+                crate::models::LibraryRecognitionMode::VideoFile,
+            ] {
+                let e = super::build_movie_match_evidence(folder, folder, &files, mode.clone());
+                rows.push(serde_json::json!({"folder":folder,"mode":format!("{mode:?}"),"primary":e.primary_title,"year":e.year,"strong":e.year_is_strong,"alternates":e.alternate_titles,"queries":crate::auto_match::match_queries(&e),"season":e.season_number,"edition":format!("{:?}",e.edition_kind)}));
+            }
+        }
+        std::fs::write(output, serde_json::to_vec_pretty(&rows).unwrap()).unwrap();
+    }
     use super::*;
 
     #[test]

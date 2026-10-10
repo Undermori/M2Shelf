@@ -10,7 +10,7 @@ export type ViewMode = "grid" | "list";
 export type CollectionSort = "title-asc" | "title-desc" | "added-desc" | "added-asc" | "modified-desc" | "modified-asc" | "watched-asc" | "watched-desc";
 export type CollectionSortScope = "all" | "browse" | "favorites";
 export type LibraryRecognitionMode = "FOLDER" | "VIDEO_FILE";
-export type LibraryMediaKind = "VIDEO" | "ANIMATION" | "LIVE_ACTION" | "COMIC" | "EBOOK";
+export type LibraryMediaKind = "VIDEO" | "ANIMATION" | "LIVE_ACTION" | "COMIC" | "EBOOK" | "DOUJIN" | "ARTBOOK";
 export interface CollectionSortPreferences {
   all: CollectionSort;
   browse: CollectionSort;
@@ -43,6 +43,8 @@ export interface ScanHealth {
 export interface WorkTarget { sourceNodeIds: number[]; snapshot: string; }
 export interface NestedMediaFile { file: MediaFile; sourceNodeId: number; sourceName: string; relativeDirectory: string; }
 export interface LibraryRoot {
+  bookOrganizationStrategy?: "LEGACY" | "SMART_MIXED";
+  autoBangumi?: boolean;
   mediaKind?: LibraryMediaKind;
   scanHealth?: ScanHealth | null;
   id: number;
@@ -98,6 +100,7 @@ export interface FavoriteFolder {
 }
 
 export interface MediaNode {
+  tmdbBinding?: import("./tmdb").TmdbBinding | null;
   mediaKind?: LibraryMediaKind;
   directComicBookCount?: number;
   childComicBranchCount?: number;
@@ -172,6 +175,7 @@ export interface BrowseResult {
 }
 
 export interface AllResourcesResult {
+  bookLibraries?: {root:LibraryRoot;catalogue:import('./catalogue').BookCatalogue}[];
   comicNodes?: MediaNode[];
   nodes: MediaNode[];
   totalCount: number;
@@ -181,13 +185,15 @@ export interface AllResourcesResult {
 
 /** A locally recorded playback, ordered newest first by the native API. */
 export interface RecentlyWatchedEntry {
+  comicBook?:import('./comic').ComicBook|null;
   comicBookId?: number | null;
   node: MediaNode;
   watchedAt: string;
 }
 
 export interface SearchHit {
-  kind: "NODE" | "MEDIA_FILE";
+  kind: "NODE" | "MEDIA_FILE" | "COMIC_BOOK";
+  comicBook?:import('./comic').ComicBook|null;
   node: MediaNode;
   mediaFile?: MediaFile | null;
 }
@@ -279,6 +285,22 @@ export interface CacheStats {
   cacheDirectory: string;
 }
 
+export interface PosterCacheStatus {
+  phase: "IDLE" | "QUEUED" | "RUNNING" | "COMPLETED" | "CANCELLED" | "FAILED";
+  processed: number;
+  total: number;
+  failed: number;
+  deferred: number;
+  error: string | null;
+}
+
+export interface PosterCacheFailure {
+  nodeId: number;
+  name: string;
+  reason: "SOURCE_READ" | "SOURCE_CHANGED" | "PROCESSING";
+  detail: string;
+}
+
 export interface AppBootstrap {
   name: string;
   version: string;
@@ -324,3 +346,6 @@ export interface PlayerTestResult {
   message: string;
   version: string | null;
 }
+
+export const isBookKind = (kind: LibraryMediaKind | undefined) => kind === "COMIC" || kind === "EBOOK" || kind === "DOUJIN" || kind === "ARTBOOK";
+export type MediaKindFilter = "ALL" | Exclude<LibraryMediaKind, "VIDEO">;

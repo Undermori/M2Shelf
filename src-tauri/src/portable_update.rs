@@ -38,19 +38,25 @@ const MAX_ARCHIVE_FILES: usize = 16;
 const MAX_EXTRACTED_BYTES: u64 = 640 * 1024 * 1024;
 const MAX_ENTRY_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_DATABASE_BACKUP_BYTES: u64 = 8 * 1024 * 1024 * 1024;
-const REQUIRED_PAYLOAD_FILES: [&str; 5] = [
+const REQUIRED_PAYLOAD_FILES: [&str; 8] = [
     "M2Shelf.exe",
     UPDATER_FILE,
     PORTABLE_MARKER_FILE,
     "README_zh-CN.txt",
     "SHA256SUMS.txt",
+    "M2ShelfMobi.exe",
+    "M2ShelfMobi-source.zip",
+    "THIRD-PARTY-NOTICES.txt",
 ];
-const ALLOWED_PAYLOAD_FILES: [&str; 5] = [
+const ALLOWED_PAYLOAD_FILES: [&str; 8] = [
     "M2Shelf.exe",
     UPDATER_FILE,
     PORTABLE_MARKER_FILE,
     "README_zh-CN.txt",
     "SHA256SUMS.txt",
+    "M2ShelfMobi.exe",
+    "M2ShelfMobi-source.zip",
+    "THIRD-PARTY-NOTICES.txt",
 ];
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -2862,6 +2868,26 @@ mod tests {
         assert_eq!(notice.outcome, RecoveryOutcome::RolledBack);
     }
 
+    #[test]
+    fn complete_payload_includes_replaceable_worker_and_licensing_source() {
+        let entries: Vec<_> = REQUIRED_PAYLOAD_FILES
+            .iter()
+            .map(|name| (*name, b"payload".as_slice(), None))
+            .collect();
+        assert_eq!(attempt(&entries).unwrap().len(), 8);
+        for required in [
+            "M2ShelfMobi.exe",
+            "M2ShelfMobi-source.zip",
+            "THIRD-PARTY-NOTICES.txt",
+        ] {
+            let incomplete: Vec<_> = entries
+                .iter()
+                .copied()
+                .filter(|(name, _, _)| *name != required)
+                .collect();
+            assert!(attempt(&incomplete).is_err(), "missing {required}");
+        }
+    }
     #[test]
     fn zip_rejects_traversal_absolute_backslash_duplicate_symlink_and_unknown() {
         for name in [

@@ -162,6 +162,8 @@ pub enum LibraryMediaKind {
     LiveAction,
     Comic,
     Ebook,
+    Doujin,
+    Artbook,
 }
 
 impl LibraryMediaKind {
@@ -172,26 +174,33 @@ impl LibraryMediaKind {
             Self::LiveAction => "LIVE_ACTION",
             Self::Comic => "COMIC",
             Self::Ebook => "EBOOK",
+            Self::Doujin => "DOUJIN",
+            Self::Artbook => "ARTBOOK",
         }
     }
     pub fn from_db(value: &str) -> Self {
         match value {
             "COMIC" => Self::Comic,
             "EBOOK" => Self::Ebook,
+            "DOUJIN" => Self::Doujin,
+            "ARTBOOK" => Self::Artbook,
             "ANIMATION" => Self::Animation,
             "LIVE_ACTION" => Self::LiveAction,
             _ => Self::Video,
         }
     }
     pub fn is_book(self) -> bool {
-        matches!(self, Self::Comic | Self::Ebook)
+        matches!(
+            self,
+            Self::Comic | Self::Ebook | Self::Doujin | Self::Artbook
+        )
     }
     pub fn accepts_subject(self, subject_type: i64) -> bool {
         match self {
             Self::Video => matches!(subject_type, 2 | 6),
             Self::Animation => subject_type == 2,
             Self::LiveAction => subject_type == 6,
-            Self::Comic | Self::Ebook => subject_type == 1,
+            Self::Comic | Self::Ebook | Self::Doujin | Self::Artbook => subject_type == 1,
         }
     }
 }
@@ -215,6 +224,8 @@ impl LibraryRecognitionMode {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LibraryRoot {
+    pub book_organization_strategy: String,
+    pub auto_bangumi: bool,
     pub media_kind: LibraryMediaKind,
     pub scan_health: Option<ScanHealth>,
     pub id: i64,
@@ -304,6 +315,8 @@ pub struct BatchMutationResult {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MediaNode {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tmdb_binding: Option<crate::tmdb::Binding>,
     #[serde(default)]
     pub media_kind: LibraryMediaKind,
     #[serde(default)]
@@ -453,11 +466,19 @@ pub struct BrowseResult {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AllResourcesResult {
+    pub book_libraries: Vec<AllBookLibrary>,
     pub comic_nodes: Vec<MediaNode>,
     pub recognition_warnings: Vec<MediaNode>,
     pub nodes: Vec<MediaNode>,
     pub total_count: i64,
     pub works: Vec<WorkGroup>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AllBookLibrary {
+    pub root: LibraryRoot,
+    pub catalogue: crate::smart_mixed::Catalogue,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -487,6 +508,7 @@ pub struct NestedMediaFile {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RecentlyWatchedEntry {
+    pub comic_book: Option<crate::comics::ComicBook>,
     pub comic_book_id: Option<i64>,
     pub node: MediaNode,
     pub watched_at: String,
@@ -523,11 +545,13 @@ pub struct BangumiSearchPrefill {
 pub enum SearchHitKind {
     Node,
     MediaFile,
+    ComicBook,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchHit {
+    pub comic_book: Option<crate::comics::ComicBook>,
     pub kind: SearchHitKind,
     pub node: MediaNode,
     pub media_file: Option<MediaFile>,
@@ -793,6 +817,52 @@ pub struct CacheStats {
     pub file_count: u64,
     pub total_bytes: u64,
     pub cache_directory: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum PosterCachePhase {
+    Idle,
+    Queued,
+    Running,
+    Completed,
+    Cancelled,
+    Failed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PosterCacheStatus {
+    pub phase: PosterCachePhase,
+    pub processed: u64,
+    pub total: u64,
+    pub failed: u64,
+    #[serde(default)]
+    pub deferred: u64,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+impl Default for PosterCacheStatus {
+    fn default() -> Self {
+        Self {
+            phase: PosterCachePhase::Idle,
+            processed: 0,
+            total: 0,
+            failed: 0,
+            deferred: 0,
+            error: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PosterCacheFailure {
+    pub node_id: i64,
+    pub name: String,
+    pub reason: String,
+    pub detail: String,
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -86,7 +86,11 @@ pub fn ensure_existing_custom_cache(cache_root: &Path) -> AppResult<()> {
 }
 
 fn ensure_named_directories(cache_root: &Path) -> AppResult<()> {
-    for directory in [cache_root.join("bangumi"), cache_root.join("manual")] {
+    for directory in [
+        cache_root.join("bangumi"),
+        cache_root.join("manual"),
+        cache_root.join("posters"),
+    ] {
         fs::create_dir_all(&directory).map_err(|error| format!("无法创建封面缓存目录：{error}"))?;
         let metadata = fs::symlink_metadata(&directory)
             .map_err(|error| format!("无法校验封面缓存目录：{error}"))?;
@@ -614,8 +618,13 @@ fn remove_cached_file_inner(path: &Path, cache_root: &Path) -> AppResult<()> {
 }
 
 pub fn clear_cover_cache(_cache_clear: &CoverCacheClearGuard, cache_root: &Path) -> AppResult<()> {
+    crate::poster_cache::cancel_warmup();
     ensure_existing_custom_cache(cache_root)?;
-    for directory in [cache_root.join("bangumi"), cache_root.join("manual")] {
+    for directory in [
+        cache_root.join("bangumi"),
+        cache_root.join("manual"),
+        cache_root.join("posters"),
+    ] {
         for entry in
             fs::read_dir(&directory).map_err(|error| format!("读取缓存目录失败：{error}"))?
         {
@@ -637,20 +646,44 @@ pub fn stats(cache_root: &Path) -> AppResult<CacheStats> {
     ensure_existing_custom_cache(cache_root)?;
     let mut file_count = 0_u64;
     let mut total_bytes = 0_u64;
-    for directory in [cache_root.join("bangumi"), cache_root.join("manual")] {
+    // The three directory boundaries were validated above. Counting ordinary owned entries
+    // needs only their names and metadata, not repeated canonicalization for every derivative.
+    for (directory, owned_name) in [
+        (
+            cache_root.join("bangumi"),
+            is_bangumi_file_name as fn(&str) -> bool,
+        ),
+        (
+            cache_root.join("manual"),
+            is_manual_file_name as fn(&str) -> bool,
+        ),
+        (
+            cache_root.join("posters"),
+            crate::poster_cache::is_owned_name as fn(&str) -> bool,
+        ),
+    ] {
         for entry in fs::read_dir(&directory)
             .map_err(|error| format!("读取缓存目录失败：{error}"))?
             .flatten()
         {
-            match entry.metadata() {
-                Ok(metadata)
-                    if metadata.is_file() && is_owned_cache_file(&entry.path(), cache_root) =>
-                {
-                    file_count += 1;
-                    total_bytes += metadata.len();
-                }
-                _ => {}
+            if !entry.file_name().to_str().is_some_and(owned_name) {
+                continue;
             }
+            let Ok(metadata) = fs::symlink_metadata(entry.path()) else {
+                continue;
+            };
+            #[cfg(windows)]
+            {
+                use std::os::windows::fs::MetadataExt;
+                if metadata.file_attributes() & 0x400 != 0 {
+                    continue;
+                }
+            }
+            if !metadata.file_type().is_file() {
+                continue;
+            }
+            file_count += 1;
+            total_bytes += metadata.len();
         }
     }
     Ok(CacheStats {
@@ -674,7 +707,7 @@ pub(crate) fn cached_cover_is_valid(path: &Path) -> bool {
     read_cover_payload(path).is_ok()
 }
 
-fn read_cover_payload(path: &Path) -> AppResult<Vec<u8>> {
+pub(crate) fn read_cover_payload(path: &Path) -> AppResult<Vec<u8>> {
     if !path.is_absolute() || !path.is_file() {
         return Err("封面缓存文件不存在。".into());
     }
@@ -725,6 +758,9 @@ fn is_owned_cache_file(path: &Path, cache_root: &Path) -> bool {
     if is_same_path(parent, &cache_root.join("manual")) {
         return is_manual_file_name(file_name);
     }
+    if is_same_path(parent, &cache_root.join("posters")) {
+        return crate::poster_cache::is_owned_name(file_name);
+    }
     false
 }
 
@@ -743,7 +779,7 @@ fn is_bangumi_file_name(name: &str) -> bool {
         .and_then(OsStr::to_str)
         .unwrap_or_default()
         .to_ascii_lowercase();
-    positive_decimal(stem)
+    (positive_decimal(stem) || is_tmdb_stem(stem))
         && matches!(
             extension.as_str(),
             "jpg" | "jpeg" | "png" | "webp" | "download"
@@ -778,9 +814,18 @@ fn is_unique_temporary_name(name: &str, manual: bool) -> bool {
     let valid_stem = if manual {
         stem.strip_prefix("node-").is_some_and(positive_decimal)
     } else {
-        positive_decimal(stem)
+        positive_decimal(stem) || is_tmdb_stem(stem)
     };
     valid_stem && uuid.len() == 32 && uuid.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn is_tmdb_stem(value: &str) -> bool {
+    value
+        .strip_prefix("tmdb-")
+        .and_then(|s| s.split_once('-'))
+        .is_some_and(|(id, hash)| {
+            positive_decimal(id) && hash.len() == 16 && hash.bytes().all(|b| b.is_ascii_hexdigit())
+        })
 }
 
 fn positive_decimal(value: &str) -> bool {
@@ -829,6 +874,30 @@ mod tests {
         let cache_operation = begin_cover_cache_operation();
         assert!(remove_cached_file(&cache_operation, &source, &cache).is_err());
         assert!(source.exists());
+    }
+
+    #[test]
+    fn stats_counts_large_derivative_sets_and_skips_foreign_files_and_directories() {
+        let temp = TempDir::new().unwrap();
+        let cache = temp.path().join("cache");
+        ensure_directories(&cache).unwrap();
+        let posters = cache.join("posters");
+        for index in 0..1024_u32 {
+            fs::write(
+                posters.join(format!("v1-{index:064x}-256.m2thumb")),
+                b"cache",
+            )
+            .unwrap();
+        }
+        let unrelated = posters.join("family.webp");
+        fs::write(&unrelated, b"unrelated").unwrap();
+        fs::create_dir(posters.join(format!("v1-{:064x}-256.m2thumb", 1024))).unwrap();
+        let start = std::time::Instant::now();
+        let result = stats(&cache).unwrap();
+        eprintln!("1024 derivative metadata statistics: {:?}", start.elapsed());
+        assert_eq!(result.file_count, 1024);
+        assert_eq!(result.total_bytes, 1024 * 5);
+        assert_eq!(fs::read(unrelated).unwrap(), b"unrelated");
     }
 
     #[test]

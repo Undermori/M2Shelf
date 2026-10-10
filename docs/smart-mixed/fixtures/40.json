@@ -1,0 +1,85 @@
+{
+  "id": 40,
+  "title": "Manual source series and volume overrides",
+  "input": {
+    "root_id": "fixture-root",
+    "media_kind": "COMIC",
+    "complete": true,
+    "entries": [
+      {
+        "path": "作品A",
+        "kind": "DIRECTORY",
+        "hint": null
+      },
+      {
+        "path": "作品A/书X.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      },
+      {
+        "path": "作品A/书Y.pdf",
+        "kind": "FILE",
+        "format": "PDF",
+        "verified": true
+      }
+    ],
+    "overrides": [
+      {
+        "path": "作品A/书X.pdf",
+        "series_directory": "作品A",
+        "volume": 7
+      },
+      {
+        "path": "作品A/书Y.pdf",
+        "series_directory": "作品A",
+        "volume": 8
+      }
+    ]
+  },
+  "expected": {
+    "units": [
+      {
+        "path": "作品A/书X.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      },
+      {
+        "path": "作品A/书Y.pdf",
+        "kind": "FILE_BOOK",
+        "pages": []
+      }
+    ],
+    "root_paths": [
+      "作品A"
+    ],
+    "series": [
+      {
+        "directory": "作品A",
+        "title": "作品A",
+        "members": [
+          {
+            "path": "作品A/书X.pdf",
+            "volume": 7,
+            "chapter": null,
+            "role": "VOLUME",
+            "decision": "APPLY"
+          },
+          {
+            "path": "作品A/书Y.pdf",
+            "volume": 8,
+            "chapter": null,
+            "role": "VOLUME",
+            "decision": "APPLY"
+          }
+        ],
+        "decision": "APPLY"
+      }
+    ],
+    "directory_roles": {},
+    "diagnostics": [],
+    "editions": 0,
+    "retained_prior": 0
+  },
+  "negative_assertion": "Manual members and numbering override automatic category fallback"
+}

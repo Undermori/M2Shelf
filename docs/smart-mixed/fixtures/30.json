@@ -1,0 +1,45 @@
+{
+  "id": 30,
+  "title": "Single image stays review",
+  "input": {
+    "root_id": "fixture-root",
+    "media_kind": "COMIC",
+    "complete": true,
+    "entries": [
+      {
+        "path": "单图",
+        "kind": "DIRECTORY",
+        "hint": null
+      },
+      {
+        "path": "单图/001.png",
+        "kind": "FILE",
+        "format": "PNG",
+        "verified": true
+      }
+    ],
+    "page_orders": [
+      {
+        "directory": "单图",
+        "pages": [
+          "单图/001.png"
+        ],
+        "basis": "EXISTING_INDEXED_NATURAL_ORDER"
+      }
+    ]
+  },
+  "expected": {
+    "units": [],
+    "root_paths": [
+      "单图"
+    ],
+    "series": [],
+    "directory_roles": {},
+    "diagnostics": [
+      "SINGLE_IMAGE_REVIEW"
+    ],
+    "editions": 0,
+    "retained_prior": 0
+  },
+  "negative_assertion": "No misleading automatic whole book"
+}

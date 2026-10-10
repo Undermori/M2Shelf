@@ -56,7 +56,7 @@ M2ShelfPortableKeyTool.exe verify-key `
 1. 确认 `package.json`、lockfile、`src-tauri/Cargo.toml`、Cargo lockfile 和 `src-tauri/tauri.conf.json` 版本完全一致，且为稳定规范 SemVer；版本变更后同时刷新并审查 `tools/portable-key-tool/Cargo.lock`，因为它锁定了当前 `m2shelf_lib` 路径依赖。刷新锁文件不执行任何密钥命令。
 2. 更新四语言 release notes，并确认所有长期文档与源码一致。
 3. 在干净工作树运行 `AGENTS.md` 的完整质量门禁。
-4. 使用 `scripts/build_windows_release.ps1 -Bundles nsis` 与 `scripts/build_portable.ps1` 做一次本地候选验证；检查版本、x64、图标、隐私扫描、Portable 五文件集合、helper identity 和启动。
+4. 使用 `scripts/build_windows_release.ps1 -Bundles nsis` 与 `scripts/build_portable.ps1` 做一次本地候选验证；检查版本、x64、图标、隐私扫描、Portable 八文件集合、helper identity 和启动。
 5. 提交并推送目标 commit，在该 commit 创建唯一 tag `v{version}`，再推送 tag。不要移动或复用发布 tag。
 6. 发布前审计完整可达 Git 历史的 author/committer；公开仓库只允许 GitHub noreply 地址。发现真实邮箱时必须先按经用户确认的历史清理流程处理并复核远端，再创建 release tag。
 
@@ -72,7 +72,7 @@ tag 会触发 `.github/workflows/windows-release.yml`。该 workflow 使用固�
 - `M2Shelf-Setup-{version}-x64.exe.sha256`；
 - `candidate-provenance.json`。
 
-下载候选到仓库外或忽略的本地目录，保留原文件名与 provenance。`candidate-provenance.json` 是便于核对的 CI 元数据，不是密码学来源证明，不能单独授权生产签名。只接受 tag 触发、`tagExists=true`，且 repository、version、tag、commit 和资产摘要均与本地目标一致的候选。联网机使用 `gh attestation download` 获取两个候选的 bundle，并同时获取新的 `gh attestation trusted-root`；隔离签名环境按 GitHub 官方离线流程对两个候选执行 `gh attestation verify --bundle ... --custom-trusted-root ... -R Undermori/M2Shelf`，确认 source ref 为精确 `refs/tags/v{version}`（本次为 `refs/tags/v0.5.11`）和预期 commit 后，独立记录两个 SHA-256。若不使用 attestation，则必须在隔离环境从已验证 tag 独立构建并得到正式候选的可信精确摘要。正式签名只接受这条独立路径得到的摘要。
+下载候选到仓库外或忽略的本地目录，保留原文件名与 provenance。`candidate-provenance.json` 是便于核对的 CI 元数据，不是密码学来源证明，不能单独授权生产签名。只接受 tag 触发、`tagExists=true`，且 repository、version、tag、commit 和资产摘要均与本地目标一致的候选。联网机使用 `gh attestation download` 获取两个候选的 bundle，并同时获取新的 `gh attestation trusted-root`；隔离签名环境按 GitHub 官方离线流程对两个候选执行 `gh attestation verify --bundle ... --custom-trusted-root ... -R Undermori/M2Shelf`，确认 source ref 为精确 `refs/tags/v{version}`和预期 commit 后，独立记录两个 SHA-256。若不使用 attestation，则必须在隔离环境从已验证 tag 独立构建并得到正式候选的可信精确摘要。正式签名只接受这条独立路径得到的摘要。
 
 ## 4. USB 密钥签名
 
@@ -97,7 +97,7 @@ PowerShell 只传递文件路径和公开元数据，不读取密码或私钥。
 - `latest.json`；
 - 原 `candidate-provenance.json`。
 
-正式 release notes JSON 必须恰好包含非空的 `zh-CN`、`en-US`、`ja-JP`、`ko-KR`。签名完成后拔出 USB；不要修改任何候选、sidecar、manifest 或 provenance，也不要把签名目录提交到 Git。现有 `scripts/publish_signed_release.ps1` 仍负责发布前用随包 helper 再次执行独立 fail-closed 公钥验签并发布，不改变 Release 的精确八项资产集合。
+正式 release notes JSON 必须恰好包含非空的 `zh-CN`、`en-US`、`ja-JP`、`ko-KR`。签名完成后拔出 USB；不要修改任何候选、sidecar、manifest 或 provenance，也不要把签名目录提交到 Git。现有 `scripts/publish_signed_release.ps1` 仍负责发布前用随包 helper 再次执行独立 fail-closed 公钥验签并发布。本地签名交接仍为八项，公开 Release 仅上传安装包、Portable 压缩包和自动更新需要的 `latest.json`；摘要与签名已包含在 manifest 中。
 
 ## 5. Fail-closed 验证与发布
 
@@ -124,11 +124,11 @@ pwsh ./scripts/publish_signed_release.ps1 `
   -Publish
 ```
 
-发布脚本会先核对独立保存的 verifier SHA-256、app ID、版本和嵌入公钥，并调用其 `verify` 命令对两个资产执行真实 Ed25519 验签；然后锁定本地输入，拒绝已有 Release，创建 draft，上传并要求每个远端资产同时精确匹配名称、大小和 GitHub 报告的 SHA-256 digest，重新确认 tag，最后才公开。正式集合恰好包含：两个安装资产、两个 SHA-256 sidecar、两个 Ed25519 signature sidecar、`latest.json` 和 `candidate-provenance.json`。任一检查失败即停止；若已经建立 draft，它保持为 draft，必须先查明原因，不能绕过脚本直接公开。
+发布脚本会先核对独立保存的 verifier SHA-256、app ID、版本和嵌入公钥，并调用其 `verify` 命令对两个资产执行真实 Ed25519 验签；然后锁定本地输入，拒绝已有 Release，创建 draft，上传并要求每个远端资产同时精确匹配名称、大小和 GitHub 报告的 SHA-256 digest，重新确认 tag，最后才公开。公开集合恰好包含：安装包 EXE、Portable ZIP 和 `latest.json`。八项本地输入全部验签、锁定并复查，sidecar 与 provenance 保留作本地核验记录，不公开为下载附件。任一检查失败即停止；若已经建立 draft，它保持为 draft，必须先查明原因，不能绕过脚本直接公开。
 
 ## 6. 发布后验证
 
-1. 核对 Release tag、commit、八个资产名、大小和公开 SHA-256；
+1. 核对 Release tag、commit、三个公开资产名、大小和公开 SHA-256；
 2. 下载公开的 `latest.json`，确认版本、UTC 时间、四语言说明及两个 URL 固定到刚发布的 tag；
 3. 普通后续版本应在上一稳定版的 NSIS 和 Portable 环境各检查一次：发现更新、明确下载、完整性/签名验证、安装与重启。首次公开引导版 `0.5.11` 例外：真实用户路径验证 `0.5.7` 手动安装 `0.5.11`，更新器链路则使用受控且内含同一新信任根的测试客户端验证，不得把 `v0.5.8`、`v0.5.9` 或 `v0.5.10` tag 描述成公开稳定版；
 4. Portable 还需验证 helper-ready 后才退出旧程序、单实例、数据库保留、精确版本健康回执和完整三秒存活；用测试构造的失败场景确认文件/SQLite 自动回滚及两类恢复提示；

@@ -1,0 +1,1031 @@
+{
+  "recorded_at_utc": "2026-10-09T09:35:44.849721+00:00",
+  "phase1_tests": {
+    "passed": 84,
+    "failed": 0,
+    "ignored": 0
+  },
+  "phase1_cli_goldens": 49,
+  "shadow_tests": {
+    "passed": 42,
+    "failed": 0,
+    "ignored": 0
+  },
+  "cli_cases": [
+    {
+      "case": 3,
+      "root_identity": 1,
+      "media_type": "COMIC",
+      "recognition_mode": "FOLDER",
+      "index_snapshot_version": "3e7e1a498911b121607e72793b17c594b8589ed62a327ff3e1b3898bb40fbfb6",
+      "override_revision": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "scan_health": {
+        "outcome": "SUCCESS",
+        "error_count": 0,
+        "last_success": "2026-01-01T00:00:00Z",
+        "last_attempt": null,
+        "latest_run": null,
+        "complete": true,
+        "freshness": "INDEX_ONLY_CURRENT_DISK_UNKNOWN"
+      },
+      "indexed_sources": 104,
+      "proposed_reading_units": 104,
+      "retained_physical_sources": 0,
+      "orphan_sources": 0,
+      "missing_source_ids": 0,
+      "duplicate_source_ids": 0,
+      "series": 2,
+      "works": 100,
+      "directory_roles": {
+        "Root": 1,
+        "Series": 2
+      },
+      "review_groups": 0,
+      "editions": 0,
+      "current_browse_nodes": 2,
+      "current_browse_readable_count": 100,
+      "current_details_compared": 3,
+      "changed_group_count": 100,
+      "remaining_attachments": 0,
+      "unopened_readable_resources": 0,
+      "rules": {
+        "N01": 104,
+        "S01": 2,
+        "W01": 100
+      },
+      "diagnostics": {},
+      "mutation_policy": "READ_ONLY_PROPOSAL_AND_PHYSICAL_FALLBACK_NO_DELETIONS",
+      "sqlite_bytes_unchanged": true
+    },
+    {
+      "case": 10,
+      "root_identity": 1,
+      "media_type": "COMIC",
+      "recognition_mode": "FOLDER",
+      "index_snapshot_version": "665011094a6166a49c955241563be1b60a164f7c950098fd35187eef5ae1ab44",
+      "override_revision": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "scan_health": {
+        "outcome": "SUCCESS",
+        "error_count": 0,
+        "last_success": "2026-01-01T00:00:00Z",
+        "last_attempt": null,
+        "latest_run": null,
+        "complete": true,
+        "freshness": "INDEX_ONLY_CURRENT_DISK_UNKNOWN"
+      },
+      "indexed_sources": 2,
+      "proposed_reading_units": 2,
+      "retained_physical_sources": 0,
+      "orphan_sources": 0,
+      "missing_source_ids": 0,
+      "duplicate_source_ids": 0,
+      "series": 0,
+      "works": 2,
+      "directory_roles": {
+        "Category": 1,
+        "Root": 1
+      },
+      "review_groups": 0,
+      "editions": 0,
+      "current_browse_nodes": 1,
+      "current_browse_readable_count": 0,
+      "current_details_compared": 2,
+      "changed_group_count": 2,
+      "remaining_attachments": 0,
+      "unopened_readable_resources": 0,
+      "rules": {
+        "N01": 2,
+        "W01": 2
+      },
+      "diagnostics": {},
+      "mutation_policy": "READ_ONLY_PROPOSAL_AND_PHYSICAL_FALLBACK_NO_DELETIONS",
+      "sqlite_bytes_unchanged": true
+    },
+    {
+      "case": 11,
+      "root_identity": 1,
+      "media_type": "DOUJIN",
+      "recognition_mode": "FOLDER",
+      "index_snapshot_version": "b0eaf2d7fd16d447387a1eb5839f423afb8e70179e6c50e72828151141f0e7b0",
+      "override_revision": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "scan_health": {
+        "outcome": "SUCCESS",
+        "error_count": 0,
+        "last_success": "2026-01-01T00:00:00Z",
+        "last_attempt": null,
+        "latest_run": null,
+        "complete": true,
+        "freshness": "INDEX_ONLY_CURRENT_DISK_UNKNOWN"
+      },
+      "indexed_sources": 2,
+      "proposed_reading_units": 2,
+      "retained_physical_sources": 0,
+      "orphan_sources": 0,
+      "missing_source_ids": 0,
+      "duplicate_source_ids": 0,
+      "series": 0,
+      "works": 2,
+      "directory_roles": {
+        "Category": 1,
+        "Root": 1
+      },
+      "review_groups": 0,
+      "editions": 0,
+      "current_browse_nodes": 1,
+      "current_browse_readable_count": 0,
+      "current_details_compared": 2,
+      "changed_group_count": 2,
+      "remaining_attachments": 0,
+      "unopened_readable_resources": 0,
+      "rules": {
+        "N01": 2,
+        "W01": 2
+      },
+      "diagnostics": {},
+      "mutation_policy": "READ_ONLY_PROPOSAL_AND_PHYSICAL_FALLBACK_NO_DELETIONS",
+      "sqlite_bytes_unchanged": true
+    },
+    {
+      "case": 12,
+      "root_identity": 1,
+      "media_type": "ARTBOOK",
+      "recognition_mode": "FOLDER",
+      "index_snapshot_version": "bc93a7d72a340f2081c2c50354619e874629ad9cef4807d94dac954782edaa0c",
+      "override_revision": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "scan_health": {
+        "outcome": "SUCCESS",
+        "error_count": 0,
+        "last_success": "2026-01-01T00:00:00Z",
+        "last_attempt": null,
+        "latest_run": null,
+        "complete": true,
+        "freshness": "INDEX_ONLY_CURRENT_DISK_UNKNOWN"
+      },
+      "indexed_sources": 2,
+      "proposed_reading_units": 1,
+      "retained_physical_sources": 1,
+      "orphan_sources": 0,
+      "missing_source_ids": 0,
+      "duplicate_source_ids": 0,
+      "series": 0,
+      "works": 1,
+      "directory_roles": {
+        "Ambiguous": 2,
+        "Root": 1
+      },
+      "review_groups": 0,
+      "editions": 0,
+      "current_browse_nodes": 1,
+      "current_browse_readable_count": 0,
+      "current_details_compared": 2,
+      "changed_group_count": 1,
+      "remaining_attachments": 0,
+      "unopened_readable_resources": 0,
+      "rules": {
+        "N01": 1,
+        "W01": 1
+      },
+      "diagnostics": {
+        "IMAGE_ASSETS_ONLY": 1,
+        "INDEXED_IMAGE_BINARY_VALIDATION_UNKNOWN": 1,
+        "PRIOR_NOT_OBSERVED_NO_DELETE": 1
+      },
+      "mutation_policy": "READ_ONLY_PROPOSAL_AND_PHYSICAL_FALLBACK_NO_DELETIONS",
+      "sqlite_bytes_unchanged": true
+    },
+    {
+      "case": 20,
+      "root_identity": 1,
+      "media_type": "COMIC",
+      "recognition_mode": "FOLDER",
+      "index_snapshot_version": "155178f4209bc27454f498f0f7f68da4d8ef751af10a526023eba23598b93044",
+      "override_revision": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "scan_health": {
+        "outcome": "SUCCESS",
+        "error_count": 0,
+        "last_success": "2026-01-01T00:00:00Z",
+        "last_attempt": null,
+        "latest_run": null,
+        "complete": true,
+        "freshness": "INDEX_ONLY_CURRENT_DISK_UNKNOWN"
+      },
+      "indexed_sources": 2,
+      "proposed_reading_units": 2,
+      "retained_physical_sources": 0,
+      "orphan_sources": 0,
+      "missing_source_ids": 0,
+      "duplicate_source_ids": 0,
+      "series": 0,
+      "works": 2,
+      "directory_roles": {
+        "Category": 1,
+        "Root": 1
+      },
+      "review_groups": 0,
+      "editions": 1,
+      "current_browse_nodes": 1,
+      "current_browse_readable_count": 0,
+      "current_details_compared": 2,
+      "changed_group_count": 2,
+      "remaining_attachments": 0,
+      "unopened_readable_resources": 0,
+      "rules": {
+        "N01": 2,
+        "W01": 2
+      },
+      "diagnostics": {},
+      "mutation_policy": "READ_ONLY_PROPOSAL_AND_PHYSICAL_FALLBACK_NO_DELETIONS",
+      "sqlite_bytes_unchanged": true
+    },
+    {
+      "case": 22,
+      "root_identity": 1,
+      "media_type": "COMIC",
+      "recognition_mode": "FOLDER",
+      "index_snapshot_version": "75b68d7b8e3243d32a2addc6362ee35a2704449833c90802764a93e8a13e6e9a",
+      "override_revision": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "scan_health": {
+        "outcome": "SUCCESS",
+        "error_count": 0,
+        "last_success": "2026-01-01T00:00:00Z",
+        "last_attempt": null,
+        "latest_run": null,
+        "complete": true,
+        "freshness": "INDEX_ONLY_CURRENT_DISK_UNKNOWN"
+      },
+      "indexed_sources": 3,
+      "proposed_reading_units": 3,
+      "retained_physical_sources": 0,
+      "orphan_sources": 0,
+      "missing_source_ids": 0,
+      "duplicate_source_ids": 0,
+      "series": 1,
+      "works": 0,
+      "directory_roles": {
+        "Root": 1,
+        "Series": 1
+      },
+      "review_groups": 0,
+      "editions": 0,
+      "current_browse_nodes": 1,
+      "current_browse_readable_count": 0,
+      "current_details_compared": 2,
+      "changed_group_count": 0,
+      "remaining_attachments": 0,
+      "unopened_readable_resources": 0,
+      "rules": {
+        "N01": 3,
+        "S01": 1
+      },
+      "diagnostics": {},
+      "mutation_policy": "READ_ONLY_PROPOSAL_AND_PHYSICAL_FALLBACK_NO_DELETIONS",
+      "sqlite_bytes_unchanged": true
+    },
+    {
+      "case": 28,
+      "root_identity": 1,
+      "media_type": "COMIC",
+      "recognition_mode": "FOLDER",
+      "index_snapshot_version": "4d070f40789580b828fcf34267bc7c3dbdf41b6be6594cea84e875d8c48622c9",
+      "override_revision": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "scan_health": {
+        "outcome": "SUCCESS",
+        "error_count": 0,
+        "last_success": "2026-01-01T00:00:00Z",
+        "last_attempt": null,
+        "latest_run": null,
+        "complete": true,
+        "freshness": "INDEX_ONLY_CURRENT_DISK_UNKNOWN"
+      },
+      "indexed_sources": 2,
+      "proposed_reading_units": 0,
+      "retained_physical_sources": 2,
+      "orphan_sources": 0,
+      "missing_source_ids": 0,
+      "duplicate_source_ids": 0,
+      "series": 0,
+      "works": 0,
+      "directory_roles": {
+        "Ambiguous": 2,
+        "Root": 1
+      },
+      "review_groups": 0,
+      "editions": 0,
+      "current_browse_nodes": 1,
+      "current_browse_readable_count": 0,
+      "current_details_compared": 2,
+      "changed_group_count": 0,
+      "remaining_attachments": 0,
+      "unopened_readable_resources": 0,
+      "rules": {},
+      "diagnostics": {
+        "INDEXED_IMAGE_BINARY_VALIDATION_UNKNOWN": 2,
+        "INVALID_IMAGE_EVIDENCE": 2,
+        "PRIOR_NOT_OBSERVED_NO_DELETE": 2
+      },
+      "mutation_policy": "READ_ONLY_PROPOSAL_AND_PHYSICAL_FALLBACK_NO_DELETIONS",
+      "sqlite_bytes_unchanged": true
+    },
+    {
+      "case": 36,
+      "root_identity": 1,
+      "media_type": "EBOOK",
+      "recognition_mode": "FOLDER",
+      "index_snapshot_version": "fbd1134c340587e5e41990cfea2ce56e016d787395ed2fa97e9529663b431334",
+      "override_revision": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "scan_health": {
+        "outcome": "SUCCESS",
+        "error_count": 0,
+        "last_success": "2026-01-01T00:00:00Z",
+        "last_attempt": null,
+        "latest_run": null,
+        "complete": true,
+        "freshness": "INDEX_ONLY_CURRENT_DISK_UNKNOWN"
+      },
+      "indexed_sources": 2,
+      "proposed_reading_units": 2,
+      "retained_physical_sources": 0,
+      "orphan_sources": 0,
+      "missing_source_ids": 0,
+      "duplicate_source_ids": 0,
+      "series": 1,
+      "works": 0,
+      "directory_roles": {
+        "Root": 1,
+        "Series": 1
+      },
+      "review_groups": 0,
+      "editions": 0,
+      "current_browse_nodes": 1,
+      "current_browse_readable_count": 0,
+      "current_details_compared": 2,
+      "changed_group_count": 0,
+      "remaining_attachments": 0,
+      "unopened_readable_resources": 0,
+      "rules": {
+        "N01": 2,
+        "S01": 1
+      },
+      "diagnostics": {},
+      "mutation_policy": "READ_ONLY_PROPOSAL_AND_PHYSICAL_FALLBACK_NO_DELETIONS",
+      "sqlite_bytes_unchanged": true
+    },
+    {
+      "case": 42,
+      "root_identity": 1,
+      "media_type": "COMIC",
+      "recognition_mode": "FOLDER",
+      "index_snapshot_version": "49ef6a4f8561fd72088cdb4e97cc343f2a1cab58f204609b2a59f88de6ff0903",
+      "override_revision": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "scan_health": {
+        "outcome": "SUCCESS",
+        "error_count": 0,
+        "last_success": "2026-01-01T00:00:00Z",
+        "last_attempt": null,
+        "latest_run": null,
+        "complete": true,
+        "freshness": "INDEX_ONLY_CURRENT_DISK_UNKNOWN"
+      },
+      "indexed_sources": 3,
+      "proposed_reading_units": 3,
+      "retained_physical_sources": 0,
+      "orphan_sources": 0,
+      "missing_source_ids": 0,
+      "duplicate_source_ids": 0,
+      "series": 1,
+      "works": 0,
+      "directory_roles": {
+        "IntermediateContainer": 2,
+        "Root": 1,
+        "Series": 1
+      },
+      "review_groups": 0,
+      "editions": 1,
+      "current_browse_nodes": 1,
+      "current_browse_readable_count": 0,
+      "current_details_compared": 2,
+      "changed_group_count": 1,
+      "remaining_attachments": 0,
+      "unopened_readable_resources": 0,
+      "rules": {
+        "N01": 3,
+        "S01": 1
+      },
+      "diagnostics": {},
+      "mutation_policy": "READ_ONLY_PROPOSAL_AND_PHYSICAL_FALLBACK_NO_DELETIONS",
+      "sqlite_bytes_unchanged": true
+    },
+    {
+      "case": 45,
+      "root_identity": 1,
+      "media_type": "EBOOK",
+      "recognition_mode": "FOLDER",
+      "index_snapshot_version": "70c69ce061776ac26a41f8c5c15382e619c921495c54ee2634873881424f2214",
+      "override_revision": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "scan_health": {
+        "outcome": "SUCCESS",
+        "error_count": 0,
+        "last_success": "2026-01-01T00:00:00Z",
+        "last_attempt": null,
+        "latest_run": null,
+        "complete": true,
+        "freshness": "INDEX_ONLY_CURRENT_DISK_UNKNOWN"
+      },
+      "indexed_sources": 3,
+      "proposed_reading_units": 3,
+      "retained_physical_sources": 0,
+      "orphan_sources": 0,
+      "missing_source_ids": 0,
+      "duplicate_source_ids": 0,
+      "series": 0,
+      "works": 3,
+      "directory_roles": {
+        "Category": 1,
+        "Root": 1
+      },
+      "review_groups": 0,
+      "editions": 0,
+      "current_browse_nodes": 1,
+      "current_browse_readable_count": 0,
+      "current_details_compared": 2,
+      "changed_group_count": 3,
+      "remaining_attachments": 0,
+      "unopened_readable_resources": 0,
+      "rules": {
+        "N01": 3,
+        "W01": 3
+      },
+      "diagnostics": {},
+      "mutation_policy": "READ_ONLY_PROPOSAL_AND_PHYSICAL_FALLBACK_NO_DELETIONS",
+      "sqlite_bytes_unchanged": true
+    },
+    {
+      "case": 49,
+      "root_identity": 1,
+      "media_type": "COMIC",
+      "recognition_mode": "FOLDER",
+      "index_snapshot_version": "9e8e24016617fc37516f952e210275677c74ecb2d3441da469d48794e5c70545",
+      "override_revision": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "scan_health": {
+        "outcome": "SUCCESS",
+        "error_count": 0,
+        "last_success": "2026-01-01T00:00:00Z",
+        "last_attempt": null,
+        "latest_run": null,
+        "complete": true,
+        "freshness": "INDEX_ONLY_CURRENT_DISK_UNKNOWN"
+      },
+      "indexed_sources": 7,
+      "proposed_reading_units": 6,
+      "retained_physical_sources": 1,
+      "orphan_sources": 0,
+      "missing_source_ids": 0,
+      "duplicate_source_ids": 0,
+      "series": 1,
+      "works": 0,
+      "directory_roles": {
+        "Extras": 1,
+        "IntermediateContainer": 2,
+        "Root": 1,
+        "Series": 1
+      },
+      "review_groups": 1,
+      "editions": 0,
+      "current_browse_nodes": 1,
+      "current_browse_readable_count": 0,
+      "current_details_compared": 2,
+      "changed_group_count": 1,
+      "remaining_attachments": 0,
+      "unopened_readable_resources": 0,
+      "rules": {
+        "N01": 6,
+        "S01": 1,
+        "S02": 1
+      },
+      "diagnostics": {
+        "INDEXED_IMAGE_BINARY_VALIDATION_UNKNOWN": 1,
+        "INVALID_IMAGE_EVIDENCE": 1,
+        "PRIOR_NOT_OBSERVED_NO_DELETE": 1
+      },
+      "mutation_policy": "READ_ONLY_PROPOSAL_AND_PHYSICAL_FALLBACK_NO_DELETIONS",
+      "sqlite_bytes_unchanged": true
+    }
+  ],
+  "benchmarks": [
+    {
+      "sources": 1000,
+      "database_bytes": 593920,
+      "medians_ms": {
+        "adapter_ms": 6.4561,
+        "recognize_ms": 9.649700000000001,
+        "diff_ms": 1.1300999999999999,
+        "total_ms": 17.2228
+      },
+      "median_open_through_summary_ms": 17.771800000000002,
+      "median_summary_serialization_ms": 0.0070999999999999995,
+      "max_peak_working_set_bytes": 14020608,
+      "runs": [
+        {
+          "summary": {
+            "root_identity": 1,
+            "media_type": "COMIC",
+            "recognition_mode": "FOLDER",
+            "index_snapshot_version": "df943db4bc4ca9744cd2abc6b2514324f2176763310a34239658fa25633fb4b5",
+            "override_revision": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+            "scan_health": {
+              "outcome": "SUCCESS",
+              "error_count": 0,
+              "last_success": "2026-01-01T00:00:00Z",
+              "last_attempt": null,
+              "latest_run": null,
+              "complete": true,
+              "freshness": "INDEX_ONLY_CURRENT_DISK_UNKNOWN"
+            },
+            "indexed_sources": 1000,
+            "proposed_reading_units": 1000,
+            "retained_physical_sources": 0,
+            "orphan_sources": 0,
+            "missing_source_ids": 0,
+            "duplicate_source_ids": 0,
+            "series": 0,
+            "works": 1000,
+            "directory_roles": {
+              "Root": 1
+            },
+            "review_groups": 0,
+            "editions": 0,
+            "current_browse_nodes": 0,
+            "current_browse_readable_count": 1000,
+            "current_details_compared": 1,
+            "changed_group_count": 1000,
+            "remaining_attachments": 0,
+            "unopened_readable_resources": 0,
+            "rules": {
+              "N01": 1000,
+              "W01": 1000
+            },
+            "diagnostics": {},
+            "mutation_policy": "READ_ONLY_PROPOSAL_AND_PHYSICAL_FALLBACK_NO_DELETIONS"
+          },
+          "timings": {
+            "adapter_ms": 6.4561,
+            "recognize_ms": 9.649700000000001,
+            "diff_ms": 1.1167,
+            "total_ms": 17.2228
+          },
+          "summary_serialization_ms": 0.0070999999999999995,
+          "open_through_summary_ms": 17.871499999999997,
+          "peak_working_set_bytes": 13926400
+        },
+        {
+          "summary": {
+            "root_identity": 1,
+            "media_type": "COMIC",
+            "recognition_mode": "FOLDER",
+            "index_snapshot_version": "df943db4bc4ca9744cd2abc6b2514324f2176763310a34239658fa25633fb4b5",
+            "override_revision": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+            "scan_health": {
+              "outcome": "SUCCESS",
+              "error_count": 0,
+              "last_success": "2026-01-01T00:00:00Z",
+              "last_attempt": null,
+              "latest_run": null,
+              "complete": true,
+              "freshness": "INDEX_ONLY_CURRENT_DISK_UNKNOWN"
+            },
+            "indexed_sources": 1000,
+            "proposed_reading_units": 1000,
+            "retained_physical_sources": 0,
+            "orphan_sources": 0,
+            "missing_source_ids": 0,
+            "duplicate_source_ids": 0,
+            "series": 0,
+            "works": 1000,
+            "directory_roles": {
+              "Root": 1
+            },
+            "review_groups": 0,
+            "editions": 0,
+            "current_browse_nodes": 0,
+            "current_browse_readable_count": 1000,
+            "current_details_compared": 1,
+            "changed_group_count": 1000,
+            "remaining_attachments": 0,
+            "unopened_readable_resources": 0,
+            "rules": {
+              "N01": 1000,
+              "W01": 1000
+            },
+            "diagnostics": {},
+            "mutation_policy": "READ_ONLY_PROPOSAL_AND_PHYSICAL_FALLBACK_NO_DELETIONS"
+          },
+          "timings": {
+            "adapter_ms": 6.4741,
+            "recognize_ms": 9.764,
+            "diff_ms": 1.1300999999999999,
+            "total_ms": 17.368499999999997
+          },
+          "summary_serialization_ms": 0.0068000000000000005,
+          "open_through_summary_ms": 17.771800000000002,
+          "peak_working_set_bytes": 13930496
+        },
+        {
+          "summary": {
+            "root_identity": 1,
+            "media_type": "COMIC",
+            "recognition_mode": "FOLDER",
+            "index_snapshot_version": "df943db4bc4ca9744cd2abc6b2514324f2176763310a34239658fa25633fb4b5",
+            "override_revision": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+            "scan_health": {
+              "outcome": "SUCCESS",
+              "error_count": 0,
+              "last_success": "2026-01-01T00:00:00Z",
+              "last_attempt": null,
+              "latest_run": null,
+              "complete": true,
+              "freshness": "INDEX_ONLY_CURRENT_DISK_UNKNOWN"
+            },
+            "indexed_sources": 1000,
+            "proposed_reading_units": 1000,
+            "retained_physical_sources": 0,
+            "orphan_sources": 0,
+            "missing_source_ids": 0,
+            "duplicate_source_ids": 0,
+            "series": 0,
+            "works": 1000,
+            "directory_roles": {
+              "Root": 1
+            },
+            "review_groups": 0,
+            "editions": 0,
+            "current_browse_nodes": 0,
+            "current_browse_readable_count": 1000,
+            "current_details_compared": 1,
+            "changed_group_count": 1000,
+            "remaining_attachments": 0,
+            "unopened_readable_resources": 0,
+            "rules": {
+              "N01": 1000,
+              "W01": 1000
+            },
+            "diagnostics": {},
+            "mutation_policy": "READ_ONLY_PROPOSAL_AND_PHYSICAL_FALLBACK_NO_DELETIONS"
+          },
+          "timings": {
+            "adapter_ms": 6.2116999999999996,
+            "recognize_ms": 9.5116,
+            "diff_ms": 1.1565,
+            "total_ms": 16.8801
+          },
+          "summary_serialization_ms": 0.008,
+          "open_through_summary_ms": 17.2715,
+          "peak_working_set_bytes": 14020608
+        }
+      ]
+    },
+    {
+      "sources": 10000,
+      "database_bytes": 3575808,
+      "medians_ms": {
+        "adapter_ms": 51.1644,
+        "recognize_ms": 100.3886,
+        "diff_ms": 14.545499999999999,
+        "total_ms": 166.5361
+      },
+      "median_open_through_summary_ms": 166.8912,
+      "median_summary_serialization_ms": 0.0087,
+      "max_peak_working_set_bytes": 64978944,
+      "runs": [
+        {
+          "summary": {
+            "root_identity": 1,
+            "media_type": "COMIC",
+            "recognition_mode": "FOLDER",
+            "index_snapshot_version": "4dcef935c5f2b4286432301f2351be22cb2ced7b4a337d12dea8f0991cd17934",
+            "override_revision": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+            "scan_health": {
+              "outcome": "SUCCESS",
+              "error_count": 0,
+              "last_success": "2026-01-01T00:00:00Z",
+              "last_attempt": null,
+              "latest_run": null,
+              "complete": true,
+              "freshness": "INDEX_ONLY_CURRENT_DISK_UNKNOWN"
+            },
+            "indexed_sources": 10000,
+            "proposed_reading_units": 10000,
+            "retained_physical_sources": 0,
+            "orphan_sources": 0,
+            "missing_source_ids": 0,
+            "duplicate_source_ids": 0,
+            "series": 0,
+            "works": 10000,
+            "directory_roles": {
+              "Root": 1
+            },
+            "review_groups": 0,
+            "editions": 0,
+            "current_browse_nodes": 0,
+            "current_browse_readable_count": 10000,
+            "current_details_compared": 1,
+            "changed_group_count": 10000,
+            "remaining_attachments": 0,
+            "unopened_readable_resources": 0,
+            "rules": {
+              "N01": 10000,
+              "W01": 10000
+            },
+            "diagnostics": {},
+            "mutation_policy": "READ_ONLY_PROPOSAL_AND_PHYSICAL_FALLBACK_NO_DELETIONS"
+          },
+          "timings": {
+            "adapter_ms": 50.9711,
+            "recognize_ms": 98.4967,
+            "diff_ms": 14.545499999999999,
+            "total_ms": 164.01379999999997
+          },
+          "summary_serialization_ms": 0.0087,
+          "open_through_summary_ms": 164.4306,
+          "peak_working_set_bytes": 64946176
+        },
+        {
+          "summary": {
+            "root_identity": 1,
+            "media_type": "COMIC",
+            "recognition_mode": "FOLDER",
+            "index_snapshot_version": "4dcef935c5f2b4286432301f2351be22cb2ced7b4a337d12dea8f0991cd17934",
+            "override_revision": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+            "scan_health": {
+              "outcome": "SUCCESS",
+              "error_count": 0,
+              "last_success": "2026-01-01T00:00:00Z",
+              "last_attempt": null,
+              "latest_run": null,
+              "complete": true,
+              "freshness": "INDEX_ONLY_CURRENT_DISK_UNKNOWN"
+            },
+            "indexed_sources": 10000,
+            "proposed_reading_units": 10000,
+            "retained_physical_sources": 0,
+            "orphan_sources": 0,
+            "missing_source_ids": 0,
+            "duplicate_source_ids": 0,
+            "series": 0,
+            "works": 10000,
+            "directory_roles": {
+              "Root": 1
+            },
+            "review_groups": 0,
+            "editions": 0,
+            "current_browse_nodes": 0,
+            "current_browse_readable_count": 10000,
+            "current_details_compared": 1,
+            "changed_group_count": 10000,
+            "remaining_attachments": 0,
+            "unopened_readable_resources": 0,
+            "rules": {
+              "N01": 10000,
+              "W01": 10000
+            },
+            "diagnostics": {},
+            "mutation_policy": "READ_ONLY_PROPOSAL_AND_PHYSICAL_FALLBACK_NO_DELETIONS"
+          },
+          "timings": {
+            "adapter_ms": 51.1644,
+            "recognize_ms": 100.3886,
+            "diff_ms": 14.9824,
+            "total_ms": 166.5361
+          },
+          "summary_serialization_ms": 0.0086,
+          "open_through_summary_ms": 166.8912,
+          "peak_working_set_bytes": 64839680
+        },
+        {
+          "summary": {
+            "root_identity": 1,
+            "media_type": "COMIC",
+            "recognition_mode": "FOLDER",
+            "index_snapshot_version": "4dcef935c5f2b4286432301f2351be22cb2ced7b4a337d12dea8f0991cd17934",
+            "override_revision": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+            "scan_health": {
+              "outcome": "SUCCESS",
+              "error_count": 0,
+              "last_success": "2026-01-01T00:00:00Z",
+              "last_attempt": null,
+              "latest_run": null,
+              "complete": true,
+              "freshness": "INDEX_ONLY_CURRENT_DISK_UNKNOWN"
+            },
+            "indexed_sources": 10000,
+            "proposed_reading_units": 10000,
+            "retained_physical_sources": 0,
+            "orphan_sources": 0,
+            "missing_source_ids": 0,
+            "duplicate_source_ids": 0,
+            "series": 0,
+            "works": 10000,
+            "directory_roles": {
+              "Root": 1
+            },
+            "review_groups": 0,
+            "editions": 0,
+            "current_browse_nodes": 0,
+            "current_browse_readable_count": 10000,
+            "current_details_compared": 1,
+            "changed_group_count": 10000,
+            "remaining_attachments": 0,
+            "unopened_readable_resources": 0,
+            "rules": {
+              "N01": 10000,
+              "W01": 10000
+            },
+            "diagnostics": {},
+            "mutation_policy": "READ_ONLY_PROPOSAL_AND_PHYSICAL_FALLBACK_NO_DELETIONS"
+          },
+          "timings": {
+            "adapter_ms": 53.5755,
+            "recognize_ms": 109.11500000000001,
+            "diff_ms": 13.400799999999998,
+            "total_ms": 176.0924
+          },
+          "summary_serialization_ms": 0.0089,
+          "open_through_summary_ms": 176.4627,
+          "peak_working_set_bytes": 64978944
+        }
+      ]
+    },
+    {
+      "sources": 100000,
+      "database_bytes": 34099200,
+      "medians_ms": {
+        "adapter_ms": 572.9442,
+        "recognize_ms": 1078.9815,
+        "diff_ms": 158.91459999999998,
+        "total_ms": 1812.0688999999998
+      },
+      "median_open_through_summary_ms": 1812.4306,
+      "median_summary_serialization_ms": 0.0148,
+      "max_peak_working_set_bytes": 538906624,
+      "runs": [
+        {
+          "summary": {
+            "root_identity": 1,
+            "media_type": "COMIC",
+            "recognition_mode": "FOLDER",
+            "index_snapshot_version": "388630d3e97ea214ba01b6d52cc7d8c0b0207a95246fff2d25dbaf4d8d186933",
+            "override_revision": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+            "scan_health": {
+              "outcome": "SUCCESS",
+              "error_count": 0,
+              "last_success": "2026-01-01T00:00:00Z",
+              "last_attempt": null,
+              "latest_run": null,
+              "complete": true,
+              "freshness": "INDEX_ONLY_CURRENT_DISK_UNKNOWN"
+            },
+            "indexed_sources": 100000,
+            "proposed_reading_units": 100000,
+            "retained_physical_sources": 0,
+            "orphan_sources": 0,
+            "missing_source_ids": 0,
+            "duplicate_source_ids": 0,
+            "series": 0,
+            "works": 100000,
+            "directory_roles": {
+              "Root": 1
+            },
+            "review_groups": 0,
+            "editions": 0,
+            "current_browse_nodes": 0,
+            "current_browse_readable_count": 100000,
+            "current_details_compared": 1,
+            "changed_group_count": 100000,
+            "remaining_attachments": 0,
+            "unopened_readable_resources": 0,
+            "rules": {
+              "N01": 100000,
+              "W01": 100000
+            },
+            "diagnostics": {},
+            "mutation_policy": "READ_ONLY_PROPOSAL_AND_PHYSICAL_FALLBACK_NO_DELETIONS"
+          },
+          "timings": {
+            "adapter_ms": 569.0185,
+            "recognize_ms": 1078.9815,
+            "diff_ms": 158.91459999999998,
+            "total_ms": 1806.9153000000001
+          },
+          "summary_serialization_ms": 0.0148,
+          "open_through_summary_ms": 1807.3682,
+          "peak_working_set_bytes": 538902528
+        },
+        {
+          "summary": {
+            "root_identity": 1,
+            "media_type": "COMIC",
+            "recognition_mode": "FOLDER",
+            "index_snapshot_version": "388630d3e97ea214ba01b6d52cc7d8c0b0207a95246fff2d25dbaf4d8d186933",
+            "override_revision": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+            "scan_health": {
+              "outcome": "SUCCESS",
+              "error_count": 0,
+              "last_success": "2026-01-01T00:00:00Z",
+              "last_attempt": null,
+              "latest_run": null,
+              "complete": true,
+              "freshness": "INDEX_ONLY_CURRENT_DISK_UNKNOWN"
+            },
+            "indexed_sources": 100000,
+            "proposed_reading_units": 100000,
+            "retained_physical_sources": 0,
+            "orphan_sources": 0,
+            "missing_source_ids": 0,
+            "duplicate_source_ids": 0,
+            "series": 0,
+            "works": 100000,
+            "directory_roles": {
+              "Root": 1
+            },
+            "review_groups": 0,
+            "editions": 0,
+            "current_browse_nodes": 0,
+            "current_browse_readable_count": 100000,
+            "current_details_compared": 1,
+            "changed_group_count": 100000,
+            "remaining_attachments": 0,
+            "unopened_readable_resources": 0,
+            "rules": {
+              "N01": 100000,
+              "W01": 100000
+            },
+            "diagnostics": {},
+            "mutation_policy": "READ_ONLY_PROPOSAL_AND_PHYSICAL_FALLBACK_NO_DELETIONS"
+          },
+          "timings": {
+            "adapter_ms": 572.9442,
+            "recognize_ms": 1079.4366,
+            "diff_ms": 159.6874,
+            "total_ms": 1812.0688999999998
+          },
+          "summary_serialization_ms": 0.0152,
+          "open_through_summary_ms": 1812.4306,
+          "peak_working_set_bytes": 538906624
+        },
+        {
+          "summary": {
+            "root_identity": 1,
+            "media_type": "COMIC",
+            "recognition_mode": "FOLDER",
+            "index_snapshot_version": "388630d3e97ea214ba01b6d52cc7d8c0b0207a95246fff2d25dbaf4d8d186933",
+            "override_revision": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+            "scan_health": {
+              "outcome": "SUCCESS",
+              "error_count": 0,
+              "last_success": "2026-01-01T00:00:00Z",
+              "last_attempt": null,
+              "latest_run": null,
+              "complete": true,
+              "freshness": "INDEX_ONLY_CURRENT_DISK_UNKNOWN"
+            },
+            "indexed_sources": 100000,
+            "proposed_reading_units": 100000,
+            "retained_physical_sources": 0,
+            "orphan_sources": 0,
+            "missing_source_ids": 0,
+            "duplicate_source_ids": 0,
+            "series": 0,
+            "works": 100000,
+            "directory_roles": {
+              "Root": 1
+            },
+            "review_groups": 0,
+            "editions": 0,
+            "current_browse_nodes": 0,
+            "current_browse_readable_count": 100000,
+            "current_details_compared": 1,
+            "changed_group_count": 100000,
+            "remaining_attachments": 0,
+            "unopened_readable_resources": 0,
+            "rules": {
+              "N01": 100000,
+              "W01": 100000
+            },
+            "diagnostics": {},
+            "mutation_policy": "READ_ONLY_PROPOSAL_AND_PHYSICAL_FALLBACK_NO_DELETIONS"
+          },
+          "timings": {
+            "adapter_ms": 582.9615,
+            "recognize_ms": 1073.9065,
+            "diff_ms": 156.1553,
+            "total_ms": 1813.0237
+          },
+          "summary_serialization_ms": 0.0117,
+          "open_through_summary_ms": 1813.3725,
+          "peak_working_set_bytes": 538890240
+        }
+      ]
+    }
+  ],
+  "invalid_cli_exit": 2,
+  "scope": "Synthetic databases created from all 24 current production SQL migrations. No personal database or media scanned/read. Release standalone CLI; fresh process for each sample; adapter includes SQLite IO, mapping, digest and current-detail projections; diff includes review downgrades and full structural diff. Summary serialization reported separately. Peak includes entire process and returned snapshot/plan; database construction happens in another process. OS filesystem cache is uncontrolled. Full private plan JSON serialization is not in benchmark."
+}

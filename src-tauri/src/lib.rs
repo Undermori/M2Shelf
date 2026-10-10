@@ -8,15 +8,25 @@ mod commands;
 mod db;
 mod ebooks;
 mod incremental;
+mod kindle_books;
 mod logical_works;
 pub mod models;
 mod player;
 pub mod portable_update;
+mod poster_cache;
+mod poster_cache_db;
+#[cfg(test)]
+mod reader_extension_tests;
 #[cfg(test)]
 mod review_tests;
 mod scanner;
 mod single_instance;
+mod smart_mixed;
+mod text_books;
+mod text_reader_settings;
 mod title_extractor;
+mod tmdb;
+mod tmdb_credentials;
 pub mod update;
 mod window_state;
 mod works;
@@ -168,11 +178,24 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::tmdb_search,
+            commands::tmdb_detail,
+            commands::tmdb_bind,
+            commands::tmdb_clear,
+            commands::tmdb_status,
+            commands::tmdb_match_diagnostics,
+            commands::tmdb_open_page,
+            commands::tmdb_cancel,
+            commands::tmdb_retry_cover,
+            commands::tmdb_configure,
+            commands::get_book_catalogue,
+            commands::correct_book_organization,
             commands::get_app_bootstrap,
             commands::get_comic_detail,
             commands::open_comic_book,
             commands::open_comic_in_explorer,
             commands::read_book_document,
+            commands::read_epub_illustration,
             commands::read_pdf_range,
             commands::read_comic_page,
             commands::update_comic_progress,
@@ -186,6 +209,7 @@ pub fn run() {
             commands::remove_library_root,
             commands::update_library_root_name,
             commands::open_library_root_in_explorer,
+            commands::set_library_auto_bangumi,
             commands::get_all_resources,
             commands::list_hidden_nodes,
             commands::list_recently_watched,
@@ -229,7 +253,10 @@ pub fn run() {
             commands::set_container_cover,
             commands::clear_node_cover,
             commands::get_cover_data_url,
+            commands::get_book_cover_data_url,
             commands::get_settings,
+            commands::get_text_reader_settings,
+            commands::update_text_reader_settings,
             commands::set_library_scan_warnings_ignored,
             commands::update_settings,
             commands::get_collection_sort_preferences,
@@ -244,6 +271,9 @@ pub fn run() {
             commands::open_external_url,
             commands::open_bangumi_subject,
             commands::get_cache_stats,
+            commands::get_poster_cache_status,
+            commands::get_poster_cache_failures,
+            commands::retry_poster_cache,
             commands::clear_cover_cache,
             commands::rebuild_index,
             commands::check_for_update,

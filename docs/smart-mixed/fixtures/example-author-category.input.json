@@ -1,0 +1,24 @@
+{
+  "root_id": "fixture-root",
+  "media_kind": "COMIC",
+  "complete": true,
+  "entries": [
+    {
+      "path": "藤本树",
+      "kind": "DIRECTORY",
+      "hint": "AUTHOR"
+    },
+    {
+      "path": "藤本树/再见绘梨.pdf",
+      "kind": "FILE",
+      "format": "PDF",
+      "verified": true
+    },
+    {
+      "path": "藤本树/蓦然回首.pdf",
+      "kind": "FILE",
+      "format": "PDF",
+      "verified": true
+    }
+  ]
+}

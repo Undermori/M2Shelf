@@ -37,7 +37,7 @@ const MAX_MATCH_ALIASES: usize = 32;
 pub const SUBJECT_TYPE_ANIME: i64 = 2;
 pub const SUBJECT_TYPE_LIVE_ACTION: i64 = 6;
 const SUPPORTED_SUBJECT_TYPES: [i64; 2] = [SUBJECT_TYPE_ANIME, SUBJECT_TYPE_LIVE_ACTION];
-static HTTP_CLIENT: OnceLock<Client> = OnceLock::new();
+static HTTP_CLIENT: OnceLock<std::sync::Mutex<Option<Client>>> = OnceLock::new();
 
 #[derive(Debug)]
 enum ProviderRequestError {
@@ -121,23 +121,36 @@ struct ApiImages {
     grid: Option<String>,
 }
 
-fn client() -> AppResult<Client> {
-    if let Some(client) = HTTP_CLIENT.get() {
-        return Ok(client.clone());
-    }
-    let built = Client::builder()
+fn build_client() -> AppResult<Client> {
+    Client::builder()
         .connect_timeout(CONNECT_TIMEOUT)
         .timeout(REQUEST_TIMEOUT)
         .http1_only()
         .redirect(reqwest::redirect::Policy::none())
         .user_agent(USER_AGENT)
         .build()
-        .map_err(|error| format!("无法初始化 Bangumi 网络客户端：{}", error_chain(&error)))?;
-    // A cloned reqwest Client shares its connection pool. Reusing it across the bounded search,
-    // detail and cover requests avoids a fresh TLS connection for every candidate. A benign race
-    // can build two Clients during first use; subsequent requests use the one stored here.
-    let _ = HTTP_CLIENT.set(built.clone());
-    Ok(HTTP_CLIENT.get().cloned().unwrap_or(built))
+        .map_err(|error| format!("无法初始化 Bangumi 网络客户端：{}", error_chain(&error)))
+}
+fn client() -> AppResult<Client> {
+    let mut slot = HTTP_CLIENT
+        .get_or_init(|| std::sync::Mutex::new(None))
+        .lock()
+        .map_err(|_| "BANGUMI_CLIENT_LOCK")?;
+    if slot.is_none() {
+        *slot = Some(build_client()?);
+    }
+    slot.as_ref()
+        .cloned()
+        .ok_or_else(|| "BANGUMI_CLIENT_FAILED".into())
+}
+// A fresh reqwest builder resamples the current system proxy. Existing in-flight clones survive.
+fn refreshed_client() -> AppResult<Client> {
+    let fresh = build_client()?;
+    *HTTP_CLIENT
+        .get_or_init(|| std::sync::Mutex::new(None))
+        .lock()
+        .map_err(|_| "BANGUMI_CLIENT_LOCK")? = Some(fresh.clone());
+    Ok(fresh)
 }
 
 #[cfg(test)]
@@ -390,12 +403,17 @@ fn push_match_alias(aliases: &mut Vec<String>, value: String) {
 fn detail_with_retry(client: &Client, subject_id: i64) -> AppResult<ApiSubjectDetail> {
     let endpoint = format!("{SUBJECT_DETAIL_URL}/{subject_id}");
     let mut failures = Vec::new();
+    let mut active = client.clone();
     for attempt in 0..2 {
-        match detail_endpoint(client, &endpoint) {
+        match detail_endpoint(&active, &endpoint) {
             Ok(detail) => return Ok(detail),
             Err(error) => {
                 failures.push(provider_endpoint_failure_label(&endpoint, &error));
                 if attempt == 0 && error.is_retryable() {
+                    if matches!(&error, ProviderRequestError::Transport(e) if e.is_connect() || e.is_timeout())
+                    {
+                        active = refreshed_client()?;
+                    }
                     thread::sleep(error.retry_delay());
                     continue;
                 }
@@ -506,12 +524,17 @@ fn search_with_retry(
     kind: crate::models::LibraryMediaKind,
 ) -> AppResult<SearchResponse> {
     let mut failures = Vec::new();
+    let mut active = client.clone();
     for attempt in 0..2 {
-        match search_endpoint(client, SEARCH_URL, keyword, limit, kind) {
+        match search_endpoint(&active, SEARCH_URL, keyword, limit, kind) {
             Ok(response) => return Ok(response),
             Err(error) => {
                 failures.push(provider_endpoint_failure_label(SEARCH_URL, &error));
                 if attempt == 0 && error.is_retryable() {
+                    if matches!(&error, ProviderRequestError::Transport(e) if e.is_connect() || e.is_timeout())
+                    {
+                        active = refreshed_client()?;
+                    }
                     thread::sleep(error.retry_delay());
                     continue;
                 }
@@ -566,7 +589,10 @@ fn new_library_searches_use_only_their_subject_type() {
 
 fn search_request_body_for_kind(keyword: &str, kind: crate::models::LibraryMediaKind) -> Value {
     let types: &[i64] = match kind {
-        crate::models::LibraryMediaKind::Comic | crate::models::LibraryMediaKind::Ebook => &[1],
+        crate::models::LibraryMediaKind::Comic
+        | crate::models::LibraryMediaKind::Ebook
+        | crate::models::LibraryMediaKind::Doujin
+        | crate::models::LibraryMediaKind::Artbook => &[1],
         crate::models::LibraryMediaKind::Animation => &[2],
         crate::models::LibraryMediaKind::LiveAction => &[6],
         crate::models::LibraryMediaKind::Video => &SUPPORTED_SUBJECT_TYPES,
@@ -847,8 +873,9 @@ fn download_response_with_retry(
     image_url: &str,
 ) -> AppResult<reqwest::blocking::Response> {
     let mut failures = Vec::new();
+    let mut active = client.clone();
     for attempt in 0..2 {
-        match client
+        match active
             .get(image_url)
             .send()
             .and_then(|response| response.error_for_status())
@@ -857,6 +884,9 @@ fn download_response_with_retry(
             Err(error) => {
                 failures.push(endpoint_failure_label(image_url, &error));
                 if attempt == 0 && should_retry(&error) {
+                    if error.is_connect() || error.is_timeout() {
+                        active = refreshed_client()?;
+                    }
                     thread::sleep(reqwest_retry_delay(&error));
                     continue;
                 }

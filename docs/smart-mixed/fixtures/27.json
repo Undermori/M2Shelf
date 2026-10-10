@@ -1,0 +1,67 @@
+{
+  "id": 27,
+  "title": "Image book with unrelated attachment",
+  "input": {
+    "root_id": "fixture-root",
+    "media_kind": "COMIC",
+    "complete": true,
+    "entries": [
+      {
+        "path": "图片书",
+        "kind": "DIRECTORY",
+        "hint": null
+      },
+      {
+        "path": "图片书/001.png",
+        "kind": "FILE",
+        "format": "PNG",
+        "verified": true
+      },
+      {
+        "path": "图片书/002.png",
+        "kind": "FILE",
+        "format": "PNG",
+        "verified": true
+      },
+      {
+        "path": "图片书/readme.nfo",
+        "kind": "FILE",
+        "format": null,
+        "verified": false
+      }
+    ],
+    "page_orders": [
+      {
+        "directory": "图片书",
+        "pages": [
+          "图片书/001.png",
+          "图片书/002.png"
+        ],
+        "basis": "EXISTING_INDEXED_NATURAL_ORDER"
+      }
+    ]
+  },
+  "expected": {
+    "units": [
+      {
+        "path": "图片书",
+        "kind": "DIRECT_PAGES",
+        "pages": [
+          "图片书/001.png",
+          "图片书/002.png"
+        ]
+      }
+    ],
+    "root_paths": [
+      "图片书"
+    ],
+    "series": [],
+    "directory_roles": {},
+    "diagnostics": [
+      "UNSUPPORTED_OR_UNVERIFIED_FILE"
+    ],
+    "editions": 0,
+    "retained_prior": 0
+  },
+  "negative_assertion": "readme remains in physical tree, not a page/book"
+}

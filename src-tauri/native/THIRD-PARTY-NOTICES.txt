@@ -1,0 +1,16 @@
+M2ShelfMobi standalone parser worker
+
+libmobi (Bartek Fabiszewski and contributors)
+https://github.com/bfabiszewski/libmobi
+Revision: 906274205c11944b628da1c553b255acb1af7c55
+License: GNU Lesser General Public License version 3 or later.
+
+M2ShelfMobi.exe is a separate replaceable program. M2Shelf communicates through
+bounded standard streams; libmobi is not linked into M2Shelf.exe. Encryption
+support is disabled. This distribution includes the complete worker source,
+build scripts and the GPL/LGPL license texts in M2ShelfMobi-source.zip. You may
+modify and rebuild this worker and replace M2ShelfMobi.exe beside M2Shelf.exe.
+There is no worker signature restriction preventing that replacement.
+
+The included miniz source retains its permissive copyright/license notice.
+See vendor/libmobi/src/miniz.c and miniz.h inside the source archive.

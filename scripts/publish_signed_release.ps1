@@ -305,6 +305,7 @@ $filePaths = [ordered]@{
   manifest = (Join-Path $candidatePath "latest.json")
   provenance = (Join-Path $candidatePath "candidate-provenance.json")
 }
+$expectedInputFiles = [ordered]@{}
 foreach ($entry in $filePaths.GetEnumerator()) {
   if (-not (Test-Path -LiteralPath $entry.Value -PathType Leaf)) {
     throw "Signed release input is incomplete: $([System.IO.Path]::GetFileName($entry.Value)) was not found."
@@ -312,6 +313,11 @@ foreach ($entry in $filePaths.GetEnumerator()) {
   $item = Get-Item -LiteralPath $entry.Value -Force
   if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
     throw "Signed release inputs must not be symbolic links or other reparse points."
+  }
+  $expectedInputFiles[$entry.Key] = [pscustomobject]@{
+    Path = $entry.Value
+    Size = [long]$item.Length
+    Sha256 = (Get-FileHash -LiteralPath $entry.Value -Algorithm SHA256).Hash.ToLowerInvariant()
   }
 }
 
@@ -429,13 +435,8 @@ foreach ($contract in $artifactContracts) {
 
 $uploadPaths = @(
   $filePaths.portable,
-  $filePaths.portableHash,
-  $filePaths.portableSignature,
   $filePaths.nsis,
-  $filePaths.nsisHash,
-  $filePaths.nsisSignature,
-  $filePaths.manifest,
-  $filePaths.provenance
+  $filePaths.manifest
 )
 $expectedUploadFiles = [ordered]@{}
 $expectedUploadNames = [System.Collections.Generic.List[string]]::new()
@@ -478,7 +479,8 @@ if ($LASTEXITCODE -ne 0) {
 
 $lockedFiles = [System.Collections.Generic.List[System.IO.FileStream]]::new()
 try {
-  $pathsToLock = @($uploadPaths)
+  # All eight inputs remain verified and locked; only the three client assets are public.
+  $pathsToLock = @($filePaths.Values)
   $pathsToLock += $resolvedReleaseNotes
   foreach ($path in $pathsToLock) {
     $lockedFiles.Add([System.IO.File]::Open(
@@ -488,7 +490,7 @@ try {
       [System.IO.FileShare]::Read
     ))
   }
-  foreach ($entry in $expectedUploadFiles.GetEnumerator()) {
+  foreach ($entry in $expectedInputFiles.GetEnumerator()) {
     $lockedHash = (Get-FileHash -LiteralPath $entry.Value.Path -Algorithm SHA256).Hash.ToLowerInvariant()
     if ($lockedHash -cne $entry.Value.Sha256 -or
         [long](Get-Item -LiteralPath $entry.Value.Path).Length -ne $entry.Value.Size) {

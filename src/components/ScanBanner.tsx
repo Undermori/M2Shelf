@@ -28,8 +28,8 @@ export function ScanBanner({ progress, mediaKind='VIDEO', onCancel }: ScanBanner
         <div><dt>{t("scan.unmatched")}</dt><dd>{number(progress.autoMatchUnmatched + (progress.autoMatchPending ?? 0))}</dd></div>
       </> : <>
         <div><dt>{t("scan.directories")}</dt><dd>{number(progress.foldersScanned)}</dd></div>
-        {!['COMIC','EBOOK'].includes(mediaKind)&&<div><dt>{t("scan.videos")}</dt><dd>{number(progress.videosFound)}</dd></div>}
-        {(['COMIC','EBOOK'].includes(mediaKind)||!!progress.comicBooksFound)&&<div><dt>{t(mediaKind==='EBOOK'?'ebook.name':'comic.name')}</dt><dd>{number(progress.comicBooksFound??0)}</dd></div>}
+        {!['COMIC','EBOOK','DOUJIN','ARTBOOK'].includes(mediaKind)&&<div><dt>{t("scan.videos")}</dt><dd>{number(progress.videosFound)}</dd></div>}
+        {(['COMIC','EBOOK','DOUJIN','ARTBOOK'].includes(mediaKind)||!!progress.comicBooksFound)&&<div><dt>{t(mediaKind==='EBOOK'?'ebook.name':'comic.name')}</dt><dd>{number(progress.comicBooksFound??0)}</dd></div>}
         {progress.errors > 0 && <div className="scan-errors"><dt>{t("scan.errors")}</dt><dd>{number(progress.errors)}</dd></div>}
       </>}</dl>
       <button className="button scan-stop" disabled={cancelling} onClick={onCancel} type="button"><Icon name="stop" />{cancelling ? t("scan.stoppingShort") : t("scan.stop")}</button>

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
+import { observePosterViewport } from "../lib/posterViewportObserver";
 
 interface PosterViewportLifecycleOptions {
   activationMarginPx: number;
@@ -21,8 +22,10 @@ const retainedPosters = new Map<symbol, RetainedPoster>();
 
 function trimRetainedPosters() {
   while (retainedPosters.size > MAX_RETAINED_POSTERS) {
-    const oldestOffscreen = [...retainedPosters.entries()]
-      .find(([, poster]) => !poster.nearViewport);
+    let oldestOffscreen: [symbol, RetainedPoster] | undefined;
+    for (const entry of retainedPosters) {
+      if (!entry[1].nearViewport) { oldestOffscreen = entry; break; }
+    }
     if (!oldestOffscreen) return;
     const [token, poster] = oldestOffscreen;
     retainedPosters.delete(token);
@@ -52,10 +55,10 @@ function forgetRetainedPoster(token: symbol) {
 }
 
 /**
- * Preheat poster data before it reaches the visible scrollport, then retain the rendered
- * canvas across fast scroll reversals. Loaded posters are not released merely because they
- * leave the viewport or because a timer elapsed. A shared 64-entry LRU is the memory boundary:
- * once full, it evicts only the oldest poster outside the retention zone.
+ * Preheat thumbnail data before it reaches the visible scrollport. A shared 64-entry target
+ * retains request subscriptions across fast scroll reversals, evicting only the oldest one
+ * outside the retention zone. Releasing a subscription does not replace the displayed image:
+ * useCoverDataUrl retains it until the exact, bounded source-URL cache actually evicts it.
  */
 export function usePosterViewportLifecycle<T extends Element>(
   targetRef: RefObject<T | null>,
@@ -76,7 +79,8 @@ export function usePosterViewportLifecycle<T extends Element>(
     const target = targetRef.current;
     let disposed = false;
     const retentionToken = retentionTokenRef.current;
-    setLifecycle({ coverRequested: false, coverVisible: false });
+    setLifecycle(current => !current.coverRequested && !current.coverVisible
+      ? current : { coverRequested: false, coverVisible: false });
 
     const releaseRetainedPoster = () => {
       if (!disposed) setLifecycle({ coverRequested: false, coverVisible: false });
@@ -122,29 +126,20 @@ export function usePosterViewportLifecycle<T extends Element>(
     // the explicit root makes rootMargin a real preheat distance instead of having it clipped
     // away by the overflow ancestor.
     const scrollRoot = target.closest(".content-scroll");
-    const activationObserver = new IntersectionObserver((entries) => {
+    const stopActivation = observePosterViewport(target, scrollRoot, activationMarginPx, nearViewport => {
       if (disposed) return;
-      if (entries.some((entry) => entry.target === target && entry.isIntersecting)) activate();
-    }, {
-      root: scrollRoot,
-      rootMargin: `${activationMarginPx}px 0px`,
+      if (nearViewport) activate();
     });
-    const retentionObserver = new IntersectionObserver((entries) => {
+    const stopRetention = observePosterViewport(target, scrollRoot, retentionMarginPx, nearViewport => {
       if (disposed) return;
-      const nearViewport = entries.some((entry) => entry.target === target && entry.isIntersecting);
       if (retentionEnabled) updateRetainedPosterProximity(retentionToken, nearViewport);
-    }, {
-      root: scrollRoot,
-      rootMargin: `${retentionMarginPx}px 0px`,
     });
-    activationObserver.observe(target);
-    retentionObserver.observe(target);
 
     return () => {
       disposed = true;
       forgetRetainedPoster(retentionToken);
-      activationObserver.disconnect();
-      retentionObserver.disconnect();
+      stopActivation();
+      stopRetention();
     };
   }, [activationMarginPx, identity, retentionEnabled, retentionMarginPx, targetRef]);
 

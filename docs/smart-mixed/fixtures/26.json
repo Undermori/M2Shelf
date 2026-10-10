@@ -1,0 +1,59 @@
+{
+  "id": 26,
+  "title": "Wallpaper keyvisual poster assets",
+  "input": {
+    "root_id": "fixture-root",
+    "media_kind": "COMIC",
+    "complete": true,
+    "entries": [
+      {
+        "path": "展示图",
+        "kind": "DIRECTORY",
+        "hint": null
+      },
+      {
+        "path": "展示图/wallpaper.jpg",
+        "kind": "FILE",
+        "format": "JPEG",
+        "verified": true
+      },
+      {
+        "path": "展示图/keyvisual.png",
+        "kind": "FILE",
+        "format": "PNG",
+        "verified": true
+      },
+      {
+        "path": "展示图/poster.jpg",
+        "kind": "FILE",
+        "format": "JPEG",
+        "verified": true
+      }
+    ],
+    "page_orders": [
+      {
+        "directory": "展示图",
+        "pages": [
+          "展示图/wallpaper.jpg",
+          "展示图/keyvisual.png"
+        ],
+        "basis": "EXISTING_INDEXED_NATURAL_ORDER"
+      }
+    ]
+  },
+  "expected": {
+    "units": [],
+    "root_paths": [
+      "展示图"
+    ],
+    "series": [],
+    "directory_roles": {},
+    "diagnostics": [
+      "IMAGE_ASSETS_ONLY",
+      "COVER_EXCLUDED"
+    ],
+    "editions": 0,
+    "retained_prior": 0
+  },
+  "negative_assertion": "Three pictures do not imply a book"
+}

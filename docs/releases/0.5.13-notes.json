@@ -1,0 +1,6 @@
+{
+  "zh-CN": "新增漫画与电子书阅读，支持图片目录、CBZ、PDF、EPUB、TXT、MOBI、AZW3。\n新增智能书籍整理、标签和收藏夹管理。\n优化资源库界面、封面缓存与滚动显示。\n新增 TMDb 电影匹配，改进片名识别并使用原始语言海报。\n修复书籍合并展示、附件阅读和导航问题。\n旧五文件 Portable 请完整解压新版升级。",
+  "en-US": "Added comic and ebook reading: image folders, CBZ, PDF, EPUB, TXT, MOBI and AZW3.\nAdded smart book organization and improved tags/favorites.\nRefined library UI, persistent covers and scrolling.\nAdded TMDb movie matching, better title parsing and original-language posters.\nFixed book grouping, attachment reading and navigation.\nUpgrade older five-file Portable builds by extracting the complete new ZIP.",
+  "ja-JP": "漫画・電子書籍リーダーを追加：画像フォルダー、CBZ、PDF、EPUB、TXT、MOBI、AZW3。\nスマート書籍整理、タグ・お気に入り管理を追加。\nライブラリ UI、表紙キャッシュ、スクロールを改善。\nTMDb 映画照合、タイトル解析、原語ポスターに対応。\n書籍のまとめ表示、付属文書の読書、ナビゲーションを修正。\n旧五ファイル Portable は新 ZIP 全体を解凍して更新してください。",
+  "ko-KR": "만화·전자책 리더 추가: 이미지 폴더, CBZ, PDF, EPUB, TXT, MOBI, AZW3.\n스마트 책 정리 및 태그·즐겨찾기 관리 추가.\n라이브러리 UI, 표지 캐시, 스크롤 개선.\nTMDb 영화 매칭, 제목 분석, 원어 포스터 지원.\n책 통합 표시, 첨부 문서 읽기, 탐색 문제 수정.\n이전 5개 파일 Portable은 새 ZIP 전체로 업데이트하세요."
+}

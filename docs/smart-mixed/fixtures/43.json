@@ -1,0 +1,114 @@
+{
+  "id": 43,
+  "title": "Unnumbered direct pages and volume2",
+  "input": {
+    "root_id": "fixture-root",
+    "media_kind": "COMIC",
+    "complete": true,
+    "entries": [
+      {
+        "path": "某作品",
+        "kind": "DIRECTORY",
+        "hint": null
+      },
+      {
+        "path": "某作品/001.png",
+        "kind": "FILE",
+        "format": "PNG",
+        "verified": true
+      },
+      {
+        "path": "某作品/002.png",
+        "kind": "FILE",
+        "format": "PNG",
+        "verified": true
+      },
+      {
+        "path": "某作品/第02卷",
+        "kind": "DIRECTORY",
+        "hint": null
+      },
+      {
+        "path": "某作品/第02卷/001.png",
+        "kind": "FILE",
+        "format": "PNG",
+        "verified": true
+      },
+      {
+        "path": "某作品/第02卷/002.png",
+        "kind": "FILE",
+        "format": "PNG",
+        "verified": true
+      }
+    ],
+    "page_orders": [
+      {
+        "directory": "某作品",
+        "pages": [
+          "某作品/001.png",
+          "某作品/002.png"
+        ],
+        "basis": "EXISTING_INDEXED_NATURAL_ORDER"
+      },
+      {
+        "directory": "某作品/第02卷",
+        "pages": [
+          "某作品/第02卷/001.png",
+          "某作品/第02卷/002.png"
+        ],
+        "basis": "EXISTING_INDEXED_NATURAL_ORDER"
+      }
+    ]
+  },
+  "expected": {
+    "units": [
+      {
+        "path": "某作品",
+        "kind": "DIRECT_PAGES",
+        "pages": [
+          "某作品/001.png",
+          "某作品/002.png"
+        ]
+      },
+      {
+        "path": "某作品/第02卷",
+        "kind": "DIRECT_PAGES",
+        "pages": [
+          "某作品/第02卷/001.png",
+          "某作品/第02卷/002.png"
+        ]
+      }
+    ],
+    "root_paths": [
+      "某作品"
+    ],
+    "series": [
+      {
+        "directory": "某作品",
+        "title": "某作品",
+        "members": [
+          {
+            "path": "某作品",
+            "volume": null,
+            "chapter": null,
+            "role": "MAIN",
+            "decision": "APPLY"
+          },
+          {
+            "path": "某作品/第02卷",
+            "volume": 2,
+            "chapter": null,
+            "role": "VOLUME",
+            "decision": "APPLY"
+          }
+        ],
+        "decision": "REVIEW"
+      }
+    ],
+    "directory_roles": {},
+    "diagnostics": [],
+    "editions": 0,
+    "retained_prior": 0
+  },
+  "negative_assertion": "Unnumbered direct pages never fabricated as volume1"
+}
