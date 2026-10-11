@@ -60,13 +60,7 @@ npm run tauri dev
 
 ## 文档
 
-- [运行机制说明](./docs/RUNTIME_GUIDE_zh-CN.md)
-- [开发规则](./AGENTS.md)
-- [产品规格](./docs/PRODUCT_SPEC.md)
-- [当前实现](./docs/PROJECT_CONTEXT.md)
-- [长期决策](./docs/DECISIONS.md)
-- [快速项目说明](./PROJECT_DOCUMENTATION.md)
-- [Windows 本地开发](./docs/WINDOWS_DEVELOPMENT.md)
+- [Windows 开发与构建](./docs/WINDOWS_DEVELOPMENT.md)
 - [更新与发布流程](./docs/UPDATE_RELEASE_PROCESS.md)
 
 ## 作者

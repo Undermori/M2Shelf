@@ -58,12 +58,7 @@ npm run tauri dev
 
 `npm run check` と [AGENTS.md](./AGENTS.md) の Rust 検証を実行します。Windows ビルドは `scripts/build_windows_release.ps1`。
 
-- [動作ガイド（中国語）](./docs/RUNTIME_GUIDE_zh-CN.md)
-- [製品仕様](./docs/PRODUCT_SPEC.md)
-- [現在の実装](./docs/PROJECT_CONTEXT.md)
-- [設計上の決定](./docs/DECISIONS.md)
-- [プロジェクト概要](./PROJECT_DOCUMENTATION.md)
-- [Windows 開発](./docs/WINDOWS_DEVELOPMENT.md)
+- [Windows 開発・ビルド](./docs/WINDOWS_DEVELOPMENT.md)
 - [リリース手順](./docs/UPDATE_RELEASE_PROCESS.md)
 
 ## 作者

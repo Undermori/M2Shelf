@@ -58,12 +58,7 @@ npm run tauri dev
 
 Run `npm run check` and the Rust gates in [AGENTS.md](./AGENTS.md). Build Windows releases with `scripts/build_windows_release.ps1`.
 
-- [Runtime guide (Chinese)](./docs/RUNTIME_GUIDE_zh-CN.md)
-- [Product specification](./docs/PRODUCT_SPEC.md)
-- [Current implementation](./docs/PROJECT_CONTEXT.md)
-- [Decisions](./docs/DECISIONS.md)
-- [Project overview](./PROJECT_DOCUMENTATION.md)
-- [Windows development](./docs/WINDOWS_DEVELOPMENT.md)
+- [Windows development and builds](./docs/WINDOWS_DEVELOPMENT.md)
 - [Release process](./docs/UPDATE_RELEASE_PROCESS.md)
 
 ## Author
