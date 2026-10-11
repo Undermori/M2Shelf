@@ -143,7 +143,11 @@ function Resolve-KeyPath {
   $matches = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
 
   if (-not [string]::IsNullOrWhiteSpace($UsbRoot)) {
-    $normalizedUsbRoot = if ($UsbRoot -match '^[A-Za-z]:$') { "$UsbRoot\" } else { $UsbRoot }
+    $normalizedUsbRoot = if ($UsbRoot.Trim() -match '^([A-Za-z])(?::[\\/]?)?$') {
+      $Matches[1].ToUpperInvariant() + ':\'
+    } else {
+      $UsbRoot
+    }
     $root = [System.IO.Path]::GetFullPath($normalizedUsbRoot)
     $keyCandidate = Join-Path $root $relativeKeyPath
     if (Test-Path -LiteralPath $keyCandidate -PathType Leaf) {
@@ -166,7 +170,7 @@ function Resolve-KeyPath {
   }
 
   if ($matches.Count -ne 1) {
-    throw "Expected exactly one mounted M2Shelf production key, but found $($matches.Count). Insert one key USB or pass -UsbRoot explicitly."
+    throw "Expected exactly one mounted M2Shelf production key, but found $($matches.Count). For a USB reported as Fixed by Windows, pass its drive explicitly (for example -UsbRoot H:)."
   }
   $resolvedKey = @($matches)[0]
   $repoPrefix = $repoRoot.TrimEnd(

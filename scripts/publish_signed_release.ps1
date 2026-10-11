@@ -6,7 +6,8 @@ param(
   [Parameter(Mandatory = $true)][string]$VerifierPath,
   [Parameter(Mandatory = $true)][ValidatePattern('^[0-9A-Fa-f]{64}$')][string]$TrustedVerifierSha256,
   [Parameter(Mandatory = $true)][string]$ReleaseNotesPath,
-  [switch]$Publish
+  [switch]$Publish,
+  [ValidateRange(0, 9223372036854775807)][long]$ResumeDraftId = 0
 )
 
 $ErrorActionPreference = "Stop"
@@ -44,7 +45,11 @@ function Read-JsonFile {
     throw "$Label has an invalid size."
   }
   try {
-    return Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json -Depth 16
+    $jsonOptions = @{ Depth = 16 }
+    if ((Get-Command ConvertFrom-Json).Parameters.ContainsKey("DateKind")) {
+      $jsonOptions.DateKind = "String"
+    }
+    return Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json @jsonOptions
   } catch {
     throw "$Label is not valid JSON."
   }
@@ -200,13 +205,19 @@ function Assert-RemoteTagMatches {
 }
 
 function Get-RemoteRelease {
-  param([Parameter(Mandatory = $true)][string]$Tag)
+  param(
+    [Parameter(Mandatory = $true)][string]$Tag,
+    [ValidateRange(0, 9223372036854775807)][long]$ReleaseId = 0
+  )
 
-  return Invoke-GhJson -Arguments @(
-    "api",
-    "--method", "GET",
+  $endpoint = if ($ReleaseId -gt 0) {
+    "repos/$repository/releases/$ReleaseId"
+  } else {
     "repos/$repository/releases/tags/$Tag"
-  ) -Label "read the draft release"
+  }
+  return Invoke-GhJson -Arguments @(
+    "api", "--method", "GET", $endpoint
+  ) -Label "read the release"
 }
 
 if (-not (Get-Command git -CommandType Application -ErrorAction SilentlyContinue)) {
@@ -500,37 +511,57 @@ try {
 
   Assert-RemoteTagMatches -Tag $tag -ExpectedTagObjectSha $tagObjectSha
 
-  $releaseProbe = @(& gh api --method GET "repos/$repository/releases/tags/$tag" --include 2>&1)
-  $releaseProbeExitCode = $LASTEXITCODE
-  if ($releaseProbeExitCode -eq 0) {
-    throw "A GitHub release already exists for $tag; immutable releases are never modified."
-  }
-  $releaseProbeText = ($releaseProbe | ForEach-Object { [string]$_ }) -join "`n"
-  if ($releaseProbeText -notmatch '(?im)(?:^HTTP/\S+\s+404\b|\(HTTP 404\))') {
-    throw "GitHub did not conclusively report that the release tag is unused."
+  $draftId = $ResumeDraftId
+  if ($draftId -eq 0) {
+    $releaseProbe = @(& gh api --method GET "repos/$repository/releases/tags/$tag" --include 2>&1)
+    $releaseProbeExitCode = $LASTEXITCODE
+    if ($releaseProbeExitCode -eq 0) {
+      throw "A GitHub release already exists for $tag; immutable releases are never modified."
+    }
+    $releaseProbeText = ($releaseProbe | ForEach-Object { [string]$_ }) -join "`n"
+    if ($releaseProbeText -notmatch '(?im)(?:^HTTP/\S+\s+404\b|\(HTTP 404\))') {
+      throw "GitHub did not conclusively report that the release tag is unused."
+    }
+
+    $createArguments = @(
+      "release", "create", $tag,
+      "--repo", $repository,
+      "--draft",
+      "--verify-tag",
+      "--title", "M²Shelf $version"
+    )
+    $createArguments += @("--notes-file", $resolvedReleaseNotes)
+    $createOutput = @(& gh @createArguments 2>&1)
+    if ($LASTEXITCODE -ne 0) {
+      throw "GitHub CLI failed to create the draft release."
+    }
+
+    $uploadOutput = @(& gh release upload $tag @uploadPaths --repo $repository 2>&1)
+    if ($LASTEXITCODE -ne 0) {
+      throw "GitHub CLI failed to upload the complete signed release asset set; the release remains a draft."
+    }
+
+    # Draft releases may not resolve through the public tag endpoint.
+    $releases = @(Invoke-GhJson -Arguments @(
+      "api", "--method", "GET", "repos/$repository/releases?per_page=100"
+    ) -Label "locate the newly created draft release")
+    $matchingDrafts = @($releases | Where-Object { [string]$_.tag_name -ceq $tag -and $_.draft -eq $true })
+    if ($matchingDrafts.Count -ne 1 -or $matchingDrafts[0].id -isnot [long] -or $matchingDrafts[0].id -le 0) {
+      throw "Could not identify exactly one newly created draft release."
+    }
+    $draftId = [long]$matchingDrafts[0].id
   }
 
-  $createArguments = @(
-    "release", "create", $tag,
-    "--repo", $repository,
-    "--draft",
-    "--verify-tag",
-    "--title", "M²Shelf $version"
-  )
-  $createArguments += @("--notes-file", $resolvedReleaseNotes)
-  $createOutput = @(& gh @createArguments 2>&1)
-  if ($LASTEXITCODE -ne 0) {
-    throw "GitHub CLI failed to create the draft release."
-  }
-
-  $uploadOutput = @(& gh release upload $tag @uploadPaths --repo $repository 2>&1)
-  if ($LASTEXITCODE -ne 0) {
-    throw "GitHub CLI failed to upload the complete signed release asset set; the release remains a draft."
-  }
-
-  $draft = Get-RemoteRelease -Tag $tag
-  if ($draft.draft -isnot [bool] -or -not $draft.draft -or [string]$draft.tag_name -cne $tag) {
+  $draft = Get-RemoteRelease -Tag $tag -ReleaseId $draftId
+  if ($draft.id -isnot [long] -or $draft.id -ne $draftId -or
+      $draft.draft -isnot [bool] -or -not $draft.draft -or
+      $draft.prerelease -isnot [bool] -or $draft.prerelease -or
+      [string]$draft.tag_name -cne $tag) {
     throw "The newly created GitHub release is not the expected draft."
+  }
+  $expectedNotes = [System.IO.File]::ReadAllText($resolvedReleaseNotes, [System.Text.Encoding]::UTF8)
+  if (([string]$draft.body).Replace("`r`n", "`n").TrimEnd() -cne $expectedNotes.Replace("`r`n", "`n").TrimEnd()) {
+    throw "Draft release notes do not match the verified local release notes."
   }
   $remoteAssets = @($draft.assets)
   if ($remoteAssets.Count -ne $expectedUploadFiles.Count) {
@@ -557,7 +588,7 @@ try {
   if ($LASTEXITCODE -ne 0) {
     throw "GitHub CLI could not publish the verified draft release."
   }
-  $publishedRelease = Get-RemoteRelease -Tag $tag
+  $publishedRelease = Get-RemoteRelease -Tag $tag -ReleaseId $draftId
   if ($publishedRelease.draft -isnot [bool] -or $publishedRelease.draft -or
       [string]$publishedRelease.tag_name -cne $tag) {
     throw "GitHub did not confirm the release as published."

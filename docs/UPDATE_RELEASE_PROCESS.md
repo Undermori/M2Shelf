@@ -91,7 +91,7 @@ pwsh ./scripts/sign_update_from_usb.ps1 `
   -NotesPath $localizedNotesJson
 ```
 
-默认模式只在已就绪的可移动盘中查找唯一的 `M2Shelf-Production-Key/encrypted-private-key.m2key`。若 Windows 把某个 USB 设备报告为固定磁盘，可显式传入 `-UsbRoot`；脚本不会打印密钥路径。候选目录和 release-notes 文件只有在当前版本恰好找到一个匹配项时才会自动采用，否则必须显式指定，避免误用旧候选。
+默认模式只在已就绪的可移动盘中查找唯一的 `M2Shelf-Production-Key/encrypted-private-key.m2key`。若 Windows 把 USB 设备报告为固定磁盘，必须显式传入其盘符，如 `-UsbRoot H:`；裸盘符 `H`、`H:` 和 `H:\` 均接受。脚本不会打印密钥路径，也不会扩大默认查找范围。候选目录和 release-notes 文件只有在当前版本恰好找到一个匹配项时才会自动采用，否则必须显式指定，避免误用旧候选。
 
 PowerShell 只传递文件路径和公开元数据，不读取密码或私钥。`M2ShelfPortableKeyTool sign-release` 在控制台无回显地读取密码，在同一 Rust 进程内解密 seed、核对 `src-tauri/update-public-key.txt`、调用客户端共享的 Ed25519 签名消息实现，并立即用当前公钥验签。签名格式、URL 和 `latest.json` schema 与既有客户端完全相同。
 
@@ -130,6 +130,8 @@ pwsh ./scripts/publish_signed_release.ps1 `
 ```
 
 发布脚本会先核对独立保存的 verifier SHA-256、app ID、版本和嵌入公钥，并调用其 `verify` 命令对两个资产执行真实 Ed25519 验签；然后锁定本地输入，拒绝已有 Release，创建 draft，上传并要求每个远端资产同时精确匹配名称、大小和 GitHub 报告的 SHA-256 digest，重新确认 tag，最后才公开。公开集合恰好包含：安装包 EXE、Portable ZIP 和 `latest.json`。八项本地输入全部验签、锁定并复查，sidecar 与 provenance 保留作本地核验记录，不公开为下载附件。任一检查失败即停止；若已经建立 draft，它保持为 draft，必须先查明原因，不能绕过脚本直接公开。
+
+PowerShell 7.5 及以后读取本地 JSON 时显式保留日期字符串，避免 ISO 时间戳被转换为 DateTime 后误拒绝。草稿通过确切 Release ID 读取，不依赖可能返回 404 的公开 tag 端点。若上传完成后发生中断，先核对草稿 ID，再使用同一发布命令加 `-ResumeDraftId <id>` 恢复：全部本地签名、干净源码、固定标签和文件锁检查重跑，只有匹配当前 tag 的非预发布草稿、相同说明及完整三个资产的精确大小和摘要均通过才公开。恢复不会重传或替换资产，已公开 Release 始终拒绝。
 
 ## 6. 发布后验证
 
