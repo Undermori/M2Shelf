@@ -1,5 +1,12 @@
 # M²Shelf 当前项目上下文
 
+## 0.5.15 正式发布准备（2026-10-11）
+
+当前源码为 0.5.15 / schema 27；功能沿用下方 0.5.14 开发实现。v0.5.14 已固定到提交 adf79dd8cc56c4cce10eb46ae78b79e830b50ba7，但 Actions 38133148455 在 Rust 1.88 Clippy 常量检查和 Windows TEMP 短路径测试断言处失败，未生成正式候选或 Release，标签保留，不移动或复用。0.5.15 将构建生成的默认服务值声明为只读 static，保持配置行为；Shell 测试核对规范路径与同一文件，兼容 8.3 TEMP 别名，不改变实际 Explorer 调用。CI 每条质量命令现在单独检查退出码，测试失败不能被后续成功命令覆盖。
+
+0.5.15 正在重新验证与准备签名候选，尚未公开。默认 TMDb Actions Secret 已经项目所有者授权配置；生产更新私钥仅由所有者在 USB 签名窗口使用。
+
+
 ## 当前工作树：0.5.14 / schema 27 本地候选
 
 2026-10-11 当前实现新增共享 `tools/media-parser`、`media_scraper.rs`、`scraper_metadata.rs`、migration 27、TMDb DEFAULT/PERSONAL 原生服务、Movie/TV 命名空间及共享 ReaderShell/普通菜单。稳定旧状态和八文件 Portable 契约保留。0.5.13 公共版本保持不可变；当前 0.5.14 正在准备 GitHub 同步与正式 USB 签名发布，尚未声称公开完成。

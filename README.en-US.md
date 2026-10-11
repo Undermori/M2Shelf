@@ -29,10 +29,10 @@ MOBI/AZW3 supports unencrypted MOBI6/KF8. DRM, ordinary ZIP, RAR and 7Z are not 
 
 ## Download
 
-**M²Shelf 0.5.14 · Windows x64**
+**M²Shelf 0.5.15 · Windows x64**
 
-- [Installer](https://github.com/Undermori/M2Shelf/releases/download/v0.5.14/M2Shelf-Setup-0.5.14-x64.exe)
-- [Portable ZIP](https://github.com/Undermori/M2Shelf/releases/download/v0.5.14/M2Shelf-Portable-0.5.14-x64.zip)
+- [Installer](https://github.com/Undermori/M2Shelf/releases/download/v0.5.15/M2Shelf-Setup-0.5.15-x64.exe)
+- [Portable ZIP](https://github.com/Undermori/M2Shelf/releases/download/v0.5.15/M2Shelf-Portable-0.5.15-x64.zip)
 - [Latest release](https://github.com/Undermori/M2Shelf/releases/latest) · [All releases](https://github.com/Undermori/M2Shelf/releases)
 
 Extract the complete Portable ZIP before running `M2Shelf.exe`. The database, settings and default cache use Windows application data. Replace the complete payload when upgrading an older five-file Portable build.

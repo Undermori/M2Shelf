@@ -55,16 +55,23 @@ jobs:
         shell: pwsh
         run: |
           npm run typecheck
+          if ($LASTEXITCODE -ne 0) { throw "Frontend typecheck failed." }
           npm run build
+          if ($LASTEXITCODE -ne 0) { throw "Frontend build failed." }
           npm test
+          if ($LASTEXITCODE -ne 0) { throw "Frontend tests failed." }
           npm run validate
+          if ($LASTEXITCODE -ne 0) { throw "Repository validation failed." }
 
       - name: Run Rust quality gates
         shell: pwsh
         run: |
           cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+          if ($LASTEXITCODE -ne 0) { throw "Rust formatting failed." }
           cargo test --manifest-path src-tauri/Cargo.toml --locked
+          if ($LASTEXITCODE -ne 0) { throw "Rust tests failed." }
           cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --locked -- -D warnings
+          if ($LASTEXITCODE -ne 0) { throw "Rust clippy failed." }
 
       - name: Verify release tag and candidate commit
         id: release

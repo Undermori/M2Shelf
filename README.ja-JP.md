@@ -29,10 +29,10 @@ MOBI/AZW3 は暗号化されていない MOBI6/KF8 に対応。DRM、通常の Z
 
 ## ダウンロード
 
-**M²Shelf 0.5.14 · Windows x64**
+**M²Shelf 0.5.15 · Windows x64**
 
-- [インストーラー](https://github.com/Undermori/M2Shelf/releases/download/v0.5.14/M2Shelf-Setup-0.5.14-x64.exe)
-- [Portable ZIP](https://github.com/Undermori/M2Shelf/releases/download/v0.5.14/M2Shelf-Portable-0.5.14-x64.zip)
+- [インストーラー](https://github.com/Undermori/M2Shelf/releases/download/v0.5.15/M2Shelf-Setup-0.5.15-x64.exe)
+- [Portable ZIP](https://github.com/Undermori/M2Shelf/releases/download/v0.5.15/M2Shelf-Portable-0.5.15-x64.zip)
 - [最新 Release](https://github.com/Undermori/M2Shelf/releases/latest) · [全バージョン](https://github.com/Undermori/M2Shelf/releases)
 
 Portable は全体を解凍して `M2Shelf.exe` を起動してください。データベース・設定・既定キャッシュは Windows のアプリデータに保存されます。旧五ファイル構成からの更新も ZIP 全体を解凍してください。

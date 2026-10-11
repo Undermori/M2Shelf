@@ -26,7 +26,7 @@ pub fn build() {
         panic!("Release requires a validated default TMDb build input");
     }
     let generated = format!(
-        "pub const DEFAULT_TOKEN: &str = {:?};\n",
+        "pub static DEFAULT_TOKEN: &str = {:?};\n",
         if valid { value } else { "" }
     );
     fs::write(

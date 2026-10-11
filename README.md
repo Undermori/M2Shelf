@@ -29,10 +29,10 @@ MOBI/AZW3 支持未加密的 MOBI6/KF8，不支持 DRM；普通 ZIP、RAR、7Z �
 
 ## 下载
 
-**M²Shelf 0.5.14 · Windows x64**
+**M²Shelf 0.5.15 · Windows x64**
 
-- [安装包](https://github.com/Undermori/M2Shelf/releases/download/v0.5.14/M2Shelf-Setup-0.5.14-x64.exe)
-- [Portable 压缩包](https://github.com/Undermori/M2Shelf/releases/download/v0.5.14/M2Shelf-Portable-0.5.14-x64.zip)
+- [安装包](https://github.com/Undermori/M2Shelf/releases/download/v0.5.15/M2Shelf-Setup-0.5.15-x64.exe)
+- [Portable 压缩包](https://github.com/Undermori/M2Shelf/releases/download/v0.5.15/M2Shelf-Portable-0.5.15-x64.zip)
 - [最新 Release](https://github.com/Undermori/M2Shelf/releases/latest) · [全部版本](https://github.com/Undermori/M2Shelf/releases)
 
 Portable 请完整解压后运行 `M2Shelf.exe`，不要直接在压缩包内运行。数据库、设置和默认缓存保存在 Windows 应用数据目录。旧五文件 Portable 请完整解压新版升级。

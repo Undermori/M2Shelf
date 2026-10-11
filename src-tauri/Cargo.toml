@@ -1,6 +1,6 @@
 [package]
 name = "m2shelf"
-version = "0.5.14"
+version = "0.5.15"
 description = "A read-only visual browser for local media collections"
 authors = ["森下Undermori"]
 edition = "2021"

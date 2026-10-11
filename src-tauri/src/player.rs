@@ -597,7 +597,10 @@ mod tests {
 
         let item = OwnedItemIdList::from_path(&file).unwrap();
         let canonical = std::fs::canonicalize(&file).unwrap();
-        assert_eq!(shell_path(&canonical), file);
+        let shell_canonical = shell_path(&canonical);
+        assert_eq!(shell_canonical.file_name(), file.file_name());
+        // Windows may expand an 8.3 TEMP directory while canonicalizing it.
+        assert_eq!(std::fs::canonicalize(&shell_canonical).unwrap(), canonical);
         // This is the path form sent by the checked comic/PDF source reader.
         let canonical_item = OwnedItemIdList::from_path(&canonical).unwrap();
         assert!(!canonical_item.0.is_null());
