@@ -10,7 +10,7 @@ M²Shelf는 Windows용 로컬 미디어 관리 앱입니다. 애니메이션, �
 
 - 여러 라이브러리의 재귀·증분 스캔. 폴더 또는 개별 파일 인식, 책의 스마트 혼합 인식과 시리즈·독립 책·분류 정리.
 - 포스터·목록 보기, 라이브러리 통합 탐색, 미디어 종류·태그 필터와 정렬. 로컬 이름, 파일명, Bangumi 다국어 제목 검색.
-- 종류별 Bangumi 자동·수동 연결. 실사 영화는 TMDb를 지원하며 이중 언어 제목, 개봉 연도, 일반적인 배포 파일명을 분석하고 원어 포스터를 우선 사용. 연결·표시 이름·표지 수동 수정.
+- 종류별 Bangumi 자동·수동 연결. 실사 영화·드라마는 TMDb 기본 서비스 또는 개인 토큰을 지원하며 이중 언어 제목, 연도, 시즌 정보, 일반적인 배포 파일명을 분석하고 원어 포스터를 우선 사용. 연결·표시 이름·표지 수동 수정.
 - 사용자 태그, 이름 있는 즐겨찾기, 일괄 편집, 항목 숨기기·복원.
 - 외부 플레이어 실행, 첨부 파일 탐색, Windows 탐색기에서 파일 위치 표시.
 - 만화·텍스트 리더, 읽기 진행률, 책갈피, 최근 연 항목.
@@ -29,15 +29,15 @@ MOBI/AZW3는 암호화되지 않은 MOBI6/KF8을 지원합니다. DRM, 일반 ZI
 
 ## 다운로드
 
-**M²Shelf 0.5.13 · Windows x64**
+**M²Shelf 0.5.14 · Windows x64**
 
-- [설치 프로그램](https://github.com/Undermori/M2Shelf/releases/download/v0.5.13/M2Shelf-Setup-0.5.13-x64.exe)
-- [Portable ZIP](https://github.com/Undermori/M2Shelf/releases/download/v0.5.13/M2Shelf-Portable-0.5.13-x64.zip)
+- [설치 프로그램](https://github.com/Undermori/M2Shelf/releases/download/v0.5.14/M2Shelf-Setup-0.5.14-x64.exe)
+- [Portable ZIP](https://github.com/Undermori/M2Shelf/releases/download/v0.5.14/M2Shelf-Portable-0.5.14-x64.zip)
 - [최신 Release](https://github.com/Undermori/M2Shelf/releases/latest) · [모든 버전](https://github.com/Undermori/M2Shelf/releases)
 
 Portable은 전체 압축을 푼 다음 `M2Shelf.exe`를 실행하세요. 데이터베이스·설정·기본 캐시는 Windows 앱 데이터에 저장됩니다. 이전 5개 파일 Portable도 새 ZIP 전체로 업데이트하세요.
 
-0.5.13은 직접 다운로드하여 업데이트하세요. 이번 버전은 앱 내 업데이트를 제공하지 않습니다.
+설정에서 업데이트를 확인하거나 설치 프로그램 또는 Portable ZIP을 직접 다운로드하세요.
 
 Microsoft Edge WebView2 Runtime이 필요합니다. SmartScreen 경고가 표시될 수 있습니다.
 

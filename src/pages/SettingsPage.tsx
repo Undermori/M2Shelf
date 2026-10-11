@@ -1,5 +1,6 @@
+import {TmdbCredentialSettings} from '../components/TmdbCredentialSettings';
 import {TmdbDiagnostics} from "../components/TmdbDiagnostics";
-import tmdbLogo from "../assets/tmdb-logo.svg";
+import {PlayerSettings} from '../components/PlayerSettings';
 import {Select} from '../components/Select';
 import { useEffect, useRef, useState } from "react";
 import type { AppBootstrap, AppLanguage, AppSettings, AppTheme, CacheStats, LibraryRoot, UpdateDownloadStatus } from "../types/media";
@@ -8,7 +9,7 @@ import { LibraryScanHealth } from "../components/LibraryScanHealth";
 import { EmptyState } from "../components/EmptyState";
 import { Icon } from "../components/Icon";
 import { LoadingState } from "../components/LoadingState";
-import { api, chooseCoverCacheDirectory, choosePlayerExecutable, desktopAvailable } from "../lib/api";
+import { api, chooseCoverCacheDirectory, desktopAvailable } from "../lib/api";
 import { compactPath, errorMessage, formatBytes, formatDate } from "../lib/format";
 import { useI18n } from "../lib/i18n";
 import {defaultComicReaderSettings,type ComicReaderSettings} from '../types/comic';
@@ -39,7 +40,6 @@ export function SettingsPage({ aboutRequest=0, onRootPolicy, roots, bootstrap, o
   const [cache, setCache] = useState<CacheStats | null>(null);
   const [posterEpoch, setPosterEpoch] = useState(0);
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "fading">("idle");
-  const [testing, setTesting] = useState(false);
   const [extensionDraft, setExtensionDraft] = useState("");
   const reader=settings?.comicReader??defaultComicReaderSettings;
   const latestSettings = useRef<AppSettings | null>(null);
@@ -101,20 +101,6 @@ export function SettingsPage({ aboutRequest=0, onRootPolicy, roots, bootstrap, o
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const choosePlayer = async () => {
-    try {
-      const path = await choosePlayerExecutable();
-      if (path) changeSettings((current) => ({ ...current, mpvPath: path }));
-    }
-    catch (error) { onError(errorMessage(error)); }
-  };
-  const testMpv = async () => {
-    if (!settings?.mpvPath) return;
-    setTesting(true);
-    try { const result = await api.testMpv(settings.mpvPath); result.ok ? onSuccess(result.version ? t("settings.playerAvailable", { version: result.version }) : t("settings.playerReady")) : onError(t("settings.playerUnavailable")); }
-    catch (error) { onError(errorMessage(error)); }
-    finally { setTesting(false); }
-  };
   const addExtension = () => {
     const value = extensionDraft.trim().toLowerCase().replace(/^\.?/, ".");
     const current = latestSettings.current;
@@ -172,7 +158,7 @@ export function SettingsPage({ aboutRequest=0, onRootPolicy, roots, bootstrap, o
         <section className="settings-section">
           <div className="settings-section-heading"><span className="settings-symbol navy"><Icon name="play" /></span><div><h2>{t("settings.playerTitle")}</h2></div></div>
           <div className="settings-section-body">
-          <div className="setting-form-row"><label><span>{t("settings.playerPath")}</span><div className="path-input"><input disabled={!settings} onChange={(event) => changeSettings((current) => ({ ...current, mpvPath: event.target.value || null }))} placeholder={t("settings.playerPlaceholder")} value={settings?.mpvPath ?? ""} /><button disabled={!desktopAvailable} onClick={() => void choosePlayer()} type="button">{t("common.chooseEllipsis")}</button></div></label><button className="button secondary" disabled={!settings?.mpvPath || testing} onClick={() => void testMpv()} type="button">{testing ? t("settings.testing") : t("settings.testPlayer")}</button></div>
+          <PlayerSettings/>
           </div>
         </section>
 
@@ -180,7 +166,7 @@ export function SettingsPage({ aboutRequest=0, onRootPolicy, roots, bootstrap, o
           <div className="settings-section-heading"><span className="settings-symbol gold"><Icon name="settings" /></span><div><h2>{t("settings.browseScanTitle")}</h2></div></div>
           <div className="settings-section-body">
           <div className="settings-preference-list"><label className="field-label"><span>{t("settings.defaultView")}</span><Select disabled={!settings} onChange={(event) => changeSettings((current) => ({ ...current, defaultViewMode: event.target.value as "GRID" | "LIST" }))} value={settings?.defaultViewMode ?? "GRID"}><option value="GRID">{t("settings.posterGrid")}</option><option value="LIST">{t("settings.compactList")}</option></Select></label><label className="switch-field settings-switch-row"><span><strong>{t("settings.enableBangumi")}</strong><small>{t("settings.bangumiNetwork")}</small></span><input aria-label={t("settings.enableBangumi")} checked={settings?.bangumiSearchEnabled ?? false} disabled={!settings} onChange={(event) => changeSettings((current) => ({ ...current, bangumiSearchEnabled: event.target.checked }))} type="checkbox" /><i /></label>
-          <div className="tmdb-credits settings-metadata"><img src={tmdbLogo} alt="TMDB"/><div><p>{t('tmdb.notice')}</p><p>{t('tmdb.license')}</p><div className="settings-metadata-actions"><button className="button secondary" disabled={!desktopAvailable} onClick={()=>void openAuthorLink('https://www.themoviedb.org')} type="button">TMDB <Icon name="external"/></button><button className="button secondary" disabled={!desktopAvailable} onClick={()=>void api.tmdbConfigure(t('tmdb.token'),t('tmdb.credentialsHelp')).catch(()=>onError(t('tmdb.error')))} type="button">{t('tmdb.configure')}</button></div></div></div>
+          <TmdbCredentialSettings/>
           <TmdbDiagnostics/>
           <label className="switch-field settings-switch-row"><span><strong>{t("settings.autoScanOnStartup")}</strong><small>{t("settings.autoScanOnStartupDescription")}</small></span><input aria-label={t("settings.autoScanOnStartup")} checked={settings?.autoScanOnStartup ?? true} disabled={!settings} onChange={(event) => changeSettings((current) => ({ ...current, autoScanOnStartup: event.target.checked }))} type="checkbox" /><i /></label>
           <label className="switch-field settings-switch-row"><span><strong>{t("settings.allResourcesFlattened")}</strong><small>{t("settings.allResourcesFlattenedDescription")}</small></span><input aria-label={t("settings.allResourcesFlattened")} checked={settings?.allResourcesFlattened ?? false} disabled={!settings} onChange={(event) => changeSettings((current) => ({ ...current, allResourcesFlattened: event.target.checked }))} type="checkbox" /><i /></label>

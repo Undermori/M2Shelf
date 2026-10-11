@@ -216,6 +216,28 @@ fn api_subject_to_model(subject: ApiSubject) -> BangumiSubject {
     }
 }
 
+pub(crate) fn explicit_subject(
+    id: i64,
+    kind: crate::models::LibraryMediaKind,
+) -> AppResult<BangumiSubject> {
+    if id <= 0 {
+        return Err("BANGUMI_INVALID_ID".into());
+    }
+    let subject = detail_with_retry(&client()?, id)?;
+    if subject.id != id || !kind.accepts_subject(subject.subject_type) {
+        return Err("BANGUMI_TYPE_CONFLICT".into());
+    }
+    Ok(api_subject_to_model(ApiSubject {
+        id: subject.id,
+        subject_type: subject.subject_type,
+        name: subject.name,
+        name_cn: subject.name_cn,
+        date: subject.date,
+        summary: subject.summary,
+        images: subject.images,
+        infobox: subject.infobox,
+    }))
+}
 pub fn enrich_subject(subject: &BangumiSubject) -> AppResult<BangumiSubject> {
     if subject.subject_id <= 0 || !matches!(subject.subject_type, 1 | 2 | 6) {
         return Err("只能读取有效的 Bangumi 动画或真人影视条目。".into());

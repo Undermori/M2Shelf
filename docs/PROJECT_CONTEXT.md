@@ -1,5 +1,20 @@
 # M²Shelf 当前项目上下文
 
+## 当前工作树：0.5.14 / schema 27 本地候选
+
+2026-10-11 当前实现新增共享 `tools/media-parser`、`media_scraper.rs`、`scraper_metadata.rs`、migration 27、TMDb DEFAULT/PERSONAL 原生服务、Movie/TV 命名空间及共享 ReaderShell/普通菜单。稳定旧状态和八文件 Portable 契约保留。0.5.13 公共版本保持不可变；当前 0.5.14 正在准备 GitHub 同步与正式 USB 签名发布，尚未声称公开完成。
+
+用户追加要求取消 mpv 自动检测：只有 CUSTOM/SYSTEM，默认 SYSTEM；旧 AUTO/BUNDLED 解码为 SYSTEM 并保留路径，旧无模式有路径仍为 CUSTOM。检测路径枚举已移除。SettingsPage 使用独立 PlayerSettings 展示，只有主动测试才启动版本探测；输出双管道各限 8192 字节，5 秒超时，版本只取已知前缀，外部配置错误就近提示并可查看原始日志。不内置 mpv，不改变八文件 Portable 载荷或实际播放参数。
+
+构建默认 TMDb 输入用 `scripts/build_windows_release.ps1 -TmdbTokenFile <private-file>`；Actions 仅从仓库 Secret `M2SHELF_TMDB_DEFAULT_READ_ACCESS_TOKEN` 写入 runner 临时输入，构建后清除，生产更新私钥不进入 Actions。值只进入 Rust OUT_DIR/EXE，不进入 React、日志或文本载荷。没有输入的普通开发构建仍支持个人配置；发行候选要求有效的构建输入，联网成功需独立验收。凭证源存在独立 settings KV，防止旧 AppSettings 快照覆盖；切换推进 generation 并取消过期 mutation/cache。
+
+Bangumi/TMDb 有界诊断仍保存在独立 settings KV；共享手动弹窗已移除“识别依据”和其 UI 专用 IPC structured/lastMatch 字段，预填仍复用相同结构化证据提供原始/提取/候选名称，搜索与绑定不变。TMDbCredentialSettings 在浏览与扫描集中管理来源、就近状态、凭证动作及可展开的官方服务署名，About 无 TMDb 模块。空结果、低可信度和多候选仍分开，404 显式 TMDb ID 回退标题而不熔断。
+
+新增 metadata 表仅应用拥有，源修订不变时复用；目录未重新枚举时不在详情打开阶段回填。组织层按 Book ID 读取内嵌元数据，查询有索引；兼容旧 Shadow fixture 没有此表时使用原索引。完整记录和最终本地制品摘要见根目录两份升级报告。
+
+下节为 0.5.13 已发布状态，不能把它当成当前源码版本。
+
+
 ## 0.5.13 版本与发布（2026-10-10）
 
 0.5.13 已按用户最新授权作为手动下载版本公开：Release 仅含 NSIS 和 Portable，没有 latest.json，不支持本次应用内更新。发布包来自 tag v0.5.13 的提交 4ece4b8ae90283dcf07c7b37e1620fc0aa98b70c，GitHub Actions 38053717905 全部门禁通过；两个包的官方来源证明、上传摘要和公开下载 SHA-256 已复核。本次没有 Ed25519 更新签名，不应把来源证明或摘要描述为生产更新签名。生产公钥、密钥及客户端校验逻辑保持。下段描述的三个资产是正常签名流程，0.5.13 的例外见 D64。
@@ -420,7 +435,7 @@ Vite 的开发 watcher 排除原生源码、Portable 打包、临时测试、工
 - `src-tauri/icons/`：用户确认母版及派生的 PNG、ICO、SVG；
 - `scripts/validate_project.py`：跨源码和构建契约验证；
 - `scripts/run_validate.mjs`：先探测可用 Python 解释器并跳过无效的 Windows Store 别名，再运行验证器；
-- `scripts/build_windows_release.ps1`：公开 Windows 主程序、updater helper 与 NSIS 构建；验证稳定版本、x64 PE、产品元数据和隐私路径，并输出固定命名安装包及 SHA-256；
+- `scripts/build_windows_release.ps1`：依次执行 Tauri 无封装构建、锁定构建 updater helper、NSIS 封装，确保封装采用最终原生载荷；验证稳定版本、x64 PE、产品元数据和隐私路径，并输出固定命名安装包及 SHA-256。安装包解出的 helper、MOBI worker、源码包与声明须与 Portable 对应文件逐字节一致，主程序仅允许单个 Tauri NSS/UNK 分发类型标记的三字节差异；
 - `scripts/build_offline_key_init.ps1`：只编译独立密钥初始化工具；先执行该 crate 的 fmt/test/clippy，再做锁定依赖、路径重映射、x64 PE、隐私扫描和 SHA-256，并只写入全新的版本化交付目录；不会运行 `init`、覆盖旧交付或接触密钥材料；
 - `tools/portable-key-tool/`：非分发的可移动密钥工具；提供一次性 `migrate-dpapi`、只读 `verify-key` 和长期 `sign-release`，直接复用 `m2shelf_lib::update` 的签名与验签实现；
 - `scripts/build_portable_key_tool.ps1`：对可移动密钥工具执行锁定 fmt/test/clippy/release 构建和 x64/隐私/校验和验证，不执行迁移或签名；
@@ -575,6 +590,8 @@ cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --locked -- -D w
 发布还需验证 NSIS、Portable、helper 的版本/身份、架构、多帧图标、隐私扫描、校验和、签名、清单/来源证明和启动。生成目录、依赖目录、数据库副本、本机缓存和线下密钥文件不属于源码，不能提交。
 
 ## 当前发布状态
+
+- 2026-10-11 后续本地打包：`0.5.14` 安装包与 Portable 已含最新设置修改，播放器仅 CUSTOM/SYSTEM、缺省 SYSTEM、无自动检测。正式脚本改为先完成原生载荷再封装；解出 NSIS 与 Portable 核对，helper/worker/源码/声明完全一致，主程序仅有单个 Tauri NSS/UNK 标记的三字节差异。版本、七帧图标、DPI、摘要及隐私扫描通过；最终包未覆盖安装、签名或发布，未用生产 ID 启动。源码原生检查采用隔离 ID 和合成数据。当前本地文件及准确边界见 `PACKAGING_0.5.14_20261011_REPORT.md`、`delivery-summary.json`；以下旧版本条目保留为历史记录。
 
 - M²Shelf 新增 `list_hidden_nodes` Rust/IPC 查询及 `HiddenNodesDialog`；设置页打开跨库隐藏列表，复用 `reset_node_type` 恢复自动分类，并刷新当前页面、全部资源、最近观看和 Root 统计。加载使用请求序号防止旧响应覆盖恢复结果，包含键盘焦点管理及四语言文案。本功能源码尚未发布；前端回归覆盖路径筛选、恢复、错误重试、过期响应，Rust 数据层的嵌套隐藏、无视频条目、离线读取和元数据保留用例已通过本机原生验证。
 

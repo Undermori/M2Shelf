@@ -796,6 +796,25 @@ impl ComicScan<'_> {
                 )?;
                 self.connection.execute("UPDATE comic_books SET document_format=?1,reader_format=?4,source_resource_id=NULL,source_resource_stamp=NULL WHERE node_id=?2 AND source_path=?3 COLLATE NOCASE",params![document_format.filter(|format| matches!(*format,"PDF"|"EPUB")),book_node,logical.to_string_lossy(),document_format]).map_err(|e|e.to_string())?;
             }
+            let book_id: i64 = self
+                .connection
+                .query_row(
+                    "SELECT id FROM comic_books WHERE node_id=?1 AND source_path=?2 COLLATE NOCASE",
+                    params![book_node, logical.to_string_lossy()],
+                    |r| r.get(0),
+                )
+                .map_err(|e| e.to_string())?;
+            crate::scraper_metadata::import(
+                self.connection,
+                book_node,
+                &logical,
+                &filesystem,
+                self.canonical_root,
+                metadata.len(),
+                &stamp,
+                Some(book_id),
+                None,
+            )?;
             if crate::ebooks::format(&logical) == Some("TXT") {
                 self.connection.execute("UPDATE comic_books SET text_encoding=COALESCE((SELECT substr(source_locator,1,instr(source_locator,':')-1) FROM comic_pages WHERE comic_book_id=comic_books.id AND page_index=0),'UTF-8') WHERE node_id=?1 AND source_path=?2 COLLATE NOCASE", params![book_node,logical.to_string_lossy()]).map_err(|e|e.to_string())?;
             }

@@ -11,7 +11,7 @@ const mocks = vi.hoisted(() => ({
     bootstrap: vi.fn(), getSettings: vi.fn(), listRoots: vi.fn(),
     getCollectionSortPreferences: vi.fn(), updateCollectionSortPreference: vi.fn(), scanStatus: vi.fn(), allResources: vi.fn(),
     listRecentlyWatched: vi.fn(), listFavoriteFolders: vi.fn(), showMainWindow: vi.fn(),
-    addRoot: vi.fn(), startScan: vi.fn(), nodeDetail: vi.fn(), cacheStats: vi.fn(), posterCacheStatus: vi.fn(), clearCoverCache: vi.fn(), updateSettings: vi.fn(),
+    testMpv: vi.fn(), tmdbCredentialStatus: vi.fn(), addRoot: vi.fn(), startScan: vi.fn(), nodeDetail: vi.fn(), cacheStats: vi.fn(), posterCacheStatus: vi.fn(), clearCoverCache: vi.fn(), updateSettings: vi.fn(),
     bindWorkBangumi: vi.fn(), bindBangumi: vi.fn(), clearWorkBangumi: vi.fn(), retryWorkBangumiCover: vi.fn(), bangumiPrefill: vi.fn(), searchBangumi: vi.fn(), renameNode: vi.fn(), playMedia: vi.fn(), openMediaInExplorer: vi.fn(),
     listHiddenNodes: vi.fn(), resetNodeType: vi.fn(), search: vi.fn(), browse: vi.fn(), syncPendingBangumiAliases: vi.fn(), openBangumiSubject: vi.fn(), openExternalUrl: vi.fn(),
     getBookCatalogue:vi.fn(),revealComicBook:vi.fn(),
@@ -70,6 +70,8 @@ const mount = (_caption = false) => render(<StrictMode><I18nProvider><AppSetting
 
 beforeEach(() => {
   vi.resetAllMocks();
+  mocks.api.testMpv.mockResolvedValue({ok:true,version:"mpv v0.41.0",message:""});
+  mocks.api.tmdbCredentialStatus.mockResolvedValue({source:"DEFAULT",defaultAvailable:true,personalConfigured:false,check:"UNCHECKED"});
   mocks.progress.clear(); mocks.finished.clear();
   window.history.replaceState(null, "", "/");
   window.matchMedia = vi.fn().mockReturnValue({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() });
@@ -172,7 +174,7 @@ describe("startup refresh and work browsing", () => {
     mount();await screen.findByText('Example Work');
     fireEvent.click(screen.getByRole('button',{name:'添加资源目录'}));
     fireEvent.click(await screen.findByRole('button',{name:'电子书'}));
-    fireEvent.click(screen.getByRole('button',{name:/按单个文件识别/}));
+    fireEvent.click(await screen.findByRole('button',{name:/按单个文件识别/}));
     fireEvent.click(screen.getByRole('button',{name:'创建资源库'}));
     await waitFor(()=>expect(mocks.api.startScan).toHaveBeenCalledTimes(2),{timeout:2000});
     expect(mocks.api.startScan.mock.calls.every(call=>call[0]===2)).toBe(true);

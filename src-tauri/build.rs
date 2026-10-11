@@ -1,7 +1,10 @@
 #[path = "native/build_mobi.rs"]
 mod build_mobi;
+#[path = "native/build_tmdb.rs"]
+mod build_tmdb;
 
 fn main() {
+    build_tmdb::build();
     build_mobi::build();
     println!("cargo:rerun-if-env-changed=M2SHELF_BUILD_DATE");
     println!("cargo:rerun-if-changed=windows-app-manifest.xml");

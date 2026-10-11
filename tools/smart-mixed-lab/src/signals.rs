@@ -59,75 +59,19 @@ pub fn signals(name: &str) -> Signals {
     if is_range(name) {
         return Signals::default();
     }
-    static MARKERS: OnceLock<Regex> = OnceLock::new();
-    let re=MARKERS.get_or_init(||Regex::new(r"(?ix)(?:\b(?P<en>vol(?:ume)?|ch(?:apter)?)\.?\s*(?P<en_n>[0-9]{1,6})\b|第\s*(?P<cn_n>[0-9]{1,6}|[一二三四五六七八九十百零〇]+)\s*(?P<cn>卷|巻|话|話|章)|(?P<jp_n>[0-9]{1,6})\s*(?P<jp>巻|卷|話|话))").expect("constant expression"));
-    let mut result = Signals {
-        title: name.trim().into(),
-        ..Signals::default()
-    };
-    let mut spans = Vec::new();
-    for c in re.captures_iter(name) {
-        let n = c
-            .name("en_n")
-            .or_else(|| c.name("cn_n"))
-            .or_else(|| c.name("jp_n"))
-            .and_then(|n| number(n.as_str()));
-        let chapter = c
-            .name("en")
-            .is_some_and(|x| x.as_str().to_ascii_lowercase().starts_with("ch"))
-            || c.name("cn")
-                .or_else(|| c.name("jp"))
-                .is_some_and(|x| matches!(x.as_str(), "话" | "話" | "章"));
-        if chapter {
-            result.chapter = n;
+    let parsed = m2shelf_media_parser::parse_for_grouping(name, m2shelf_media_parser::Kind::Comic);
+    Signals {
+        title: parsed.display_title,
+        volume: parsed.volume,
+        chapter: parsed.chapter,
+        bare_number: if name.trim().chars().all(|c| c.is_ascii_digit()) && !name.trim().is_empty() {
+            name.trim().parse().ok()
         } else {
-            result.volume = n;
-        }
-        spans.push(c.get(0).unwrap().range());
+            None
+        },
     }
-    for span in spans.into_iter().rev() {
-        result.title.replace_range(span, "");
-    }
-    result.title = result
-        .title
-        .trim_matches([' ', '.', '_', '-', '[', ']', '(', ')'])
-        .into();
-    if name.trim().chars().all(|c| c.is_ascii_digit()) && !name.trim().is_empty() {
-        result.bare_number = name.trim().parse().ok();
-    }
-    result
 }
-fn number(s: &str) -> Option<u32> {
-    if let Ok(n) = s.parse() {
-        return Some(n);
-    }
-    let mut total = 0;
-    let mut current = 0;
-    for c in s.chars() {
-        match c {
-            '零' | '〇' => current = 0,
-            '一' => current = 1,
-            '二' => current = 2,
-            '三' => current = 3,
-            '四' => current = 4,
-            '五' => current = 5,
-            '六' => current = 6,
-            '七' => current = 7,
-            '八' => current = 8,
-            '九' => current = 9,
-            '十' => {
-                total += current.max(1) * 10;
-                current = 0;
-            }
-            '百' => {
-                total += current.max(1) * 100;
-                current = 0;
-            }
-            _ => return None,
-        }
-    }
-    Some(total + current)
-}
+
 pub fn extra(name: &str) -> bool {
     let s = name.to_lowercase();
     [

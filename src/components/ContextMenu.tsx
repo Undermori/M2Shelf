@@ -14,10 +14,9 @@ interface ContextMenuProps {
   y: number;
   onAction: (action: NodeAction, node: MediaNode) => void;
   onClose: () => void;
-  organizationActions?: React.ReactNode;
 }
 
-export function ContextMenu({ node, x, y, onAction, onClose, organizationActions }: ContextMenuProps) {
+export function ContextMenu({ node, x, y, onAction, onClose }: ContextMenuProps) {
   const { t } = useI18n();
   const menuRef = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState({ left: x, top: y });
@@ -60,7 +59,6 @@ export function ContextMenu({ node, x, y, onAction, onClose, organizationActions
   return (
     <div className="context-menu" ref={menuRef} style={position} tabIndex={-1} onPointerDown={(event) => event.stopPropagation()}>
       <p>{nodeDisplayTitle(node)}</p>
-      {organizationActions}
       <button onClick={action("work")} type="button"><Icon name="work" />{t("menu.setWork")}</button>
       <button onClick={action("container")} type="button"><Icon name="folder" />{t("menu.setContainer")}</button>
       <button onClick={action("other")} type="button"><Icon name="archive" />{t("menu.setOtherResources")}</button>

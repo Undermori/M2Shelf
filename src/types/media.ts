@@ -243,6 +243,7 @@ export interface BatchMutationResult {
 export interface AppSettings {
   comicReader?: import('./comic').ComicReaderSettings;
   mpvPath: string | null;
+  playerMode?: "CUSTOM" | "SYSTEM";
   defaultViewMode: "GRID" | "LIST";
   videoExtensions: string[];
   bangumiSearchEnabled: boolean;

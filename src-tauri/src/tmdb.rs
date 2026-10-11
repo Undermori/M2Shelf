@@ -1,4 +1,4 @@
-//! Movie-only provider. Official hosts, bounded responses and separate provider identity.
+//! Movie/TV provider with disjoint cache and binding identity. Official hosts, bounded responses and separate provider identity.
 use crate::{
     cache,
     db::{AppResult, Database},
@@ -27,9 +27,35 @@ pub fn cancel_mutation() {
 }
 const JSON_LIMIT: u64 = 2 * 1024 * 1024;
 const POSTER_POLICY_VERSION: u8 = 1;
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum MediaType {
+    #[default]
+    Movie,
+    Tv,
+}
+impl MediaType {
+    pub fn endpoint(self) -> &'static str {
+        match self {
+            Self::Movie => "movie",
+            Self::Tv => "tv",
+        }
+    }
+}
+fn source_type(db: &Database, node: i64) -> AppResult<MediaType> {
+    let target = db.get_node(node)?;
+    let (parsed, _) = crate::media_scraper::indexed_evidence(db, &target)?;
+    Ok(if parsed.subtype == crate::media_scraper::Subtype::Tv {
+        MediaType::Tv
+    } else {
+        MediaType::Movie
+    })
+}
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Movie {
+    #[serde(default)]
+    pub media_type: MediaType,
     pub id: i64,
     pub title: String,
     pub original_title: String,
@@ -62,8 +88,11 @@ pub struct Binding {
 #[derive(Deserialize)]
 struct ApiMovie {
     id: i64,
+    #[serde(alias = "name")]
     title: String,
+    #[serde(alias = "original_name")]
     original_title: String,
+    #[serde(alias = "first_air_date")]
     release_date: Option<String>,
     overview: Option<String>,
     poster_path: Option<String>,
@@ -79,6 +108,7 @@ struct ApiMovie {
 #[derive(Deserialize)]
 struct ApiAlternativeTitles {
     #[serde(default)]
+    #[serde(alias = "results")]
     titles: Vec<ApiAlternativeTitle>,
 }
 #[derive(Deserialize)]
@@ -148,6 +178,7 @@ fn movie(m: ApiMovie) -> AppResult<Movie> {
     }
     let poster_path = m.poster_path.filter(|s| valid_poster(s));
     Ok(Movie {
+        media_type: MediaType::Movie,
         id: m.id,
         title: clean(m.title, 500),
         original_title: clean(m.original_title, 500),
@@ -183,8 +214,16 @@ fn request_json<T: serde::de::DeserializeOwned>(
     path: &str,
     query: &[(&str, String)],
 ) -> AppResult<T> {
-    let token = crate::tmdb_credentials::read()?;
+    let token = crate::tmdb_credentials::selected()?;
     request_json_with_token(path, query, &token)
+}
+pub fn check_credentials() -> AppResult<()> {
+    let value: serde_json::Value = request_json("/authentication", &[])?;
+    if value.get("success").and_then(|v| v.as_bool()) == Some(true) {
+        Ok(())
+    } else {
+        Err("TMDB_HTTP_401".into())
+    }
 }
 fn request_json_with_token<T: serde::de::DeserializeOwned>(
     path: &str,
@@ -335,9 +374,19 @@ pub fn hydrate(c: &Connection, nodes: &mut [MediaNode]) -> AppResult<()> {
 }
 fn fingerprint(c: &Connection, node: i64) -> AppResult<String> {
     let value:(String,String,String,Option<i64>,Option<i64>,Option<i64>,i64)=c.query_row("SELECT n.absolute_path,n.updated_at,n.node_type,b.provider_subject_id,t.movie_id,t.active,o.revision FROM nodes n LEFT JOIN metadata_bindings b ON b.node_id=n.id AND b.provider='BANGUMI' LEFT JOIN tmdb_movie_bindings t ON t.node_id=n.id JOIN book_organization_state o ON o.root_id=n.library_root_id WHERE n.id=?1",[node],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?))).map_err(|_|"TMDB_TARGET_STALE")?;
+    let provider: Option<String> = c
+        .query_row(
+            "SELECT payload_json FROM tmdb_movie_bindings WHERE node_id=?1",
+            [node],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|_| "TMDB_TARGET_STALE")?;
     Ok(format!(
         "{:x}",
-        Sha256::digest(serde_json::to_vec(&(node, value)).map_err(|_| "TMDB_TARGET_STALE")?)
+        Sha256::digest(
+            serde_json::to_vec(&(node, value, provider)).map_err(|_| "TMDB_TARGET_STALE")?
+        )
     ))
 }
 pub fn search(
@@ -357,7 +406,9 @@ pub fn search(
         return Err("TMDB_QUERY_INVALID".into());
     }
     let snapshot = fingerprint(&db.connect()?, node)?;
-    let key = format!("search:{language}:{year:?}:{query}");
+    let media_type = source_type(db, node)?;
+    let generation = crate::tmdb_credentials::generation();
+    let key = format!("search:{media_type:?}:{generation}:{language}:{year:?}:{query}");
     let cache = CACHE.get_or_init(|| Mutex::new(VecDeque::new()));
     if let Some(movies) = cache
         .lock()
@@ -368,14 +419,30 @@ pub fn search(
     {
         return Ok(Search { movies, snapshot });
     }
-    let args = movie_search_arguments(query, year, language);
-    let response: SearchResponse = request_json("/search/movie", &args)?;
+    let mut args = movie_search_arguments(query, year, language);
+    if media_type == MediaType::Tv {
+        for (key, _) in &mut args {
+            if *key == "primary_release_year" {
+                *key = "first_air_date_year";
+            }
+        }
+    }
+    let response: SearchResponse =
+        request_json(&format!("/search/{}", media_type.endpoint()), &args)?;
     let movies = response
         .results
         .into_iter()
         .take(20)
-        .map(movie)
+        .map(|v| {
+            movie(v).map(|mut v| {
+                v.media_type = media_type;
+                v
+            })
+        })
         .collect::<AppResult<Vec<_>>>()?;
+    if generation != crate::tmdb_credentials::generation() {
+        return Err("TMDB_TARGET_STALE".into());
+    }
     let mut entries = cache.lock().map_err(|_| "TMDB_CACHE_FAILED")?;
     entries.push_back((key, Instant::now(), movies.clone()));
     while entries.len() > 64 {
@@ -401,11 +468,15 @@ fn movie_search_arguments(
     args
 }
 pub fn detail(id: i64, language: &str) -> AppResult<Movie> {
+    detail_for(MediaType::Movie, id, language)
+}
+pub fn detail_for(media_type: MediaType, id: i64, language: &str) -> AppResult<Movie> {
     if id <= 0 {
         return Err("TMDB_INVALID_ID".into());
     }
     let language = locale(language)?;
-    let key = format!("detail:{language}:{id}");
+    let generation = crate::tmdb_credentials::generation();
+    let key = format!("detail:{media_type:?}:{generation}:{language}:{id}");
     let cache = CACHE.get_or_init(|| Mutex::new(VecDeque::new()));
     if let Some(movie) = cache
         .lock()
@@ -416,13 +487,17 @@ pub fn detail(id: i64, language: &str) -> AppResult<Movie> {
     {
         return Ok(movie);
     }
-    let result = movie(request_json(
-        &format!("/movie/{id}"),
+    let mut result = movie(request_json(
+        &format!("/{}/{id}", media_type.endpoint()),
         &[
             ("language", language.into()),
             ("append_to_response", "alternative_titles".into()),
         ],
     )?)?;
+    result.media_type = media_type;
+    if generation != crate::tmdb_credentials::generation() {
+        return Err("TMDB_TARGET_STALE".into());
+    }
     let mut entries = cache.lock().map_err(|_| "TMDB_CACHE_FAILED")?;
     entries.push_back((key, Instant::now(), vec![result.clone()]));
     while entries.len() > 64 {
@@ -504,9 +579,11 @@ where
 {
     let mut original = movie.original_language.clone();
     if original.is_none() {
-        let metadata: ApiMovie =
-            serde_json::from_value(request(&format!("/movie/{}", movie.id), &[])?)
-                .map_err(|_| "TMDB_INVALID_RESPONSE")?;
+        let metadata: ApiMovie = serde_json::from_value(request(
+            &format!("/{}/{}", movie.media_type.endpoint(), movie.id),
+            &[],
+        )?)
+        .map_err(|_| "TMDB_INVALID_RESPONSE")?;
         if metadata.id != movie.id {
             return Err("TMDB_INVALID_RESPONSE".into());
         }
@@ -515,7 +592,11 @@ where
             .filter(|s| valid_image_language(s));
     }
     // Images expose language, not proven release-country ownership. No UI locale filter.
-    let images = request(&format!("/movie/{}/images", movie.id), &[]).and_then(|value| {
+    let images = request(
+        &format!("/{}/{}/images", movie.media_type.endpoint(), movie.id),
+        &[],
+    )
+    .and_then(|value| {
         serde_json::from_value::<MovieImages>(value)
             .map_err(|_| "TMDB_INVALID_RESPONSE".to_string())
     });
@@ -531,9 +612,11 @@ where
         .filter(|s| valid_image_language(s))
         .map(|s| vec![("language", s.clone())])
         .unwrap_or_default();
-    let fallback: ApiMovie =
-        serde_json::from_value(request(&format!("/movie/{}", movie.id), &args)?)
-            .map_err(|_| "TMDB_INVALID_RESPONSE")?;
+    let fallback: ApiMovie = serde_json::from_value(request(
+        &format!("/{}/{}", movie.media_type.endpoint(), movie.id),
+        &args,
+    )?)
+    .map_err(|_| "TMDB_INVALID_RESPONSE")?;
     if fallback.id != movie.id {
         return Err("TMDB_INVALID_RESPONSE".into());
     }
@@ -593,20 +676,21 @@ fn store_downloaded_cover(
         .map_err(|_| "TMDB_CACHE_WRITE")?;
     Ok(destination)
 }
-pub fn bind(
+pub fn bind_for(
     db: &Database,
     node: i64,
     id: i64,
     language: &str,
     expected: &str,
     root: &Path,
+    media_type: MediaType,
 ) -> AppResult<Binding> {
     let generation = MUTATION_GENERATION.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
     scope(&db.get_node(node)?)?;
     if fingerprint(&db.connect()?, node)? != expected {
         return Err("TMDB_TARGET_STALE".into());
     }
-    let mut movie = detail(id, language)?;
+    let mut movie = detail_for(media_type, id, language)?;
     movie.automatic_poster = true;
     let operation = cache::begin_cover_cache_operation();
     let (path, error) =
@@ -634,7 +718,7 @@ pub fn bind(
             return Err("TMDB_CANCELLED".into());
         }
         // Existing Bangumi rows and manual Node covers are deliberately retained.
-        tx.execute("INSERT INTO tmdb_movie_bindings(node_id,movie_id,payload_json,cover_cache_path,cover_error) VALUES(?1,?2,?3,?4,?5) ON CONFLICT(node_id) DO UPDATE SET movie_id=excluded.movie_id,payload_json=excluded.payload_json,cover_cache_path=COALESCE(excluded.cover_cache_path,tmdb_movie_bindings.cover_cache_path),cover_error=excluded.cover_error,active=1,bound_at=CURRENT_TIMESTAMP",params![node,id,serde_json::to_string(&movie).map_err(|_|"TMDB_INVALID_RESPONSE")?,path.as_ref().map(|p|p.to_string_lossy().into_owned()),error]).map_err(|e|e.to_string())?;
+        tx.execute("INSERT INTO tmdb_movie_bindings(node_id,movie_id,payload_json,cover_cache_path,cover_error) VALUES(?1,?2,?3,?4,?5) ON CONFLICT(node_id) DO UPDATE SET movie_id=excluded.movie_id,payload_json=excluded.payload_json,cover_cache_path=COALESCE(excluded.cover_cache_path,CASE WHEN tmdb_movie_bindings.movie_id=excluded.movie_id AND COALESCE(json_extract(tmdb_movie_bindings.payload_json,'$.mediaType'),'MOVIE')=COALESCE(json_extract(excluded.payload_json,'$.mediaType'),'MOVIE') THEN tmdb_movie_bindings.cover_cache_path END),cover_error=excluded.cover_error,active=1,bound_at=CURRENT_TIMESTAMP",params![node,id,serde_json::to_string(&movie).map_err(|_|"TMDB_INVALID_RESPONSE")?,path.as_ref().map(|p|p.to_string_lossy().into_owned()),error]).map_err(|e|e.to_string())?;
         let result = binding(&tx, node)?.ok_or("TMDB_SAVE_FAILED")?;
         tx.commit().map_err(|e| e.to_string())?;
         Ok(result)
@@ -683,7 +767,7 @@ fn retry_cover_using<P: AutomaticProvider, C: Fn() -> bool>(
     let operation = cache::begin_cover_cache_operation();
     let download = (|| {
         if movie.original_language.is_none() {
-            let current = provider.detail(movie.id, "en-US")?;
+            let current = provider.detail_for(movie.media_type, movie.id, "en-US")?;
             if current.id != movie.id {
                 return Err("TMDB_INVALID_RESPONSE".into());
             }
@@ -771,11 +855,19 @@ pub struct MatchDiagnostic {
     pub updated_at: String,
 }
 pub fn diagnostics(db: &Database) -> AppResult<Vec<MatchDiagnostic>> {
+    diagnostics_for(db, false)
+}
+fn diagnostics_for(db: &Database, bangumi: bool) -> AppResult<Vec<MatchDiagnostic>> {
+    let key = if bangumi {
+        "bangumi_auto_diagnostics"
+    } else {
+        "tmdb_auto_diagnostics"
+    };
     let c = db.connect()?;
     let raw: Option<String> = c
         .query_row(
-            "SELECT value FROM settings WHERE key='tmdb_auto_diagnostics' AND length(value)<=65536",
-            [],
+            "SELECT value FROM settings WHERE key=?1 AND length(value)<=65536",
+            [key],
             |r| r.get(0),
         )
         .optional()
@@ -793,6 +885,46 @@ pub(crate) fn diagnostic(
     evidence: &crate::title_extractor::MatchEvidence,
     outcome: &str,
 ) {
+    diagnostic_for(db, node, evidence, outcome, false);
+}
+#[cfg(test)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LastMatch {
+    pub provider: String,
+    pub outcome: String,
+}
+#[cfg(test)]
+pub(crate) fn last_match(db: &Database, node: i64) -> AppResult<Option<LastMatch>> {
+    let mut rows = Vec::new();
+    for bangumi in [false, true] {
+        rows.extend(
+            diagnostics_for(db, bangumi)?
+                .into_iter()
+                .filter(|r| r.node_id == node)
+                .map(|r| (r, bangumi)),
+        );
+    }
+    Ok(rows
+        .into_iter()
+        .max_by(|a, b| a.0.updated_at.cmp(&b.0.updated_at))
+        .map(|(row, bangumi)| LastMatch {
+            provider: if bangumi { "BANGUMI" } else { "TMDB" }.into(),
+            outcome: row.outcome,
+        }))
+}
+pub(crate) fn diagnostic_for(
+    db: &Database,
+    node: &MediaNode,
+    evidence: &crate::title_extractor::MatchEvidence,
+    outcome: &str,
+    bangumi: bool,
+) {
+    let key = if bangumi {
+        "bangumi_auto_diagnostics"
+    } else {
+        "tmdb_auto_diagnostics"
+    };
     // Bounded application data, separate from complete AppSettings snapshots. Never store paths,
     // raw transport errors or credentials. A new attempt replaces this Node's previous reason.
     let _ = (|| -> AppResult<()> {
@@ -800,7 +932,14 @@ pub(crate) fn diagnostic(
         let tx = c
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|e| e.to_string())?;
-        let raw:Option<String>=tx.query_row("SELECT value FROM settings WHERE key='tmdb_auto_diagnostics' AND length(value)<=65536",[],|r|r.get(0)).optional().map_err(|e|e.to_string())?;
+        let raw: Option<String> = tx
+            .query_row(
+                "SELECT value FROM settings WHERE key=?1 AND length(value)<=65536",
+                [key],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
         let mut rows = raw
             .and_then(|v| serde_json::from_str::<Vec<MatchDiagnostic>>(&v).ok())
             .unwrap_or_default();
@@ -823,7 +962,7 @@ pub(crate) fn diagnostic(
         );
         let value = serde_json::to_string(&rows).map_err(|e| e.to_string())?;
         if value.len() <= 65536 {
-            tx.execute("INSERT INTO settings(key,value) VALUES('tmdb_auto_diagnostics',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value",[value]).map_err(|e|e.to_string())?;
+            tx.execute("INSERT INTO settings(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",params![key,value]).map_err(|e|e.to_string())?;
         }
         tx.commit().map_err(|e| e.to_string())?;
         Ok(())
@@ -862,6 +1001,13 @@ pub(crate) trait AutomaticProvider {
         language: &str,
     ) -> AppResult<Vec<Movie>>;
     fn detail(&mut self, id: i64, language: &str) -> AppResult<Movie>;
+    fn detail_for(&mut self, kind: MediaType, id: i64, language: &str) -> AppResult<Movie> {
+        let v = self.detail(id, language)?;
+        if v.media_type != kind {
+            return Err("TMDB_TYPE_CONFLICT".into());
+        }
+        Ok(v)
+    }
     fn cover(&mut self, root: &Path, movie: &Movie) -> AppResult<Option<PathBuf>>;
 }
 
@@ -875,7 +1021,7 @@ pub(crate) fn fixture_exhausted_details() -> AutomaticRun {
 }
 impl AutomaticProvider for NativeAutomaticProvider {
     fn available(&mut self) -> bool {
-        crate::tmdb_credentials::read().is_ok()
+        crate::tmdb_credentials::selected().is_ok()
     }
     fn search(
         &mut self,
@@ -892,6 +1038,9 @@ impl AutomaticProvider for NativeAutomaticProvider {
         movie.automatic_poster = true;
         Ok(movie)
     }
+    fn detail_for(&mut self, kind: MediaType, id: i64, language: &str) -> AppResult<Movie> {
+        detail_for(kind, id, language)
+    }
     fn cover(&mut self, root: &Path, movie: &Movie) -> AppResult<Option<PathBuf>> {
         download_cover(root, movie)
     }
@@ -903,6 +1052,18 @@ pub(crate) fn automatic_movie_source(
     files: &[String],
 ) -> bool {
     use crate::title_extractor::EditionKind;
+    let parsed = crate::media_scraper::parse(node, files);
+    if node.media_kind == LibraryMediaKind::LiveAction
+        && node.node_type.is_work()
+        && node.total_video_count > 0
+        && node.parent_node_id.is_some()
+        && parsed.subtype == crate::media_scraper::Subtype::Tv
+        && (!parsed.episodes.is_empty()
+            || parsed.aired_date.is_some()
+            || parsed.explicit_provider_ids.tmdb_tv.is_some())
+    {
+        return true;
+    }
     if node.media_kind != LibraryMediaKind::LiveAction
         || !node.node_type.is_work()
         || node.total_video_count != 1
@@ -934,13 +1095,31 @@ pub(crate) fn automatic_movie_source(
         })
 }
 
+#[cfg(test)]
 pub(crate) fn automatic_evidence(
     node: &MediaNode,
     evidence: &crate::title_extractor::MatchEvidence,
     files: &[String],
 ) -> bool {
     automatic_movie_source(node, evidence, files)
+        && evidence.evidence_quality >= 40
         && crate::title_extractor::is_safe_movie_query(&evidence.primary_title)
+}
+pub(crate) fn indexed_source(
+    db: &Database,
+    node: &MediaNode,
+    evidence: &crate::title_extractor::MatchEvidence,
+    files: &[String],
+) -> AppResult<bool> {
+    Ok(automatic_movie_source(node, evidence, files)
+        || (node.media_kind == LibraryMediaKind::LiveAction
+            && node.node_type.is_work()
+            && node.total_video_count > 0
+            && node.parent_node_id.is_some()
+            && crate::media_scraper::indexed_parse(db, node, files)?
+                .explicit_provider_ids
+                .tmdb_tv
+                .is_some()))
 }
 
 fn automatic_title(value: &str) -> Option<String> {
@@ -952,6 +1131,23 @@ fn automatic_title(value: &str) -> Option<String> {
 }
 
 fn movie_year_and_kind(movie: &Movie, evidence: &crate::title_extractor::MatchEvidence) -> bool {
+    if movie.media_type == MediaType::Tv {
+        let year_ok = evidence.season_number.is_some_and(|v| v > 1)
+            || !evidence.year_is_strong
+            || movie
+                .release_date
+                .as_deref()
+                .and_then(|v| v.get(..4))
+                .and_then(|v| v.parse::<i32>().ok())
+                == evidence.year;
+        return movie.id > 0
+            && evidence.edition_kind == crate::title_extractor::EditionKind::Tv
+            && year_ok
+            && movie
+                .genre_ids
+                .as_ref()
+                .is_some_and(|ids| !ids.is_empty() && !ids.contains(&16));
+    }
     if !evidence.year_is_strong {
         return false;
     }
@@ -1011,7 +1207,7 @@ fn unique_movie(
 pub(crate) fn automatic_snapshot(c: &Connection, node: i64) -> AppResult<Option<String>> {
     let target = crate::db::get_node_conn(c, node)?;
     if target.media_kind != LibraryMediaKind::LiveAction || !target.node_type.is_work()
-        || target.total_video_count != 1 || target.binding.is_some()
+        || target.total_video_count <= 0 || target.binding.is_some()
         // A deactivated provider row also represents an explicit prior choice; do not undo it.
         || target.tmdb_binding.is_some()
     {
@@ -1137,7 +1333,10 @@ impl AutomaticRun {
             );
             return Ok(AutomaticOutcome::Unmatched);
         }
-        if !automatic_evidence(node, evidence, files) {
+        if !indexed_source(db, node, evidence, files)?
+            || evidence.evidence_quality < 40
+            || !crate::title_extractor::is_safe_movie_query(&evidence.primary_title)
+        {
             diagnostic(db, node, evidence, "ineligible");
             return Ok(AutomaticOutcome::Unmatched);
         }
@@ -1199,10 +1398,59 @@ impl AutomaticRun {
                 break;
             }
         }
+        let parsed = crate::media_scraper::indexed_parse(db, node, files)?;
+        if parsed
+            .warnings
+            .iter()
+            .any(|v| matches!(v.as_str(), "PROVIDER_ID_CONFLICT" | "YEAR_CONFLICT"))
+        {
+            diagnostic(db, node, evidence, "evidence-conflict");
+            return Ok(AutomaticOutcome::Unmatched);
+        }
+        let media_type = if parsed.subtype == crate::media_scraper::Subtype::Tv {
+            MediaType::Tv
+        } else {
+            MediaType::Movie
+        };
+        let explicit = if media_type == MediaType::Tv {
+            parsed.explicit_provider_ids.tmdb_tv
+        } else {
+            parsed.explicit_provider_ids.tmdb_movie
+        };
         let mut movies = Vec::new();
+        let mut saw_results = false;
         let mut enriched = Vec::<Movie>::new();
         let mut selected = None;
+        if let Some(id) = explicit {
+            if self.details < 256 {
+                self.details += 1;
+                match provider.detail_for(media_type, id, language) {
+                    Ok(value)
+                        if value.id == id
+                            && value.media_type == media_type
+                            && reliable_movie(&value, evidence) =>
+                    {
+                        selected = Some(value)
+                    }
+                    Err(error) if error == "TMDB_HTTP_404" || error == "TMDB_INVALID_ID" => {}
+                    Err(error) => {
+                        self.record_failure(&error);
+                        diagnostic(
+                            db,
+                            node,
+                            evidence,
+                            self.disabled_reason.unwrap_or("request-failed"),
+                        );
+                        return Ok(AutomaticOutcome::Unmatched);
+                    }
+                    _ => {}
+                }
+            }
+        }
         for (index, query) in queries.into_iter().enumerate() {
+            if selected.is_some() {
+                break;
+            }
             if cancelled() {
                 return Ok(AutomaticOutcome::Cancelled);
             }
@@ -1221,11 +1469,19 @@ impl AutomaticRun {
                 &query,
                 evidence
                     .year
-                    .filter(|y| evidence.year_is_strong && (1900..=2200).contains(y))
+                    .filter(|y| {
+                        evidence.year_is_strong
+                            && (1900..=2200).contains(y)
+                            && !(media_type == MediaType::Tv
+                                && evidence.season_number.is_some_and(|v| v > 1))
+                    })
                     .map(|y| y as u16),
                 language,
             ) {
-                Ok(movies) => movies,
+                Ok(movies) => movies
+                    .into_iter()
+                    .filter(|v| v.media_type == media_type)
+                    .collect(),
                 Err(error) => {
                     self.record_failure(&error);
                     diagnostic(
@@ -1237,6 +1493,7 @@ impl AutomaticRun {
                     return Ok(AutomaticOutcome::Unmatched);
                 }
             };
+            saw_results |= !movies.is_empty();
             if movies.len() >= 20
                 || movies
                     .iter()
@@ -1268,8 +1525,10 @@ impl AutomaticRun {
                     continue;
                 }
                 self.details += 1;
-                match provider.detail(candidate.id, language) {
-                    Ok(movie) if movie.id == candidate.id => {
+                match provider.detail_for(candidate.media_type, candidate.id, language) {
+                    Ok(movie)
+                        if movie.id == candidate.id && movie.media_type == candidate.media_type =>
+                    {
                         enriched.push(movie);
                     }
                     Ok(_) => {
@@ -1310,20 +1569,28 @@ impl AutomaticRun {
             return Ok(AutomaticOutcome::Cancelled);
         }
         let Some(mut movie) = selected else {
-            diagnostic(
-                db,
-                node,
-                &request_evidence,
-                if movies.is_empty() {
-                    "no-results"
-                } else if !evidence.year_is_strong {
-                    "year-uncertain"
-                } else {
-                    "no-unique-title-year"
-                },
-            );
+            let outcome = if movies
+                .iter()
+                .filter(|m| reliable_movie(m, evidence))
+                .count()
+                > 1
+                || enriched
+                    .iter()
+                    .filter(|m| reliable_movie(m, evidence))
+                    .count()
+                    > 1
+            {
+                "multiple-candidates"
+            } else if !saw_results {
+                "no-results"
+            } else if media_type == MediaType::Movie && !evidence.year_is_strong {
+                "year-uncertain"
+            } else {
+                "low-confidence"
+            };
+            diagnostic(db, node, &request_evidence, outcome);
             eprintln!(
-                "auto-match provider=TMDB node={} outcome=no-unique-title-year",
+                "auto-match provider=TMDB node={} outcome={outcome}",
                 node.id
             );
             return Ok(AutomaticOutcome::Unmatched);
@@ -1492,6 +1759,41 @@ pub(crate) fn fixture_movie_cover(root: &Path, movie: &Movie) -> AppResult<PathB
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn tv_namespace_uses_tv_metadata_and_original_language_artwork() {
+        let api: ApiMovie=serde_json::from_value(serde_json::json!({"id":7,"name":"The Show","original_name":"The Show","first_air_date":"2018-01-01","genre_ids":[18],"original_language":"en"})).unwrap();
+        let mut tv = movie(api).unwrap();
+        tv.media_type = MediaType::Tv;
+        let mut evidence = crate::title_extractor::build_match_evidence(
+            "The Show S02E03 2020",
+            "The Show S02E03 2020",
+            None,
+            &[],
+        );
+        evidence.primary_title = "The Show".into();
+        evidence.edition_kind = crate::title_extractor::EditionKind::Tv;
+        evidence.season_number = Some(2);
+        evidence.year = Some(2020);
+        evidence.year_is_strong = true;
+        assert!(reliable_movie(&tv, &evidence));
+        let mut movie = tv.clone();
+        movie.media_type = MediaType::Movie;
+        assert!(!reliable_movie(&movie, &evidence));
+        evidence.season_number = Some(1);
+        assert!(!reliable_movie(&tv, &evidence));
+        evidence.year = Some(2018);
+        assert!(reliable_movie(&tv, &evidence));
+        let path=automatic_poster_path_using(&tv,&mut |path,_| {assert_eq!(path,"/tv/7/images");Ok(serde_json::json!({"posters":[{"file_path":"/en.jpg","iso_639_1":"en","width":1000,"height":1500}]}))}).unwrap();
+        assert_eq!(path.as_deref(), Some("/en.jpg"));
+        let old:Movie=serde_json::from_value(serde_json::json!({"id":7,"title":"Movie","originalTitle":"Movie","releaseDate":null,"overview":"","posterPath":null})).unwrap();
+        assert_eq!(old.media_type, MediaType::Movie);
+        assert_eq!(
+            serde_json::from_str::<Movie>(&serde_json::to_string(&tv).unwrap())
+                .unwrap()
+                .media_type,
+            MediaType::Tv
+        );
+    }
     #[test]
     fn poster_requests_use_original_language_for_manual_and_legacy_bindings_too() {
         let old = serde_json::json!({"id":7,"title":"本地译名","originalTitle":"Original","releaseDate":"2020-01-01","overview":"","posterPath":"/zh.jpg"});
@@ -1808,7 +2110,7 @@ mod tests {
                 |r| r.get::<_, i64>(0)
             )
             .unwrap(),
-            26
+            27
         );
         assert_eq!(
             c.query_row(
@@ -1930,6 +2232,7 @@ mod tests {
         f.connection.execute("UPDATE nodes SET node_type='WORK',total_video_count=1,cover_source='MANUAL',cover_cache_path='synthetic-manual' WHERE id=?1",[id]).unwrap();
         f.connection.execute("INSERT INTO metadata_bindings(node_id,provider,provider_subject_id,provider_subject_type,provider_title) VALUES(?1,'BANGUMI',99,6,'Original')",[id]).unwrap();
         let movie = Movie {
+            media_type: crate::tmdb::MediaType::Movie,
             id: 99,
             title: "Different provider".into(),
             original_title: "Fixture".into(),

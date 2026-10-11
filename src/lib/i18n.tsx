@@ -1,3 +1,4 @@
+import {nextReleaseMessages} from './nextReleaseMessages';
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import type { AppLanguage } from "../types/media";
 
@@ -12,6 +13,7 @@ const zhCN = {
   ...comicMessages['zh-CN'],
   ...posterMessages['zh-CN'],
   ...phase3Messages['zh-CN'],
+  ...nextReleaseMessages['zh-CN'],
   "works.changed": "作品来源已变化，请刷新后重试。",
   "works.wholeGroup": "此操作将应用到全部 {count} 个来源。",
   "works.clearDescription": "清除全部来源的 Bangumi 绑定。文件夹来源失去共同身份后可能重新分开；本地文件、手工封面及其他元数据保留。",
@@ -641,6 +643,7 @@ const enUSBase: Messages = {
   ...comicMessages['en-US'],
   ...posterMessages['en-US'],
   ...phase3Messages['en-US'],
+  ...nextReleaseMessages['en-US'],
   "health.viewError": "View error details",
   "works.changed": "The sources changed. Refresh and try again.",
   "works.wholeGroup": "This action applies to all {count} sources.",
@@ -783,6 +786,7 @@ const jaJPBase: Messages = {
   ...comicMessages['ja-JP'],
   ...posterMessages['ja-JP'],
   ...phase3Messages['ja-JP'],
+  ...nextReleaseMessages['ja-JP'],
   "health.viewError": "エラーの詳細",
   "works.changed": "リソース元が変更されました。更新して再試行してください。",
   "works.wholeGroup": "すべての {count} 個のリソース元に適用します。",
@@ -921,6 +925,7 @@ const koKRBase: Messages = {
   ...comicMessages['ko-KR'],
   ...posterMessages['ko-KR'],
   ...phase3Messages['ko-KR'],
+  ...nextReleaseMessages['ko-KR'],
   "works.changed": "원본 구성이 변경되었습니다. 새로 고친 뒤 다시 시도하세요.",
   "works.wholeGroup": "전체 원본 {count}개에 적용됩니다.",
   "works.clearDescription": "모든 원본의 Bangumi 연결을 해제합니다. 공통 식별 정보가 사라지면 폴더가 분리될 수 있습니다. 로컬 파일, 수동 표지 및 기타 정보는 유지됩니다.",

@@ -163,7 +163,10 @@ pub fn recognize(snapshot: &Snapshot) -> Result<Plan, String> {
 
 /// Production indexing already establishes image-book identity and reading order. This
 /// evidence does not attest image bytes: the reader still validates each opened page.
-pub fn recognize_indexed(snapshot: &Snapshot, indexed_image_directories: &BTreeSet<String>) -> Result<Plan, String> {
+pub fn recognize_indexed(
+    snapshot: &Snapshot,
+    indexed_image_directories: &BTreeSet<String>,
+) -> Result<Plan, String> {
     if !matches!(
         snapshot.media_kind,
         LibraryKind::Comic | LibraryKind::Ebook | LibraryKind::Doujin | LibraryKind::Artbook
@@ -450,9 +453,10 @@ pub fn recognize_indexed(snapshot: &Snapshot, indexed_image_directories: &BTreeS
         let indexed_image = indexed_image_directories.contains(path)
             && entry.identity.is_some()
             && entry.state == EntryState::Available;
-        let include_covers = indexed_image || orders
-            .get(path)
-            .is_some_and(|o| o.include_covers && o.basis == OrderBasis::TrustedBookMetadata);
+        let include_covers = indexed_image
+            || orders
+                .get(path)
+                .is_some_and(|o| o.include_covers && o.basis == OrderBasis::TrustedBookMetadata);
         let pages: Vec<_> = direct_images
             .iter()
             .filter(|p| include_covers || !cover(basename(p)))
@@ -489,9 +493,13 @@ pub fn recognize_indexed(snapshot: &Snapshot, indexed_image_directories: &BTreeS
                 && order_valid
                 && !asset_scene
                 && !pages.is_empty()
-                && (indexed_image || pages.len() >= 2 || manual == Some(DirectoryRole::BookImageDirectory))
-                && (indexed_image || numbered
-                    || indexed_image || strong_context
+                && (indexed_image
+                    || pages.len() >= 2
+                    || manual == Some(DirectoryRole::BookImageDirectory))
+                && (indexed_image
+                    || numbered
+                    || indexed_image
+                    || strong_context
                     || order.is_some_and(|o| o.basis == OrderBasis::TrustedBookMetadata))
                 && (snapshot.media_kind != LibraryKind::Artbook
                     || strong_context

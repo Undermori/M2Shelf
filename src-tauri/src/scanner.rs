@@ -1623,6 +1623,28 @@ pub(crate) fn index_resource_file(
             ],
         )
         .map_err(|error| format!("写入附属资源索引失败：{error}"))?;
+    if extension == "nfo" || file_name.eq_ignore_ascii_case("ComicInfo.xml") {
+        let root:String=connection.query_row("SELECT r.path FROM library_roots r JOIN nodes n ON n.library_root_id=r.id WHERE n.id=?1",[node_id],|r|r.get(0)).map_err(|e|e.to_string())?;
+        let root = fs::canonicalize(&root).map_err(|_| "METADATA_ROOT_INVALID")?;
+        let resource: i64 = connection
+            .query_row(
+                "SELECT id FROM resource_files WHERE absolute_path=?1",
+                [path.to_string_lossy()],
+                |r| r.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        crate::scraper_metadata::import(
+            connection,
+            node_id,
+            path,
+            filesystem_path,
+            &root,
+            metadata.len(),
+            &crate::comics::modified(&metadata),
+            None,
+            Some(resource),
+        )?;
+    }
     Ok(())
 }
 

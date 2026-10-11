@@ -20,37 +20,18 @@ fn is_file_node(node: &MediaNode) -> bool {
         && path.file_name().and_then(|name| name.to_str()) != Some(node.folder_name.as_str())
 }
 
-/// Strip explicit episode syntax only. A bare numeric sequel title remains distinct.
+/// Shared parser strips contextual episodes while retaining the season in the catalogue key.
 fn episode_title(value: &str) -> String {
-    let normalized = value
-        .split_whitespace()
-        .map(|token| {
-            let lower = token.to_ascii_lowercase();
-            if let Some((season, episode)) = lower
-                .strip_prefix('s')
-                .and_then(|rest| rest.split_once('e'))
-            {
-                if !season.is_empty()
-                    && !episode.is_empty()
-                    && season.chars().all(|c| c.is_ascii_digit())
-                    && episode.chars().all(|c| c.is_ascii_digit())
-                {
-                    return format!("S{season}");
-                }
-            }
-            token.to_string()
-        })
-        .collect::<Vec<_>>()
-        .join(" ");
-    if let Some((title, episode)) = normalized.rsplit_once(" - ") {
-        if !title.is_empty()
-            && (1..=3).contains(&episode.len())
-            && episode.chars().all(|c| c.is_ascii_digit())
-        {
-            return title.to_string();
+    let parsed = m2shelf_media_parser::parse(value, m2shelf_media_parser::Kind::Animation);
+    if !parsed.episodes.is_empty() {
+        if let Some(season) = parsed.season {
+            format!("{} S{season:02}", parsed.display_title)
+        } else {
+            parsed.display_title
         }
+    } else {
+        value.into()
     }
-    normalized
 }
 
 fn title_signals(node: &MediaNode) -> crate::title_extractor::TitleSignals {
@@ -71,6 +52,13 @@ fn local_title(node: &MediaNode) -> String {
 }
 
 fn group_key(node: &MediaNode) -> String {
+    if let Some(binding) = node.tmdb_binding.as_ref().filter(|v| v.active) {
+        let season = crate::media_scraper::parse(node, &[]).season;
+        return format!(
+            "tmdb:{:?}:{}:{season:?}",
+            binding.movie.media_type, binding.movie.id
+        );
+    }
     if let Some(binding) = &node.binding {
         return format!(
             "bangumi:{}:{}",

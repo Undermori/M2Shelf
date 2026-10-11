@@ -661,6 +661,8 @@ pub struct AppSettings {
     #[serde(default)]
     pub comic_reader: ComicReaderSettings,
     pub mpv_path: Option<String>,
+    #[serde(default)]
+    pub player_mode: PlayerMode,
     pub default_view_mode: ViewMode,
     pub video_extensions: Vec<String>,
     pub bangumi_search_enabled: bool,
@@ -675,6 +677,15 @@ pub struct AppSettings {
     pub auto_scan_on_startup: bool,
     #[serde(default)]
     pub all_resources_flattened: bool,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum PlayerMode {
+    Custom,
+    #[default]
+    #[serde(alias = "AUTO", alias = "BUNDLED")]
+    System,
 }
 
 pub const MAX_SETTINGS_PATH_CHARS: usize = 32_767;

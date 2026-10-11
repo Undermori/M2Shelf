@@ -82,7 +82,51 @@ pub fn tmdb_cancel() {
 }
 #[tauri::command]
 pub fn tmdb_status() -> bool {
-    crate::tmdb_credentials::read().is_ok()
+    crate::tmdb_credentials::selected().is_ok()
+}
+#[tauri::command]
+pub fn tmdb_credential_status() -> crate::tmdb_credentials::CredentialStatus {
+    crate::tmdb_credentials::status()
+}
+#[tauri::command]
+pub fn tmdb_select_source(
+    source: String,
+    state: State<'_, AppState>,
+) -> AppResult<crate::tmdb_credentials::CredentialStatus> {
+    crate::tmdb_credentials::select(&state.database, &source)?;
+    Ok(crate::tmdb_credentials::status())
+}
+#[tauri::command]
+pub async fn tmdb_verify() -> AppResult<crate::tmdb_credentials::CredentialStatus> {
+    tauri::async_runtime::spawn_blocking(crate::tmdb_credentials::verify)
+        .await
+        .map_err(|_| "TMDB_NETWORK_FAILED")?
+}
+#[tauri::command]
+pub async fn tmdb_delete_personal(
+    title: String,
+    message: String,
+    app: AppHandle,
+) -> AppResult<bool> {
+    if title.chars().count() > 200 || message.chars().count() > 1000 {
+        return Err("TMDB_QUERY_INVALID".into());
+    }
+    #[cfg(windows)]
+    let parent = app
+        .get_webview_window("main")
+        .and_then(|w| w.hwnd().ok())
+        .map_or(0, |h| h.0 as usize);
+    #[cfg(not(windows))]
+    let parent = 0;
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        crate::tmdb_credentials::delete(parent, &title, &message)
+    })
+    .await
+    .map_err(|_| "TMDB_CREDENTIAL_DIALOG_FAILED")??;
+    if result {
+        crate::tmdb_credentials::select(&app.state::<AppState>().database, "DEFAULT")?;
+    }
+    Ok(result)
 }
 #[tauri::command]
 pub fn tmdb_match_diagnostics(
@@ -95,8 +139,13 @@ pub fn tmdb_open_page(node_id: i64, state: State<'_, AppState>) -> AppResult<()>
     let binding = crate::tmdb::binding(&state.database.connect()?, node_id)?
         .filter(|binding| binding.active)
         .ok_or("TMDB_BINDING_REQUIRED")?;
-    player::open_external_url(&tmdb_movie_url(binding.movie.id)?)
+    player::open_external_url(&format!(
+        "https://www.themoviedb.org/{}/{}",
+        binding.movie.media_type.endpoint(),
+        binding.movie.id
+    ))
 }
+#[cfg(test)]
 fn tmdb_movie_url(id: i64) -> AppResult<String> {
     if id <= 0 {
         return Err("TMDB_INVALID_ID".into());
@@ -105,6 +154,9 @@ fn tmdb_movie_url(id: i64) -> AppResult<String> {
 }
 #[tauri::command]
 pub async fn tmdb_configure(title: String, message: String, app: AppHandle) -> AppResult<bool> {
+    if title.chars().count() > 200 || message.chars().count() > 1000 {
+        return Err("TMDB_QUERY_INVALID".into());
+    }
     #[cfg(windows)]
     let parent = app
         .get_webview_window("main")
@@ -118,7 +170,7 @@ pub async fn tmdb_configure(title: String, message: String, app: AppHandle) -> A
     .await
     .map_err(|_| "TMDB_CREDENTIAL_DIALOG_FAILED")??;
     if result {
-        crate::tmdb::invalidate_search_cache();
+        crate::tmdb_credentials::select(&app.state::<AppState>().database, "PERSONAL")?;
     }
     Ok(result)
 }
@@ -138,10 +190,16 @@ pub async fn tmdb_search(
     .map_err(|_| "TMDB_SEARCH_FAILED")?
 }
 #[tauri::command]
-pub async fn tmdb_detail(movie_id: i64, language: String) -> AppResult<crate::tmdb::Movie> {
-    tauri::async_runtime::spawn_blocking(move || crate::tmdb::detail(movie_id, &language))
-        .await
-        .map_err(|_| "TMDB_DETAIL_FAILED")?
+pub async fn tmdb_detail(
+    movie_id: i64,
+    language: String,
+    media_type: Option<crate::tmdb::MediaType>,
+) -> AppResult<crate::tmdb::Movie> {
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::tmdb::detail_for(media_type.unwrap_or_default(), movie_id, &language)
+    })
+    .await
+    .map_err(|_| "TMDB_DETAIL_FAILED")?
 }
 #[tauri::command]
 pub async fn tmdb_bind(
@@ -149,12 +207,21 @@ pub async fn tmdb_bind(
     movie_id: i64,
     language: String,
     expected_snapshot: String,
+    media_type: Option<crate::tmdb::MediaType>,
     state: State<'_, AppState>,
 ) -> AppResult<crate::tmdb::Binding> {
     let db = state.database.clone();
     let root = active_cover_cache_directory(&state)?;
     tauri::async_runtime::spawn_blocking(move || {
-        crate::tmdb::bind(&db, node_id, movie_id, &language, &expected_snapshot, &root)
+        crate::tmdb::bind_for(
+            &db,
+            node_id,
+            movie_id,
+            &language,
+            &expected_snapshot,
+            &root,
+            media_type.unwrap_or_default(),
+        )
     })
     .await
     .map_err(|_| "TMDB_BIND_FAILED")?
@@ -1100,51 +1167,12 @@ pub fn get_bangumi_search_prefill(
     if !node.can_bind_bangumi() {
         return Err("只有作品或包含视频的系列可以搜索 Bangumi。".into());
     }
-    let media_file_names = state
-        .database
-        .list_media(node_id)?
-        .into_iter()
-        .map(|file| file.file_name)
-        .collect::<Vec<_>>();
-    if node.media_kind.is_book() {
-        let parent = node
-            .parent_node_id
-            .and_then(|id| state.database.get_node(id).ok())
-            .map(|n| n.display_name);
-        let book_names = crate::comic_reader::detail(&state.database, node_id)?
-            .into_iter()
-            .take(32)
-            .map(|b| b.display_name)
-            .collect::<Vec<_>>();
-        let e = crate::comics::match_evidence_with_books(
-            &node.folder_name,
-            &node.display_name,
-            parent.as_deref(),
-            &book_names,
-        );
-        return Ok(BangumiSearchPrefill {
-            original_name: node.folder_name,
-            extracted_name: e.primary_title.clone(),
-            candidates: crate::auto_match::match_queries(&e),
-        });
-    }
-    if node.media_kind == LibraryMediaKind::LiveAction {
-        let evidence = title_extractor::movie_evidence_for_node(
-            &node,
-            &media_file_names,
-            &state.database.get_root(node.library_root_id)?,
-        );
-        return Ok(BangumiSearchPrefill {
-            original_name: node.folder_name,
-            extracted_name: evidence.primary_title.clone(),
-            candidates: crate::auto_match::match_queries(&evidence),
-        });
-    }
-    Ok(title_extractor::build_search_prefill(
-        &node.folder_name,
-        &node.display_name,
-        &media_file_names,
-    ))
+    let (_, evidence) = crate::media_scraper::indexed_evidence(&state.database, &node)?;
+    Ok(BangumiSearchPrefill {
+        original_name: node.folder_name,
+        extracted_name: evidence.primary_title.clone(),
+        candidates: crate::auto_match::match_queries(&evidence),
+    })
 }
 
 #[tauri::command]
@@ -1186,35 +1214,7 @@ pub async fn bind_bangumi(
     if !node.can_bind_bangumi() {
         return Err("只有作品或包含视频的系列可以绑定 Bangumi。".into());
     }
-    let media_file_names = database
-        .list_media(node_id)?
-        .into_iter()
-        .map(|file| file.file_name)
-        .collect::<Vec<_>>();
-    let parent_name = node
-        .parent_node_id
-        .and_then(|parent_id| database.get_node(parent_id).ok())
-        .map(|parent| parent.display_name);
-    let evidence = if node.media_kind.is_book() {
-        let book_names = crate::comic_reader::detail(&database, node_id)?
-            .into_iter()
-            .take(32)
-            .map(|b| b.display_name)
-            .collect::<Vec<_>>();
-        crate::comics::match_evidence_with_books(
-            &node.folder_name,
-            &node.display_name,
-            parent_name.as_deref(),
-            &book_names,
-        )
-    } else {
-        title_extractor::build_match_evidence(
-            &node.folder_name,
-            &node.display_name,
-            parent_name.as_deref(),
-            &media_file_names,
-        )
-    };
+    let (_, evidence) = crate::media_scraper::indexed_evidence(&database, &node)?;
     let confirmed_aliases = title_extractor::confirmed_alias_candidates(&evidence);
     // Detail enrichment improves multilingual metadata, but the confirmed search subject remains
     // authoritative when the optional detail request is unavailable.
@@ -1797,12 +1797,20 @@ pub async fn test_mpv(
             }
             PathBuf::from(path)
         }
-        _ => state
-            .database
-            .get_settings(&state.default_cover_cache_dir)?
-            .mpv_path
-            .map(PathBuf::from)
-            .ok_or_else(|| "请先选择播放器可执行文件。".to_string())?,
+        _ => match player::resolve(
+            &state
+                .database
+                .get_settings(&state.default_cover_cache_dir)?,
+        )? {
+            Some(path) => path,
+            None => {
+                return Ok(PlayerTestResult {
+                    ok: true,
+                    message: "SYSTEM".into(),
+                    version: Some("SYSTEM".into()),
+                })
+            }
+        },
     };
     tauri::async_runtime::spawn_blocking(move || player::test(&selected))
         .await
@@ -1812,13 +1820,16 @@ pub async fn test_mpv(
 #[tauri::command]
 pub fn play_media(media_file_id: i64, state: State<'_, AppState>) -> AppResult<()> {
     let media = state.database.get_media_file(media_file_id)?;
-    let mpv = state
+    let settings = state
         .database
-        .get_settings(&state.default_cover_cache_dir)?
-        .mpv_path
-        .map(PathBuf::from)
-        .ok_or_else(|| "请先在设置中选择播放器可执行文件。".to_string())?;
-    launch_media_and_record_watch(&state.database, &media, &mpv, player::play)
+        .get_settings(&state.default_cover_cache_dir)?;
+    let mpv = player::resolve(&settings)?;
+    launch_media_and_record_watch(
+        &state.database,
+        &media,
+        mpv.as_deref().unwrap_or(Path::new("")),
+        |_, source| player::play_selected(mpv.as_deref(), source),
+    )
 }
 
 fn launch_media_and_record_watch<F>(
@@ -2357,6 +2368,7 @@ mod tests {
         let mut settings = AppSettings {
             comic_reader: Default::default(),
             mpv_path: Some("C:\\Player\\player.exe".into()),
+            player_mode: crate::models::PlayerMode::Custom,
             default_view_mode: crate::models::ViewMode::Grid,
             video_extensions: vec!["mkv".into()],
             bangumi_search_enabled: true,

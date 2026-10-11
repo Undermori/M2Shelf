@@ -123,6 +123,7 @@ def check_migrations() -> None:
         "0024_artbook_matching_policy.sql",
         "0025_smart_mixed.sql",
         "0026_text_reader_positions.sql",
+        "0027_scraper_metadata.sql",
     ]
     if [path.name for path in migration_paths] != expected:
         fail(f"expected exactly migrations {expected}, got {[p.name for p in migration_paths]}")
@@ -872,6 +873,7 @@ def check_source_safety() -> None:
         "delete_favorite_folder",
         "batch_remove_nodes_from_favorite",
         "remove_comic_bookmark",
+        "tmdb_delete_personal",  # Explicitly confirmed Credential Manager deletion; never media.
     }
     dangerous_names = [
         name
@@ -1060,7 +1062,8 @@ def check_bangumi_contract() -> None:
             "automatic_threshold: 82",
             "direct_threshold: 60",
             "MatchConfidence::Direct",
-            "candidate.primary_query_rank == Some(0)",
+            "best.primary_exact || best.alternate_exact",
+            "if !ambiguous",
             "best.strong_conflicts.is_empty()",
             "save_binding_if_absent",
             "save_rematched_binding_if_unchanged",
@@ -1217,7 +1220,7 @@ def check_next_phase_contract() -> None:
         "raw native errors retained only as cause": (frontend_api, "causeValue"),
         "localized dialog failures": (frontend_api, 'translateActive("error.dialogFailed")'),
         "localized cover failure toast": (app, 't("error.coverFailed")'),
-        "localized player test result": (settings_page, 't("settings.playerUnavailable")'),
+        "localized player test result": (read("src/components/PlayerSettings.tsx"), "'settings.playerUnavailable'"),
         "localized unknown resource label": (frontend_format, 'translateActive("resource.other")'),
         "English binding title model": (frontend_models, "providerTitleEn"),
         "Japanese binding title model": (frontend_models, "providerTitleJa"),
@@ -2027,10 +2030,13 @@ def check_brand_release_and_icons() -> None:
     )
     if any(token not in release_workflow for token in workflow_contract):
         fail("Windows CI workflow lacks a read-only unsigned-candidate, provenance, build, or quality gate")
+    elif set(re.findall(r"secrets\.([A-Za-z0-9_]+)", release_workflow)) != {
+        "M2SHELF_TMDB_DEFAULT_READ_ACCESS_TOKEN"
+    } or len(re.findall(r"secrets[.\[]", release_workflow)) != 1:
+        fail("Windows CI may reference only the default TMDb build credential, never update signing secrets")
     elif any(
         token in release_workflow
         for token in (
-            "secrets.",
             "M2SHELF_UPDATE_PRIVATE_KEY",
             "UPDATE_SIGNING_KEY",
             "generate_update_manifest.ps1",
@@ -2040,12 +2046,12 @@ def check_brand_release_and_icons() -> None:
             "--clobber",
         )
     ):
-        fail("Windows CI candidate workflow may sign, publish, use a secret, or request write access")
+        fail("Windows CI candidate workflow may sign, publish, use a signing key, or request write access")
     elif re.search(r"(?i)[A-Z]:\\Users\\[^\\\s]+", release_workflow):
         fail("Windows GitHub Release workflow contains a literal user-profile path")
     else:
         passed(
-            "read-only Windows CI produces an attested unsigned provenance-bound candidate without secrets"
+            "read-only Windows CI produces an attested unsigned candidate with only the default TMDb input"
         )
 
     offline_publisher = read("scripts/publish_signed_release.ps1")
@@ -2154,7 +2160,8 @@ def check_brand_release_and_icons() -> None:
         "CARGO_ENCODED_RUSTFLAGS",
         "--remap-path-prefix=",
         "Updater public key must contain exactly 32 Ed25519 bytes",
-        "npm run tauri build -- --bundles $Bundles",
+        "npm run tauri build -- --no-bundle",
+        "npm run tauri bundle -- --bundles nsis --no-sign",
         "cargo build --manifest-path src-tauri/Cargo.toml --release --locked --bin M2ShelfUpdater",
         '$installerName = "${productName}_${version}_x64-setup.exe"',
         '"M2Shelf-Setup-$version-x64.exe"',
@@ -2177,9 +2184,12 @@ def check_brand_release_and_icons() -> None:
         fail("public Windows release builder lacks path remapping, x64 identity, or stable NSIS output guards")
     elif not (
         release_builder.find("Push-Location $repoRoot")
-        < release_builder.find("npm run tauri build -- --bundles $Bundles")
+        < release_builder.find("npm run tauri build -- --no-bundle")
         < release_builder.find(
             "cargo build --manifest-path src-tauri/Cargo.toml --release --locked --bin M2ShelfUpdater"
+        )
+        < release_builder.find(
+            "npm run tauri bundle -- --bundles nsis --no-sign"
         )
         < release_builder.find(
             "} finally {",
@@ -2188,7 +2198,7 @@ def check_brand_release_and_icons() -> None:
             ),
         )
     ):
-        fail("M2ShelfUpdater must be built after Tauri inputs inside the same path-remapping scope")
+        fail("native payloads must finish building before NSIS bundling inside the path-remapping scope")
     elif re.search(r"(?i)[A-Z]:\\Users\\[^\\\s]+", release_builder):
         fail("public Windows release builder must not contain a literal user-profile path")
     else:

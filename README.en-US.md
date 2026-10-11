@@ -10,7 +10,7 @@ M²Shelf is a Windows app for local anime, movies/TV, comics, ebooks, doujinshi 
 
 - Multiple libraries with recursive and incremental scans. Recognize folders or individual files; smart mixed recognition also organizes books into series, standalone books and categories.
 - Poster and list views, cross-library browsing, media/tag filters, sorting, and search across local names, filenames and multilingual Bangumi titles.
-- Automatic or manual Bangumi matching within each library's media type. TMDb movie matching handles bilingual titles, release years and common release filenames, with original-language posters. Correct bindings, display names and covers manually.
+- Automatic or manual Bangumi matching within each library's media type. TMDb supports movies and TV series with the default service or a personal token. It handles bilingual titles, years, season/episode information and common release filenames, with original-language posters. Correct bindings, display names and covers manually.
 - Custom tags, named favorites, batch editing, and hide/restore actions.
 - Launch an external video player; browse attachments and reveal files in Windows Explorer.
 - Built-in comic and text readers with progress, bookmarks and recently opened items.
@@ -29,15 +29,15 @@ MOBI/AZW3 supports unencrypted MOBI6/KF8. DRM, ordinary ZIP, RAR and 7Z are not 
 
 ## Download
 
-**M²Shelf 0.5.13 · Windows x64**
+**M²Shelf 0.5.14 · Windows x64**
 
-- [Installer](https://github.com/Undermori/M2Shelf/releases/download/v0.5.13/M2Shelf-Setup-0.5.13-x64.exe)
-- [Portable ZIP](https://github.com/Undermori/M2Shelf/releases/download/v0.5.13/M2Shelf-Portable-0.5.13-x64.zip)
+- [Installer](https://github.com/Undermori/M2Shelf/releases/download/v0.5.14/M2Shelf-Setup-0.5.14-x64.exe)
+- [Portable ZIP](https://github.com/Undermori/M2Shelf/releases/download/v0.5.14/M2Shelf-Portable-0.5.14-x64.zip)
 - [Latest release](https://github.com/Undermori/M2Shelf/releases/latest) · [All releases](https://github.com/Undermori/M2Shelf/releases)
 
 Extract the complete Portable ZIP before running `M2Shelf.exe`. The database, settings and default cache use Windows application data. Replace the complete payload when upgrading an older five-file Portable build.
 
-Download 0.5.13 manually; in-app updates are not available for this release.
+Check for updates in Settings, or download the installer or Portable ZIP manually.
 
 Microsoft Edge WebView2 Runtime is required. SmartScreen may warn about an unknown publisher.
 

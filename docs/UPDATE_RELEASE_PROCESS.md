@@ -13,6 +13,7 @@
 - 版本只允许严格高于当前版本的规范 `major.minor.patch`；
 - 每个资产同时校验固定文件名、长度、SHA-256 和 Ed25519；签名绑定应用 ID、版本、平台、长度和摘要；
 - GitHub Actions 不接触生产私钥，只构建无签名候选；
+- Actions 仅允许仓库 Secret `M2SHELF_TMDB_DEFAULT_READ_ACCESS_TOKEN` 提供默认 TMDb 构建输入，使用 runner 临时文件并在构建结束清理；它与生产更新签名密钥完全分离，见 D67；
 - 生产 seed 只以密码加密的 `M2Shelf-Production-Key/encrypted-private-key.m2key` 存放在可移动 USB 中；日常开发环境不保存其副本。容器不绑定 Windows 用户或单台电脑，密码只在签名工具中交互输入；
 - 已发布 Release 视为不可变。修复错误发布必须提升版本，不能替换原资产。
 
@@ -60,7 +61,7 @@ M2ShelfPortableKeyTool.exe verify-key `
 1. 确认 `package.json`、lockfile、`src-tauri/Cargo.toml`、Cargo lockfile 和 `src-tauri/tauri.conf.json` 版本完全一致，且为稳定规范 SemVer；版本变更后同时刷新并审查 `tools/portable-key-tool/Cargo.lock`，因为它锁定了当前 `m2shelf_lib` 路径依赖。刷新锁文件不执行任何密钥命令。
 2. 更新四语言 release notes，并确认所有长期文档与源码一致。
 3. 在干净工作树运行 `AGENTS.md` 的完整质量门禁。
-4. 使用 `scripts/build_windows_release.ps1 -Bundles nsis` 与 `scripts/build_portable.ps1` 做一次本地候选验证；检查版本、x64、图标、隐私扫描、Portable 八文件集合、helper identity 和启动。
+4. 使用 `scripts/build_windows_release.ps1 -Bundles nsis` 与 `scripts/build_portable.ps1` 做一次本地候选验证；检查版本、x64、图标、隐私扫描、Portable 八文件集合、helper identity 和启动。Windows 构建顺序为 Tauri `build --no-bundle`、锁定构建 helper、Tauri `bundle --bundles nsis --no-sign`，避免封装后再次编译原生载荷；解出 NSIS 内的 helper、MOBI worker、源码包与声明，逐字节核对 Portable 中的对应文件。主程序仅允许单个 `__TAURI_BUNDLE_TYPE_VAR_NSS` 与 `__TAURI_BUNDLE_TYPE_VAR_UNK` 分发标记的三字节差异，统一该标记后必须逐字节一致。
 5. 提交并推送目标 commit，在该 commit 创建唯一 tag `v{version}`，再推送 tag。不要移动或复用发布 tag。
 6. 发布前审计完整可达 Git 历史的 author/committer；公开仓库只允许 GitHub noreply 地址。发现真实邮箱时必须先按经用户确认的历史清理流程处理并复核远端，再创建 release tag。
 

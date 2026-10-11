@@ -22,7 +22,32 @@ use windows_sys::Win32::{
     },
 };
 
-use crate::{db::AppResult, models::PlayerTestResult};
+use crate::{
+    db::AppResult,
+    models::{AppSettings, PlayerMode, PlayerTestResult},
+};
+
+pub fn resolve(settings: &AppSettings) -> AppResult<Option<std::path::PathBuf>> {
+    let path = match settings.player_mode {
+        PlayerMode::System => return Ok(None),
+        PlayerMode::Custom => settings
+            .mpv_path
+            .as_deref()
+            .filter(|p| !p.trim().is_empty())
+            .map(std::path::PathBuf::from)
+            .ok_or("PLAYER_CUSTOM_MISSING")?,
+    };
+    validate_executable(&path).map_err(|_| "PLAYER_CUSTOM_MISSING".to_string())?;
+    Ok(Some(path))
+}
+
+pub fn play_selected(executable: Option<&Path>, media: &Path) -> AppResult<()> {
+    match executable {
+        Some(executable) => play(executable, media),
+        None if media.is_absolute() => open_with_default_application(&shell_path(media)),
+        None => Err("PLAYER_MEDIA_MISSING".into()),
+    }
+}
 
 pub fn test(path: &Path) -> AppResult<PlayerTestResult> {
     validate_executable(path)?;
@@ -35,13 +60,18 @@ pub fn test(path: &Path) -> AppResult<PlayerTestResult> {
                 .map(|name| name.to_string_lossy().into_owned()),
         });
     }
-    let mut child = match Command::new(path)
+    let mut command = Command::new(path);
+    command
         .arg("--version")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
+        .stderr(Stdio::piped());
+    #[cfg(target_os = "windows")]
     {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000);
+    }
+    let mut child = match command.spawn() {
         Ok(child) => child,
         Err(error) => {
             return Ok(PlayerTestResult {
@@ -51,24 +81,26 @@ pub fn test(path: &Path) -> AppResult<PlayerTestResult> {
             });
         }
     };
+    // Drain both pipes concurrently. A noisy or misconfigured player must not deadlock
+    // the five-second probe, grow IPC indefinitely or supply a diagnostic as its version.
+    let stdout = probe_output(child.stdout.take().expect("piped stdout"));
+    let stderr = probe_output(child.stderr.take().expect("piped stderr"));
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         match child.try_wait() {
             Ok(Some(status)) => {
-                let mut stdout = String::new();
-                if let Some(mut stream) = child.stdout.take() {
-                    let _ = stream.read_to_string(&mut stdout);
-                }
-                let version = stdout.lines().next().map(str::to_string);
-                return Ok(PlayerTestResult {
-                    ok: status.success(),
-                    message: if status.success() {
-                        "播放器可正常启动。".into()
-                    } else {
-                        format!("播放器退出代码：{status}")
-                    },
-                    version,
-                });
+                let stdout = stdout
+                    .recv_timeout(Duration::from_millis(150))
+                    .unwrap_or_default();
+                let stderr = stderr
+                    .recv_timeout(Duration::from_millis(150))
+                    .unwrap_or_default();
+                return Ok(probe_result(
+                    status.success(),
+                    &status.to_string(),
+                    &stdout,
+                    &stderr,
+                ));
             }
             Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(50)),
             Ok(None) => {
@@ -90,6 +122,54 @@ pub fn test(path: &Path) -> AppResult<PlayerTestResult> {
                 });
             }
         }
+    }
+}
+
+fn probe_output(stream: impl Read + Send + 'static) -> std::sync::mpsc::Receiver<Vec<u8>> {
+    let (send, receive) = std::sync::mpsc::channel();
+    thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let _ = stream.take(8192).read_to_end(&mut bytes);
+        let _ = send.send(bytes);
+    });
+    receive
+}
+
+fn probe_result(success: bool, exit: &str, stdout: &[u8], stderr: &[u8]) -> PlayerTestResult {
+    let stdout = String::from_utf8_lossy(stdout);
+    let stderr = String::from_utf8_lossy(stderr);
+    let config_error = [&stdout, &stderr]
+        .iter()
+        .any(|text| text.contains("Error parsing option"));
+    let version = stdout
+        .lines()
+        .chain(stderr.lines())
+        .map(str::trim)
+        .find(|line| {
+            line.len() <= 180
+                && ["mpv ", "mpvnet ", "VLC media player "]
+                    .iter()
+                    .any(|prefix| line.starts_with(prefix))
+        })
+        .map(str::to_owned);
+    let ok = success && !config_error;
+    PlayerTestResult {
+        ok,
+        version,
+        message: if ok {
+            "播放器可正常启动。".into()
+        } else {
+            format!(
+                "{}\nExit: {exit}\n{}\n{}",
+                if config_error {
+                    "PLAYER_CONFIG_ERROR"
+                } else {
+                    "PLAYER_TEST_FAILED"
+                },
+                stdout.trim(),
+                stderr.trim()
+            )
+        },
     }
 }
 
@@ -356,6 +436,50 @@ mod tests {
     use windows_sys::Win32::System::Com::COINIT_MULTITHREADED;
 
     #[test]
+    fn system_default_and_legacy_modes_preserve_explicit_custom_path() {
+        let temp = tempfile::tempdir().unwrap();
+        let db = crate::db::Database::new(temp.path().join("settings.db"));
+        db.migrate().unwrap();
+        let mut settings = db.get_settings(temp.path()).unwrap();
+        assert_eq!(settings.player_mode, PlayerMode::System);
+        assert!(resolve(&settings).unwrap().is_none());
+        settings.player_mode = PlayerMode::Custom;
+        settings.mpv_path = Some(temp.path().join("missing.exe").to_string_lossy().into());
+        assert_eq!(resolve(&settings).unwrap_err(), "PLAYER_CUSTOM_MISSING");
+        settings.player_mode = PlayerMode::System;
+        assert!(resolve(&settings).unwrap().is_none());
+        db.update_settings(&settings, temp.path()).unwrap();
+        assert_eq!(
+            db.get_settings(temp.path()).unwrap().mpv_path,
+            settings.mpv_path
+        );
+        let connection = rusqlite::Connection::open(temp.path().join("settings.db")).unwrap();
+        for legacy in ["AUTO", "BUNDLED"] {
+            connection
+                .execute(
+                    "UPDATE settings SET value=?1 WHERE key='player_mode'",
+                    [legacy],
+                )
+                .unwrap();
+            let restored = db.get_settings(temp.path()).unwrap();
+            assert_eq!(restored.player_mode, PlayerMode::System);
+            assert_eq!(restored.mpv_path, settings.mpv_path);
+            assert!(resolve(&restored).unwrap().is_none());
+            assert_eq!(
+                serde_json::from_str::<PlayerMode>(&format!("\"{legacy}\"")).unwrap(),
+                PlayerMode::System
+            );
+        }
+        connection
+            .execute("DELETE FROM settings WHERE key='player_mode'", [])
+            .unwrap();
+        assert_eq!(
+            db.get_settings(temp.path()).unwrap().player_mode,
+            PlayerMode::Custom
+        );
+    }
+
+    #[test]
     fn shell_com_apartment_balances_nested_initialization() {
         thread::spawn(|| {
             let outer = ShellComApartment::new().unwrap();
@@ -401,6 +525,40 @@ mod tests {
         let arguments = command.get_args().collect::<Vec<_>>();
 
         assert_eq!(arguments, vec![media.as_os_str()]);
+    }
+
+    #[test]
+    fn configuration_output_is_not_a_version_or_a_success() {
+        let result = probe_result(
+            true,
+            "0",
+            b"Error parsing option screenshot-flags (option not found)\nmpv v0.41.0\n",
+            b"",
+        );
+        assert!(!result.ok);
+        assert_eq!(result.version.as_deref(), Some("mpv v0.41.0"));
+        assert!(result.message.starts_with("PLAYER_CONFIG_ERROR"));
+        assert!(result.message.contains("screenshot-flags"));
+        let stderr = probe_result(
+            false,
+            "1",
+            b"",
+            b"Error parsing option screenshot-flags (option not found)",
+        );
+        assert!(stderr.version.is_none());
+        assert!(stderr.message.contains("screenshot-flags"));
+        let success = probe_result(true, "0", b"startup warning\nmpv v0.41.0\n", b"");
+        assert!(success.ok);
+        assert_eq!(success.version.as_deref(), Some("mpv v0.41.0"));
+    }
+
+    #[test]
+    fn probe_capture_is_bounded() {
+        let capture = probe_output(std::io::Cursor::new(vec![b'x'; 100_000]));
+        assert_eq!(
+            capture.recv_timeout(Duration::from_secs(1)).unwrap().len(),
+            8192
+        );
     }
 
     #[test]

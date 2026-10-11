@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use unicode_normalization::UnicodeNormalization;
 
+#[cfg(test)]
 use crate::models::BangumiSearchPrefill;
 
 const MAX_CONFIRMED_ALIASES: usize = 32;
@@ -80,6 +81,19 @@ pub fn extract_search_keyword(raw_name: &str) -> String {
 /// Movie queries share the existing cleaner. Locate a release boundary before removing codecs:
 /// otherwise unknown groups, audio-channel fragments and language names can strand the year.
 pub fn movie_query_title(raw: &str) -> (String, Option<i32>) {
+    let parsed = m2shelf_media_parser::parse(raw, m2shelf_media_parser::Kind::LiveAction);
+    // Broadcast/bilingual aliases still use the shared legacy formatter; release and ordinal
+    // recognition comes from the common semantic pass, not a separate provider cleaner.
+    if (!parsed.release_tags.is_empty() || parsed.year.is_some())
+        && movie_broadcast_title(&raw.nfkc().collect::<String>()).is_none()
+        && !parsed.display_title.is_empty()
+    {
+        let (title, _) = extract_keyword_with_mode(&parsed.display_title, true);
+        return (title, parsed.year);
+    }
+    movie_query_title_compatibility(raw)
+}
+fn movie_query_title_compatibility(raw: &str) -> (String, Option<i32>) {
     let normalized = normalize_release_separators(&normalize_release_brackets(
         &strip_known_extension(raw.trim()).nfkc().collect::<String>(),
     ));
@@ -617,6 +631,7 @@ pub fn normalize_title_for_match(value: &str) -> String {
         .collect::<String>()
 }
 
+#[cfg(test)]
 pub fn build_search_prefill(
     folder_name: &str,
     display_name: &str,

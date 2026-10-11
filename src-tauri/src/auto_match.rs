@@ -111,6 +111,7 @@ pub enum MatchConfidence {
 pub struct MatchDecision {
     pub confidence: MatchConfidence,
     pub best: Option<CandidateScore>,
+    pub outcome: &'static str,
 }
 
 #[derive(Debug, Clone)]
@@ -554,27 +555,9 @@ where
         .parent_node_id
         .and_then(|parent_id| database.get_node(parent_id).ok())
         .map(|parent| parent.display_name);
-    let evidence = if node.media_kind.is_book() {
-        crate::comics::match_evidence_with_books(
-            &node.folder_name,
-            &node.display_name,
-            parent_name.as_deref(),
-            &media_file_names,
-        )
-    } else if node.media_kind == crate::models::LibraryMediaKind::LiveAction {
-        title_extractor::movie_evidence_for_node(
-            node,
-            &media_file_names,
-            &database.get_root(node.library_root_id)?,
-        )
-    } else {
-        title_extractor::build_match_evidence(
-            &node.folder_name,
-            &node.display_name,
-            parent_name.as_deref(),
-            &media_file_names,
-        )
-    };
+    let evidence =
+        crate::media_scraper::evidence(database, node, &media_file_names, parent_name.as_deref())?;
+
     if write_mode == MatchWriteMode::IfAbsent
         && !database.get_root(node.library_root_id)?.auto_bangumi
     {
@@ -582,7 +565,7 @@ where
     }
     // Movie routing precedes ALL Bangumi search/alias/detail work, including when its title
     // is uncertain or TMDb is unavailable. Existing provider choices remain authoritative.
-    if crate::tmdb::automatic_movie_source(node, &evidence, &media_file_names) {
+    if crate::tmdb::indexed_source(database, node, &evidence, &media_file_names)? {
         if initial_binding.is_some() {
             return Ok(AutoMatchNodeResult::AlreadyBound);
         }
@@ -590,7 +573,8 @@ where
             return Ok(AutoMatchNodeResult::Unmatched);
         };
         if run_cache.owned_file_revisions.get(&node.library_root_id) != Some(&initial_root_revision)
-            || !crate::tmdb::automatic_evidence(node, &evidence, &media_file_names)
+            || evidence.evidence_quality < 40
+            || !crate::title_extractor::is_safe_movie_query(&evidence.primary_title)
         {
             crate::tmdb::diagnostic(database, node, &evidence, "ineligible");
             return Ok(AutoMatchNodeResult::Unmatched);
@@ -610,7 +594,55 @@ where
     if run_cache.bangumi_search_error.is_some() {
         return Ok(AutoMatchNodeResult::Unmatched);
     }
-    let assessment = if let Some(error) = &run_cache.bangumi_search_error {
+    let parsed = crate::media_scraper::indexed_parse(database, node, &media_file_names)?;
+    if parsed
+        .warnings
+        .iter()
+        .any(|v| matches!(v.as_str(), "PROVIDER_ID_CONFLICT" | "YEAR_CONFLICT"))
+    {
+        crate::tmdb::diagnostic_for(database, node, &evidence, "evidence-conflict", true);
+        return Ok(AutoMatchNodeResult::Unmatched);
+    }
+    let explicit = parsed.explicit_provider_ids.bangumi;
+    let explicit_subject = if let Some(id) = explicit {
+        match run_cache.plan_detail_request(id) {
+            DetailRequestPlan::Cached(result) => result.ok(),
+            DetailRequestPlan::Fetch => {
+                let value = bangumi::explicit_subject(id, node.media_kind);
+                run_cache.store_detail_result(id, value.clone());
+                value.ok()
+            }
+            DetailRequestPlan::Exhausted => None,
+        }
+    } else {
+        None
+    };
+    let assessment = if let Some(subject) =
+        explicit_subject.filter(|v| node.media_kind.accepts_subject(v.subject_type))
+    {
+        let candidate = score_candidate_for_kind(
+            &evidence,
+            &subject,
+            0,
+            &MatchWeights::default(),
+            node.media_kind,
+        );
+        let confidence = if candidate.strong_conflicts.is_empty() && evidence.evidence_quality >= 40
+        {
+            MatchConfidence::High
+        } else {
+            MatchConfidence::Low
+        };
+        Ok(OnlineAssessment::Decision(Box::new(MatchDecision {
+            confidence,
+            best: Some(candidate),
+            outcome: if confidence == MatchConfidence::Low {
+                "low-confidence"
+            } else {
+                "matched"
+            },
+        })))
+    } else if let Some(error) = &run_cache.bangumi_search_error {
         Err(error.clone())
     } else {
         assess_evidence_online_for_kind(
@@ -625,7 +657,17 @@ where
     let decision = match assessment {
         Ok(OnlineAssessment::Decision(decision)) => *decision,
         Ok(OnlineAssessment::Cancelled) => return Ok(AutoMatchNodeResult::Cancelled),
-        Err(error) => return Err(error),
+        Err(error) => {
+            let outcome = if error.contains("429") {
+                "rate-limited"
+            } else if error.contains("401") || error.contains("403") {
+                "unauthorized"
+            } else {
+                "request-failed"
+            };
+            crate::tmdb::diagnostic_for(database, node, &evidence, outcome, true);
+            return Err(error);
+        }
     };
     if matches!(
         node.media_kind,
@@ -635,6 +677,7 @@ where
         .as_ref()
         .is_some_and(|candidate| candidate.primary_exact || candidate.alternate_exact)
     {
+        crate::tmdb::diagnostic_for(database, node, &evidence, "low-confidence", true);
         return Ok(AutoMatchNodeResult::Unmatched);
     }
     let subject = match decision.confidence {
@@ -642,7 +685,10 @@ where
             .best
             .map(|candidate| candidate.subject)
             .ok_or_else(|| "合格匹配缺少 Bangumi 候选。".to_string())?,
-        MatchConfidence::Low => return Ok(AutoMatchNodeResult::Unmatched),
+        MatchConfidence::Low => {
+            crate::tmdb::diagnostic_for(database, node, &evidence, decision.outcome, true);
+            return Ok(AutoMatchNodeResult::Unmatched);
+        }
     };
     if is_cancelled() {
         return Ok(AutoMatchNodeResult::Cancelled);
@@ -692,7 +738,7 @@ where
         return Ok(AutoMatchNodeResult::Matched);
     }
 
-    download_and_commit_cover(
+    let result = download_and_commit_cover(
         &cache_operation,
         database,
         node.id,
@@ -700,7 +746,24 @@ where
         cache_root,
         run_cache,
         is_cancelled,
-    )
+    );
+    if let Ok(
+        outcome @ (AutoMatchNodeResult::Matched | AutoMatchNodeResult::MatchedWithCoverError),
+    ) = &result
+    {
+        crate::tmdb::diagnostic_for(
+            database,
+            node,
+            &evidence,
+            if matches!(outcome, AutoMatchNodeResult::MatchedWithCoverError) {
+                "matched-cover-failed"
+            } else {
+                "matched"
+            },
+            true,
+        );
+    }
+    result
 }
 
 fn tmdb_fallback<P: crate::tmdb::AutomaticProvider, C: Fn() -> bool>(
@@ -946,6 +1009,7 @@ where
         return Ok(OnlineAssessment::Decision(Box::new(MatchDecision {
             confidence: MatchConfidence::Low,
             best: None,
+            outcome: "low-confidence",
         })));
     }
 
@@ -994,6 +1058,7 @@ where
         return Ok(OnlineAssessment::Decision(Box::new(MatchDecision {
             confidence: MatchConfidence::Low,
             best: None,
+            outcome: "no-results",
         })));
     }
 
@@ -1296,19 +1361,7 @@ fn score_recalled_candidate_for_kind(
             .score
             .max((exact_weight + weights.similarity_max).clamp(0, 100));
     }
-    // Bangumi has already evaluated the exact cleaned primary query here. When its first eligible
-    // result has no hard conflict, preserve that provider signal instead of leaving the item in
-    // the former Pending gap merely because a fan translation is absent from provider aliases.
-    if candidate.primary_query_rank == Some(0)
-        && !matches!(
-            kind,
-            crate::models::LibraryMediaKind::Doujin | crate::models::LibraryMediaKind::Artbook
-        )
-        && evidence.evidence_quality >= 40
-        && !title_extractor::is_generic_title(&evidence.primary_title)
-    {
-        score.score = score.score.max(weights.direct_threshold);
-    }
+
     score
 }
 
@@ -1657,16 +1710,28 @@ pub fn decide_scores(
 ) -> MatchDecision {
     sort_scores(&mut candidates);
     let best = candidates.first().cloned();
+    let ambiguous = candidates.iter().skip(1).any(|v| {
+        best.as_ref().is_some_and(|best| {
+            v.subject.subject_id != best.subject.subject_id
+                && v.strong_conflicts.is_empty()
+                && v.score >= weights.direct_threshold
+                && (v.primary_exact || v.alternate_exact)
+        })
+    });
     let confidence = match best.as_ref() {
         Some(best)
-            if best.strong_conflicts.is_empty()
+            if !ambiguous
+                && (best.primary_exact || best.alternate_exact)
+                && best.strong_conflicts.is_empty()
                 && (!is_container || best.primary_exact)
                 && best.score >= weights.automatic_threshold =>
         {
             MatchConfidence::High
         }
         Some(best)
-            if best.strong_conflicts.is_empty()
+            if !ambiguous
+                && (best.primary_exact || best.alternate_exact)
+                && best.strong_conflicts.is_empty()
                 && (!is_container || best.primary_exact)
                 && best.score >= weights.direct_threshold =>
         {
@@ -1674,7 +1739,20 @@ pub fn decide_scores(
         }
         _ => MatchConfidence::Low,
     };
-    MatchDecision { confidence, best }
+    let outcome = if ambiguous {
+        "multiple-candidates"
+    } else if best.is_none() {
+        "no-results"
+    } else if confidence == MatchConfidence::Low {
+        "low-confidence"
+    } else {
+        "matched"
+    };
+    MatchDecision {
+        confidence,
+        best,
+        outcome,
+    }
 }
 
 fn sort_scores(scores: &mut [CandidateScore]) {
@@ -1799,6 +1877,7 @@ mod tests {
         movies: AppResult<Vec<crate::tmdb::Movie>>,
         on_search: Option<Box<dyn FnMut()>>,
         details_override: Option<Vec<crate::tmdb::Movie>>,
+        missing_explicit_id: Option<i64>,
         write_cover: bool,
         cover_error: Option<String>,
         on_cover: Option<Box<dyn FnMut()>>,
@@ -1809,6 +1888,7 @@ mod tests {
                 available: true,
                 calls: [0; 4],
                 movies: Ok(vec![crate::tmdb::Movie {
+                    media_type: crate::tmdb::MediaType::Movie,
                     id: 27205,
                     title: "Inception".into(),
                     original_title: "Inception".into(),
@@ -1823,6 +1903,7 @@ mod tests {
                 }]),
                 on_search: None,
                 details_override: None,
+                missing_explicit_id: None,
                 write_cover: false,
                 cover_error: None,
                 on_cover: None,
@@ -1843,6 +1924,9 @@ mod tests {
             _: &str,
         ) -> AppResult<Vec<crate::tmdb::Movie>> {
             self.calls[1] += 1;
+            if query.starts_with("Serial") {
+                return Ok(Vec::new());
+            }
             assert_eq!(query, "Inception");
             assert_eq!(year, Some(2010));
             if let Some(callback) = &mut self.on_search {
@@ -1852,6 +1936,9 @@ mod tests {
         }
         fn detail(&mut self, id: i64, _: &str) -> AppResult<crate::tmdb::Movie> {
             self.calls[2] += 1;
+            if self.missing_explicit_id == Some(id) {
+                return Err("TMDB_HTTP_404".into());
+            }
             self.details_override
                 .as_ref()
                 .unwrap_or(self.movies.as_ref().unwrap())
@@ -1923,6 +2010,64 @@ mod tests {
             );
         }
         (temp, db, node, run)
+    }
+
+    #[test]
+    fn invalid_explicit_tmdb_id_falls_back_to_title_without_disabling_run() {
+        let _serial = crate::tmdb::MOVIE_TEST_GATE
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        for mode in ["FOLDER", "VIDEO_FILE"] {
+            let (_temp, db, node, mut run) = automatic_movie_fixture(mode);
+            db.connect().unwrap().execute("UPDATE nodes SET folder_name='Inception (2010) [tmdbid=99999]',display_name='Inception (2010) [tmdbid=99999]' WHERE id=?1",[node.id]).unwrap();
+            let node = db.get_node(node.id).unwrap();
+            let mut provider = MovieFixtureProvider::reliable();
+            provider.missing_explicit_id = Some(99999);
+            let result = auto_match_node_with_tmdb(
+                &db,
+                &node,
+                Err("synthetic"),
+                MatchWriteMode::IfAbsent,
+                &mut run,
+                &|| false,
+                &mut provider,
+            )
+            .unwrap();
+            assert!(matches!(
+                result,
+                AutoMatchNodeResult::Matched | AutoMatchNodeResult::MatchedWithCoverError
+            ));
+            assert_eq!(provider.calls[1], 1);
+            assert_eq!(provider.calls[2], 2);
+            assert_eq!(
+                db.get_node(node.id).unwrap().tmdb_binding.unwrap().movie.id,
+                27205
+            );
+        }
+    }
+
+    #[test]
+    fn no_results_low_confidence_and_ambiguous_bangumi_have_distinct_outcomes() {
+        let weights = MatchWeights::default();
+        assert_eq!(decide_scores(vec![], false, &weights).outcome, "no-results");
+        let evidence = evidence("Example");
+        let low = score_candidate(&evidence, &subject(1, "Unrelated", None), 0, &weights);
+        assert_eq!(
+            decide_scores(vec![low], false, &weights).outcome,
+            "low-confidence"
+        );
+        let first = score_candidate(&evidence, &subject(2, "Example", None), 0, &weights);
+        let second = score_candidate(&evidence, &subject(3, "Example", None), 1, &weights);
+        assert_eq!(
+            decide_scores(vec![first, second], false, &weights).outcome,
+            "multiple-candidates"
+        );
+        let (_temp, db, node, _run) = automatic_movie_fixture("FOLDER");
+        crate::tmdb::diagnostic_for(&db, &node, &evidence, "multiple-candidates", true);
+        let stored = crate::tmdb::last_match(&db, node.id).unwrap().unwrap();
+        assert_eq!(stored.provider, "BANGUMI");
+        assert_eq!(stored.outcome, "multiple-candidates");
+        assert!(crate::tmdb::diagnostics(&db).unwrap().is_empty());
     }
 
     #[test]
@@ -2225,6 +2370,7 @@ mod tests {
                 "empty",
                 "missing",
                 "401",
+                "403",
                 "429",
                 "timeout",
             ] {
@@ -2246,6 +2392,7 @@ mod tests {
                     "empty" => movies.clear(),
                     "missing" => provider.available = false,
                     "401" => provider.movies = Err("TMDB_HTTP_401".into()),
+                    "403" => provider.movies = Err("TMDB_HTTP_403".into()),
                     "429" => provider.movies = Err("TMDB_HTTP_429".into()),
                     "timeout" => provider.movies = Err("TMDB_NETWORK_FAILED".into()),
                     _ => unreachable!(),
@@ -2269,11 +2416,12 @@ mod tests {
                     diagnostic[0].outcome,
                     match scenario {
                         "missing" => "credentials-unavailable",
-                        "401" => "unauthorized",
+                        "401" | "403" => "unauthorized",
                         "429" => "rate-limited",
                         "timeout" => "request-failed",
                         "empty" => "no-results",
-                        _ => "no-unique-title-year",
+                        "duplicate" => "multiple-candidates",
+                        _ => "low-confidence",
                     },
                     "{mode}/{scenario}"
                 );
@@ -2286,7 +2434,7 @@ mod tests {
                     usize::from(scenario == "fuzzy"),
                     "{mode}/{scenario}"
                 );
-                if matches!(scenario, "missing" | "401" | "429" | "timeout") {
+                if matches!(scenario, "missing" | "401" | "403" | "429" | "timeout") {
                     let before = provider.calls;
                     assert_eq!(
                         auto_match_node_with_tmdb(
@@ -2459,12 +2607,14 @@ mod tests {
                     AutoMatchReport {
                         examined: 3,
                         matched: 2,
-                        unmatched: 0,
-                        errors: 1
+                        unmatched: 1,
+                        errors: 0
                     },
                     "{mode}/tv-first={tv_first}"
                 );
-                assert_eq!(provider.calls, [1, 2, 2, 2]);
+                assert_eq!(provider.calls[0], 1);
+                assert!(provider.calls[1] >= 3);
+                assert_eq!(&provider.calls[2..], &[2, 2]);
             }
         }
     }
@@ -2553,7 +2703,8 @@ mod tests {
                 other.display_name = name.into();
                 let e = title_extractor::build_match_evidence(name, name, None, &[]);
                 assert!(
-                    !crate::tmdb::automatic_evidence(&other, &e, &files),
+                    crate::tmdb::automatic_evidence(&other, &e, &files)
+                        == matches!(name, "Inception.2010.S01E01" | "Inception.2010.第1集"),
                     "{mode}/{name}"
                 );
             }
@@ -2801,7 +2952,7 @@ mod tests {
     }
 
     #[test]
-    fn first_primary_query_result_binds_directly_without_a_margin_gate() {
+    fn unrelated_primary_first_result_does_not_gain_binding_confidence() {
         let evidence = evidence("Fan Translated Name");
         let weights = MatchWeights::default();
         let recalled = merge_search_results_fair(
@@ -2817,8 +2968,8 @@ mod tests {
             .collect::<Vec<_>>();
         let decision = decide_scores(scores, false, &weights);
 
-        assert_eq!(decision.confidence, MatchConfidence::Direct);
-        assert_eq!(decision.best.unwrap().subject.subject_id, 1);
+        assert_eq!(decision.confidence, MatchConfidence::Low);
+        assert!(decision.best.unwrap().score < weights.direct_threshold);
     }
 
     #[test]
@@ -2885,6 +3036,7 @@ mod tests {
                 &MatchDecision {
                     confidence: MatchConfidence::Low,
                     best: None,
+                    outcome: "no-results",
                 },
                 Some(477207),
             ),
@@ -3388,13 +3540,14 @@ mod tests {
     }
 
     #[test]
-    fn close_top_two_candidates_bind_the_provider_ranked_first_result() {
+    fn multiple_reliable_exact_candidates_remain_unbound() {
         let evidence = evidence("同名作品");
         let weights = MatchWeights::default();
         let first = score_candidate(&evidence, &subject(1, "同名作品", None), 0, &weights);
         let second = score_candidate(&evidence, &subject(2, "同名作品", None), 1, &weights);
         let decision = decide_scores(vec![first, second], false, &weights);
-        assert_eq!(decision.confidence, MatchConfidence::High);
+        assert_eq!(decision.confidence, MatchConfidence::Low);
+        assert_eq!(decision.outcome, "multiple-candidates");
         assert_eq!(decision.best.unwrap().subject.subject_id, 1);
     }
 

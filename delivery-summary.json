@@ -1,0 +1,128 @@
+{
+  "version": "0.5.14",
+  "schema": 27,
+  "status": "latest local unsigned candidate including settings polish; not installed or published",
+  "player": {
+    "bundled": false,
+    "modes": [
+      "CUSTOM",
+      "SYSTEM"
+    ],
+    "default": "SYSTEM",
+    "customPathsPreserved": true,
+    "automaticDetection": false,
+    "explicitTestOnly": true
+  },
+  "features": [
+    "compiled default or personal TMDb service",
+    "shared reader shell",
+    "shared ordinary context menus",
+    "shared structured media parser and scan metadata cache",
+    "TMDb Movie/TV isolation and original-language artwork",
+    "separate no-result low-confidence multiple-candidate authentication rate-limit and network diagnostics"
+  ],
+  "tests": {
+    "frontend": 173,
+    "validator": 135,
+    "rustPassed": 340,
+    "rustDefaultIgnored": 13,
+    "parser": 7,
+    "labCore": 35,
+    "labStructures": 49,
+    "shadowUnit": 1,
+    "shadowAdapter": 41,
+    "browserFixtureChecks": 245,
+    "nativeChecks": 27,
+    "sourceFixtureFilesUnchanged": 10,
+    "clippy": "passed with warnings denied",
+    "fmt": "passed"
+  },
+  "performance": {
+    "syntheticItems": [
+      100,
+      1000,
+      5000,
+      10000
+    ],
+    "groupMs": [
+      59,
+      279,
+      1443,
+      3542
+    ],
+    "catalogueMs": [
+      7,
+      17,
+      68,
+      123
+    ]
+  },
+  "artifacts": {
+    "M2Shelf-Setup-0.5.14-x64.exe": {
+      "path": "bundle/M2Shelf-Setup-0.5.14-x64.exe",
+      "bytes": 10000240,
+      "sha256": "0ccb8d56200e25dfb1850cf1d3e382e2559867fe59b03ef04bc9af4d0959aba2"
+    },
+    "M2Shelf-Portable-0.5.14-x64.zip": {
+      "path": "bundle/M2Shelf-Portable-0.5.14-x64.zip",
+      "bytes": 13263704,
+      "sha256": "5676a8b68ba29acd6b3f9af21aaac12844043931cc07dfc9c5d6e001fda90fd0"
+    }
+  },
+  "portablePayload": [
+    "M2Shelf.exe",
+    "M2Shelf.portable.json",
+    "M2ShelfMobi-source.zip",
+    "M2ShelfMobi.exe",
+    "M2ShelfUpdater.exe",
+    "README_zh-CN.txt",
+    "SHA256SUMS.txt",
+    "THIRD-PARTY-NOTICES.txt"
+  ],
+  "verification": {
+    "root": ".tmp/settings-package-20261011/",
+    "artifactReport": ".tmp/settings-package-20261011/artifact-verification.json",
+    "packagingBuildResults": ".tmp/settings-package-20261011/build-results.json",
+    "screenshots": ".tmp/settings-polish-20261011/screenshots/",
+    "nativeReport": ".tmp/settings-polish-20261011/native-results.json",
+    "sourceGates": ".tmp/settings-polish-20261011/",
+    "previousCandidateBackup": ".tmp/settings-package-20261011/prior-bundle/"
+  },
+  "limits": [
+    "No clean Windows VM or post-install Setup GUI acceptance",
+    "Native GUI uses final source with isolated application ID and data profile, not the production profile",
+    "Personal Credential Manager create/delete not executed against existing user credentials",
+    "No private-library full matching-rate claim",
+    "Default client credential is extractable and revocable; publication authorization and TMDb licensing are separate",
+    "No production updater signature or latest.json"
+  ],
+  "preserved": {
+    "skills": true,
+    "iconSource": true,
+    "updaterPublicKey": true,
+    "gitHead": true,
+    "productionSeedAccessed": false,
+    "privateLibrariesAccessed": false
+  },
+  "packaging": {
+    "order": [
+      "tauri build --no-bundle",
+      "cargo build --release --locked --bin M2ShelfUpdater",
+      "tauri bundle --bundles nsis --no-sign",
+      "build_portable.ps1 -SkipBuild"
+    ],
+    "NSISPortableSharedPayloadsIdentical": true,
+    "mainExecutableOnlyDifference": "Tauri NSS/UNK distribution marker, exactly three bytes",
+    "iconWidths": [
+      256,
+      128,
+      64,
+      48,
+      32,
+      24,
+      16
+    ],
+    "privacyScan": "passed",
+    "exactReleaseGuiLaunched": false
+  }
+}

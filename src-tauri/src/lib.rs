@@ -10,6 +10,7 @@ mod ebooks;
 mod incremental;
 mod kindle_books;
 mod logical_works;
+mod media_scraper;
 pub mod models;
 mod player;
 pub mod portable_update;
@@ -20,6 +21,7 @@ mod reader_extension_tests;
 #[cfg(test)]
 mod review_tests;
 mod scanner;
+mod scraper_metadata;
 mod single_instance;
 mod smart_mixed;
 mod text_books;
@@ -104,6 +106,7 @@ pub fn run() {
             let default_cover_cache_dir = app_data_dir.join("cache").join("covers");
             let database = Database::new(app_data_dir.join("morimediashelf.db"));
             database.migrate().map_err(io::Error::other)?;
+            tmdb_credentials::initialize(&database).map_err(io::Error::other)?;
             let saved_window_size = database.get_window_size().map_err(io::Error::other)?;
             let initial_window_size = if let Some(window) = app.get_webview_window("main") {
                 saved_window_size
@@ -262,6 +265,10 @@ pub fn run() {
             commands::get_collection_sort_preferences,
             commands::update_collection_sort_preference,
             commands::test_mpv,
+            commands::tmdb_credential_status,
+            commands::tmdb_select_source,
+            commands::tmdb_verify,
+            commands::tmdb_delete_personal,
             commands::play_media,
             commands::open_node_in_explorer,
             commands::open_media_in_explorer,

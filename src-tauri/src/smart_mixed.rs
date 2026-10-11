@@ -82,9 +82,31 @@ pub fn rebuild(db: &Database, root: i64, cancel: Arc<AtomicBool>) -> AppResult<(
             options.overrides.push(override_value);
         }
     }
-    let snapshot = ReadIndex::open(db.path())?.read(root, &options)?;
+    let mut snapshot = ReadIndex::open(db.path())?.read(root, &options)?;
     if !snapshot.scan_health.complete || cancel.load(Ordering::Relaxed) {
         return Err("SMART_INDEX_INCOMPLETE".into());
+    }
+    {
+        let c = db.connect()?;
+        let available: bool = c
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='indexed_media_metadata')",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(err)?;
+        let sources = snapshot
+            .source_id_map
+            .values()
+            .map(|s| (s.path.as_str(), s.book_id))
+            .collect::<BTreeMap<_, _>>();
+        for entry in &mut snapshot.recognition_input.entries {
+            if let Some(book) = sources.get(entry.path.as_str()) {
+                if available {
+                    entry.metadata = crate::scraper_metadata::organization_metadata(&c, *book)?;
+                }
+            }
+        }
     }
     let images = snapshot
         .source_id_map

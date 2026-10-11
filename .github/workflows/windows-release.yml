@@ -94,7 +94,21 @@ jobs:
 
       - name: Build updater helper and NSIS application with path remapping
         shell: pwsh
-        run: ./scripts/build_windows_release.ps1 -Bundles nsis
+        env:
+          M2SHELF_DEFAULT_TMDB_INPUT: ${{ secrets.M2SHELF_TMDB_DEFAULT_READ_ACCESS_TOKEN }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:M2SHELF_DEFAULT_TMDB_INPUT)) {
+            throw "The default TMDb build secret is not configured."
+          }
+          $tokenInput = Join-Path $env:RUNNER_TEMP "m2shelf-default-tmdb-build-input.txt"
+          try {
+            [System.IO.File]::WriteAllText($tokenInput, $env:M2SHELF_DEFAULT_TMDB_INPUT, [System.Text.UTF8Encoding]::new($false))
+            ./scripts/build_windows_release.ps1 -Bundles nsis -TmdbTokenFile $tokenInput
+            if ($LASTEXITCODE -ne 0) { throw "Windows release build failed." }
+          } finally {
+            Remove-Item -LiteralPath $tokenInput -Force -ErrorAction SilentlyContinue
+            Remove-Item Env:M2SHELF_DEFAULT_TMDB_INPUT -ErrorAction SilentlyContinue
+          }
 
       - name: Build Portable archive
         shell: pwsh

@@ -139,6 +139,7 @@ impl Database {
             .map_err(db_error)?;
 
         let migrations = [
+            // Ordered below; new imported evidence preserves every existing identity.
             (1_i64, include_str!("../migrations/0001_initial.sql")),
             (2_i64, include_str!("../migrations/0002_mvp.sql")),
             (
@@ -215,6 +216,10 @@ impl Database {
             (
                 26_i64,
                 include_str!("../migrations/0026_text_reader_positions.sql"),
+            ),
+            (
+                27_i64,
+                include_str!("../migrations/0027_scraper_metadata.sql"),
             ),
         ];
         let reclassification_needed: bool = connection
@@ -576,6 +581,24 @@ impl Database {
         list_children_conn(&connection, parent_id)
     }
 
+    pub fn list_owned_video_names(&self, node: i64) -> AppResult<Vec<String>> {
+        let connection = self.connect()?;
+        let snapshot = connection.unchecked_transaction().map_err(db_error)?;
+        let index = crate::logical_works::LogicalWorkIndex::load(&snapshot)?;
+        let mut files = index
+            .videos
+            .iter()
+            .filter(|(id, _)| index.owners.get(id) == Some(&node))
+            .flat_map(|(_, v)| v.iter())
+            .collect::<Vec<_>>();
+        files.sort_by_key(|f| f.id);
+        Ok(files
+            .into_iter()
+            .take(32)
+            .map(|f| f.file_name.clone())
+            .collect())
+    }
+    #[cfg(test)]
     pub fn list_media(&self, node_id: i64) -> AppResult<Vec<MediaFile>> {
         let connection = self.connect()?;
         list_media_conn(&connection, node_id)
@@ -2298,6 +2321,14 @@ impl Database {
                 .and_then(|v| serde_json::from_str(v).ok())
                 .unwrap_or_default(),
             mpv_path: values.get("mpv_path").filter(|p| !p.is_empty()).cloned(),
+            player_mode: match values.get("player_mode").map(String::as_str) {
+                Some("CUSTOM") => crate::models::PlayerMode::Custom,
+                Some("SYSTEM" | "AUTO" | "BUNDLED") => crate::models::PlayerMode::System,
+                _ if values.get("mpv_path").is_some_and(|p| !p.trim().is_empty()) => {
+                    crate::models::PlayerMode::Custom
+                }
+                _ => crate::models::PlayerMode::System,
+            },
             default_view_mode: match values.get("default_view_mode").map(String::as_str) {
                 Some("LIST") => ViewMode::List,
                 _ => ViewMode::Grid,
@@ -2453,6 +2484,14 @@ impl Database {
                 serde_json::to_string(&settings.comic_reader).map_err(|e| e.to_string())?,
             ),
             ("mpv_path", settings.mpv_path.clone().unwrap_or_default()),
+            (
+                "player_mode",
+                match settings.player_mode {
+                    crate::models::PlayerMode::System => "SYSTEM",
+                    crate::models::PlayerMode::Custom => "CUSTOM",
+                }
+                .into(),
+            ),
             (
                 "default_view_mode",
                 settings.default_view_mode.as_db().to_string(),
@@ -4592,7 +4631,7 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(versions, 26);
+        assert_eq!(versions, 27);
         connection
             .prepare("SELECT library_root_id,snapshot_json FROM library_scan_snapshots")
             .unwrap();
@@ -6249,6 +6288,7 @@ mod tests {
         let updated = AppSettings {
             comic_reader: Default::default(),
             mpv_path: None,
+            player_mode: crate::models::PlayerMode::Custom,
             default_view_mode: ViewMode::List,
             video_extensions: vec!["MKV".into(), ".mp4".into()],
             bangumi_search_enabled: true,

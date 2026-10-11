@@ -11,6 +11,7 @@ export function TmdbDiagnostics(){
 }
 export function diagnosticKey(outcome:string){
  switch(outcome){
+ case 'multiple-candidates':return 'next.multipleCandidates';case 'low-confidence':case 'title-uncertain':case 'evidence-conflict':return 'next.lowConfidence';
  case 'credentials-unavailable':return 'tmdb.notConfigured';case 'unauthorized':return 'tmdb.authError';case 'rate-limited':return 'tmdb.rateError';case 'request-failed':return 'tmdb.error';case 'no-results':return 'tmdb.autoNoResults';case 'year-uncertain':return 'tmdb.autoYearUncertain';case 'no-unique-title-year':case 'detail-conflict':return 'tmdb.autoUncertain';case 'budget-deferred':return 'tmdb.autoDeferred';case 'matched':return 'tmdb.autoMatched';case 'matched-cover-failed':return 'tmdb.autoCoverFailed';case 'searching':return 'common.searching';default:return 'tmdb.autoIneligible';
  }
 }

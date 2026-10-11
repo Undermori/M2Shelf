@@ -1,5 +1,5 @@
 import type {BookCatalogue,BookCorrection} from '../types/catalogue';
-import type {TmdbMovie,TmdbBinding,TmdbSearch} from '../types/tmdb';
+import type {TmdbMovie,TmdbBinding,TmdbSearch,TmdbCredentialStatus} from '../types/tmdb';
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -161,13 +161,17 @@ export const api = {
   getBookCatalogue:(rootId:number)=>call<BookCatalogue>('get_book_catalogue',{rootId}),
   correctBookOrganization:(rootId:number,relativePath:string,action:BookCorrection,target:string|null,expectedRevision:number)=>call<void>('correct_book_organization',{rootId,relativePath,action,target,expectedRevision}),
   tmdbStatus:()=>call<boolean>('tmdb_status'),
+  tmdbCredentialStatus:()=>call<TmdbCredentialStatus>('tmdb_credential_status'),
+  tmdbSelectSource:(source:'DEFAULT'|'PERSONAL')=>call<TmdbCredentialStatus>('tmdb_select_source',{source}),
+  tmdbVerify:()=>call<TmdbCredentialStatus>('tmdb_verify'),
+  tmdbDeletePersonal:(title:string,message:string)=>call<boolean>('tmdb_delete_personal',{title,message}),
   tmdbMatchDiagnostics:()=>call<import('../types/tmdb').TmdbMatchDiagnostic[]>('tmdb_match_diagnostics'),
   tmdbOpenPage:(nodeId:number)=>call<void>('tmdb_open_page',{nodeId}),
   tmdbCancel:()=>call<void>('tmdb_cancel'),
   tmdbConfigure:(title:string,message:string)=>call<boolean>('tmdb_configure',{title,message}),
   tmdbSearch:(nodeId:number,query:string,year:number|null,language:string)=>call<TmdbSearch>('tmdb_search',{nodeId,query,year,language}),
-  tmdbDetail:(movieId:number,language:string)=>call<TmdbMovie>('tmdb_detail',{movieId,language}),
-  tmdbBind:(nodeId:number,movieId:number,language:string,expectedSnapshot:string)=>call<TmdbBinding>('tmdb_bind',{nodeId,movieId,language,expectedSnapshot}),
+  tmdbDetail:(movieId:number,language:string,mediaType:"MOVIE"|"TV"="MOVIE")=>call<TmdbMovie>('tmdb_detail',{movieId,language,mediaType}),
+  tmdbBind:(nodeId:number,movieId:number,language:string,expectedSnapshot:string,mediaType:"MOVIE"|"TV"="MOVIE")=>call<TmdbBinding>('tmdb_bind',{nodeId,movieId,language,expectedSnapshot,mediaType}),
   tmdbClear:(nodeId:number)=>call<void>('tmdb_clear',{nodeId}),
   tmdbRetryCover:(nodeId:number)=>call<TmdbBinding>('tmdb_retry_cover',{nodeId}),
   revealComicBook: (comicBookId:number)=>call<void>('open_comic_in_explorer',{comicBookId}),

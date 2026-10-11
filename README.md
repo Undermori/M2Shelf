@@ -10,9 +10,9 @@ M²Shelf 是 Windows 本地媒体收藏管理工具，支持动画、电影/剧�
 
 - **资源库**：管理多个目录，递归扫描、增量更新；支持按文件夹或单个文件识别，书籍另有智能混合识别，可整理系列、独立书籍和分类目录。
 - **浏览与搜索**：海报墙和列表、跨库浏览、媒体类型与标签筛选、多种排序；搜索本地名称、文件名及 Bangumi 多语言标题。
-- **元数据**：按资源类型自动匹配或手动绑定 Bangumi；真人电影支持 TMDb，识别双语片名、发布年份和常见压制命名，使用原始语言海报。可手动纠正绑定、修改显示名称和封面。
+- **元数据**：按资源类型自动匹配或手动绑定 Bangumi；真人电影和剧集支持 TMDb，可使用默认服务或个人令牌；识别双语片名、年份、季集和常见压制命名，使用原始语言海报。可手动纠正绑定、修改显示名称和封面。
 - **整理**：自定义标签、命名收藏夹、批量编辑、隐藏与恢复条目。
-- **播放**：调用已配置的外部播放器；查看字幕、音频等附属文件，在资源管理器中打开目录或定位文件。
+- **播放**：使用系统默认或自定义播放器；查看字幕、音频等附属文件，在资源管理器中打开目录或定位文件。
 - **阅读**：内置漫画与文字阅读器，保存阅读进度、书签和最近打开记录。
 - **封面**：本地缓存和后台缩略图生成，按显示尺寸选用；设置中查看进度、失败原因并重试。
 - **界面**：浅色、深色、跟随系统；简体中文、English、日本語、한국어；记忆窗口大小、排序及浏览位置。
@@ -23,21 +23,21 @@ M²Shelf 是 Windows 本地媒体收藏管理工具，支持动画、电影/剧�
 
 - 漫画：单页/双页、横向翻页、连续滚动、Webtoon、左右阅读方向、缩放、适应窗口、背景颜色和全屏。
 - 文字书籍：翻页/滚动、目录、字体和字号、字重、行距、段距、正文宽度、边距和阅读配色。
-- 各类书籍共用阅读进度与书签；视频和书籍统一显示在最近打开中。
+- 各类书籍共用阅读工具栏、阅读进度与书签；视频和书籍统一显示在最近打开中。
 
 MOBI/AZW3 支持未加密的 MOBI6/KF8，不支持 DRM；普通 ZIP、RAR、7Z 不作为内置书籍打开。
 
 ## 下载
 
-**M²Shelf 0.5.13 · Windows x64**
+**M²Shelf 0.5.14 · Windows x64**
 
-- [安装包](https://github.com/Undermori/M2Shelf/releases/download/v0.5.13/M2Shelf-Setup-0.5.13-x64.exe)
-- [Portable 压缩包](https://github.com/Undermori/M2Shelf/releases/download/v0.5.13/M2Shelf-Portable-0.5.13-x64.zip)
+- [安装包](https://github.com/Undermori/M2Shelf/releases/download/v0.5.14/M2Shelf-Setup-0.5.14-x64.exe)
+- [Portable 压缩包](https://github.com/Undermori/M2Shelf/releases/download/v0.5.14/M2Shelf-Portable-0.5.14-x64.zip)
 - [最新 Release](https://github.com/Undermori/M2Shelf/releases/latest) · [全部版本](https://github.com/Undermori/M2Shelf/releases)
 
 Portable 请完整解压后运行 `M2Shelf.exe`，不要直接在压缩包内运行。数据库、设置和默认缓存保存在 Windows 应用数据目录。旧五文件 Portable 请完整解压新版升级。
 
-0.5.13 请手动下载更新，暂不提供应用内更新。
+可在设置中检查更新，也可手动下载安装包或 Portable 压缩包。
 
 运行需要 Microsoft Edge WebView2 Runtime。SmartScreen 可能提示未知发布者。
 

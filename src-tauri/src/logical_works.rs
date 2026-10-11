@@ -236,6 +236,16 @@ impl LogicalWorkIndex {
         if node.manual_type_override {
             return true;
         }
+        if let Some(binding) = node.tmdb_binding.as_ref().filter(|v| v.active) {
+            return self.nodes[&owner]
+                .tmdb_binding
+                .as_ref()
+                .filter(|v| v.active)
+                .is_none_or(|parent| {
+                    (parent.movie.media_type, parent.movie.id)
+                        != (binding.movie.media_type, binding.movie.id)
+                });
+        }
         if let Some(binding) = &node.binding {
             return self.nodes[&owner].binding.as_ref().is_none_or(|parent| {
                 (parent.provider_subject_type, parent.provider_subject_id)

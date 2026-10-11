@@ -1,6 +1,6 @@
 [package]
 name = "m2shelf"
-version = "0.5.13"
+version = "0.5.14"
 description = "A read-only visual browser for local media collections"
 authors = ["森下Undermori"]
 edition = "2021"
@@ -27,6 +27,7 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 zeroize = "1"
 m2shelf-smart-mixed-lab = { path = "../tools/smart-mixed-lab" }
+m2shelf-media-parser = { path = "../tools/media-parser" }
 m2shelf-smart-mixed-shadow = { path = "../tools/smart-mixed-shadow", features = ["production"] }
 base64 = "0.22"
 encoding_rs = "0.8"

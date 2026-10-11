@@ -1,5 +1,94 @@
 //! Credentials never cross IPC. Windows owns persistence and supplies the masked input dialog.
 use crate::db::AppResult;
+use rusqlite::OptionalExtension;
+use std::sync::{
+    atomic::{AtomicBool, AtomicU64, Ordering},
+    Mutex,
+};
+include!(concat!(env!("OUT_DIR"), "/tmdb_default.rs"));
+static GENERATION: AtomicU64 = AtomicU64::new(0);
+pub fn generation() -> u64 {
+    GENERATION.load(Ordering::SeqCst)
+}
+static PERSONAL: AtomicBool = AtomicBool::new(false);
+static VERIFIED: Mutex<Option<(bool, &'static str)>> = Mutex::new(None);
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CredentialStatus {
+    pub source: &'static str,
+    pub default_available: bool,
+    pub personal_configured: bool,
+    pub check: &'static str,
+}
+pub fn initialize(db: &crate::db::Database) -> AppResult<()> {
+    let saved: Option<String> = db
+        .connect()?
+        .query_row(
+            "SELECT value FROM settings WHERE key='tmdb_credential_source'",
+            [],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|_| "TMDB_SETTINGS_FAILED")?;
+    PERSONAL.store(
+        saved
+            .as_deref()
+            .map_or_else(|| read().is_ok(), |v| v == "PERSONAL"),
+        Ordering::SeqCst,
+    );
+    Ok(())
+}
+pub fn select(db: &crate::db::Database, source: &str) -> AppResult<()> {
+    if !matches!(source, "DEFAULT" | "PERSONAL") {
+        return Err("TMDB_SOURCE_INVALID".into());
+    }
+    db.connect()?.execute("INSERT INTO settings(key,value) VALUES('tmdb_credential_source',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value", [source]).map_err(|_| "TMDB_SETTINGS_FAILED")?;
+    GENERATION.fetch_add(1, Ordering::SeqCst);
+    crate::tmdb::cancel_mutation();
+    PERSONAL.store(source == "PERSONAL", Ordering::SeqCst);
+    *VERIFIED.lock().map_err(|_| "TMDB_SETTINGS_FAILED")? = None;
+    crate::tmdb::invalidate_search_cache();
+    Ok(())
+}
+pub fn selected() -> AppResult<zeroize::Zeroizing<String>> {
+    if PERSONAL.load(Ordering::SeqCst) {
+        read()
+    } else if DEFAULT_TOKEN.is_empty() {
+        Err("TMDB_DEFAULT_UNAVAILABLE".into())
+    } else {
+        Ok(zeroize::Zeroizing::new(DEFAULT_TOKEN.into()))
+    }
+}
+pub fn status() -> CredentialStatus {
+    let personal = PERSONAL.load(Ordering::SeqCst);
+    CredentialStatus {
+        source: if personal { "PERSONAL" } else { "DEFAULT" },
+        default_available: !DEFAULT_TOKEN.is_empty(),
+        personal_configured: read().is_ok(),
+        check: VERIFIED
+            .lock()
+            .ok()
+            .and_then(|v| *v)
+            .filter(|v| v.0 == personal)
+            .map_or("UNCHECKED", |v| v.1),
+    }
+}
+pub fn verify() -> AppResult<CredentialStatus> {
+    let personal = PERSONAL.load(Ordering::SeqCst);
+    let generation = generation();
+    let result = crate::tmdb::check_credentials();
+    let check = match &result {
+        Ok(()) => "VERIFIED",
+        Err(e) if e.contains("401") || e.contains("403") => "AUTH_ERROR",
+        Err(e) if e.contains("429") => "RATE_LIMITED",
+        Err(_) => "NETWORK_ERROR",
+    };
+    if self::generation() == generation && PERSONAL.load(Ordering::SeqCst) == personal {
+        *VERIFIED.lock().map_err(|_| "TMDB_SETTINGS_FAILED")? = Some((personal, check));
+    }
+    Ok(status())
+}
 
 #[cfg(windows)]
 mod windows {
@@ -34,6 +123,31 @@ mod windows {
         };
         unsafe { CredFree(pointer.cast()) };
         result
+    }
+    pub fn delete(parent: usize, title: &str, message: &str) -> AppResult<bool> {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            MessageBoxW, IDYES, MB_ICONQUESTION, MB_YESNO,
+        };
+        let title = wide(title);
+        let message = wide(message);
+        if unsafe {
+            MessageBoxW(
+                parent as _,
+                message.as_ptr(),
+                title.as_ptr(),
+                MB_YESNO | MB_ICONQUESTION,
+            )
+        } != IDYES
+        {
+            return Ok(false);
+        }
+        let target = wide(TARGET);
+        if unsafe { CredDeleteW(target.as_ptr(), CRED_TYPE_GENERIC, 0) } == 0
+            && unsafe { windows_sys::Win32::Foundation::GetLastError() } != 1168
+        {
+            return Err("TMDB_CREDENTIAL_DELETE_FAILED".into());
+        }
+        Ok(true)
     }
     pub fn configure(parent: usize, title: &str, message: &str) -> AppResult<bool> {
         if title.chars().count() > 120 || message.chars().count() > 1000 {
@@ -107,7 +221,11 @@ mod windows {
     }
 }
 #[cfg(windows)]
-pub use windows::{configure, read};
+pub use windows::{configure, delete, read};
+#[cfg(not(windows))]
+pub fn delete(_: usize, _: &str, _: &str) -> AppResult<bool> {
+    Err("TMDB_NATIVE_CREDENTIALS_UNAVAILABLE".into())
+}
 #[cfg(not(windows))]
 pub fn read() -> AppResult<zeroize::Zeroizing<String>> {
     Err("TMDB_NATIVE_CREDENTIALS_UNAVAILABLE".into())

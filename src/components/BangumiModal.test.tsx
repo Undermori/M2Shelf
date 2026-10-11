@@ -11,6 +11,16 @@ beforeEach(()=>{vi.resetAllMocks();mock.prefill.mockResolvedValue({originalName:
 afterEach(cleanup);
 function provider(value:string){fireEvent.click(screen.getByRole('combobox',{name:'数据来源'}));fireEvent.click(screen.getByRole('option',{name:value}));}
 describe('one typed provider matching modal',()=>{
+ it('keeps title choices but never exposes legacy diagnostic fields in either provider',async()=>{
+  mock.prefill.mockResolvedValue({originalName:node.folderName,extractedName:'Movie',candidates:[],structured:{display_title:'Movie',subtype:'Movie',year:2020,season:null,volume:null,chapter:null,edition:[],release_tags:[],source_evidence:[],warnings:[]},lastMatch:{provider:'TMDB',outcome:'multiple-candidates'}});
+  render(<I18nProvider><BangumiModal node={node} onClose={vi.fn()} onBound={vi.fn()} onStale={vi.fn()}/></I18nProvider>);
+  await screen.findByText('Movie (2020).mkv');
+  expect(screen.getByText('原始名称')).toBeTruthy();expect(screen.getByText('自动提取名称')).toBeTruthy();
+  expect(screen.queryByText('识别依据')).toBeNull();expect(screen.queryByText(/存在多个可靠候选，请手动选择/)).toBeNull();
+  provider('TMDb');await screen.findByRole('heading',{name:'从 TMDb 选择作品'});
+  expect(screen.queryByText('识别依据')).toBeNull();expect(document.querySelector('details')).toBeNull();
+  expect(mock.search).not.toHaveBeenCalled();expect(mock.bangumi).not.toHaveBeenCalled();
+ });
  it('sends the edited manual TMDb keyword without restoring the release filename',async()=>{
   render(<I18nProvider><BangumiModal node={node} onClose={vi.fn()} onBound={vi.fn()} onStale={vi.fn()}/></I18nProvider>);
   await screen.findByText('Movie (2020).mkv');provider('TMDb');await waitFor(()=>expect((screen.getByRole('button',{name:'搜索'}) as HTMLButtonElement).disabled).toBe(false));
@@ -27,7 +37,7 @@ describe('one typed provider matching modal',()=>{
   await waitFor(()=>expect((screen.getByRole('button',{name:'搜索'}) as HTMLButtonElement).disabled).toBe(false));
   expect(screen.queryByText('已配置')).toBeNull();expect(screen.queryByRole('spinbutton')).toBeNull();expect(document.querySelector('.modal-footer')).toBeNull();
   fireEvent.click(screen.getByRole('button',{name:'搜索'}));await screen.findByText('The Movie');expect(document.querySelector('.bangumi-cover img')?.getAttribute('src')).toBe('https://image.tmdb.org/t/p/w185/poster.jpg');
-  fireEvent.click(screen.getByRole('button',{name:'选择'}));await waitFor(()=>expect(close).toHaveBeenCalled());expect(mock.tmdbBind).toHaveBeenCalledWith(84,22,'zh-CN','exact-node-84');expect(mock.bind).not.toHaveBeenCalled();expect(changed).toHaveBeenCalledOnce();
+  fireEvent.click(screen.getByRole('button',{name:'选择'}));await waitFor(()=>expect(close).toHaveBeenCalled());expect(mock.tmdbBind).toHaveBeenCalledWith(84,22,'zh-CN','exact-node-84','MOVIE');expect(mock.bind).not.toHaveBeenCalled();expect(changed).toHaveBeenCalledOnce();
  });
  it('clears old results and ignores an outstanding response after switching provider',async()=>{
   let finish!:(value:unknown)=>void;mock.bangumi.mockReturnValue(new Promise(resolve=>{finish=resolve;}));render(<I18nProvider><BangumiModal node={node} onClose={vi.fn()} onBound={vi.fn()} onStale={vi.fn()}/></I18nProvider>);

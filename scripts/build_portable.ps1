@@ -1,7 +1,8 @@
 param(
   [switch]$SkipBuild,
   [string]$Architecture = "x64",
-  [string]$UpdaterPath = ""
+  [string]$UpdaterPath = "",
+  [string]$TmdbTokenFile
 )
 
 $ErrorActionPreference = "Stop"
@@ -113,7 +114,7 @@ function Assert-NoPrivateBuildPath {
 }
 
 if (-not $SkipBuild) {
-  & (Join-Path $PSScriptRoot "build_windows_release.ps1") -Bundles none
+  & (Join-Path $PSScriptRoot "build_windows_release.ps1") -Bundles none -TmdbTokenFile $TmdbTokenFile
   if ($LASTEXITCODE -ne 0) { throw "Tauri build failed with exit code $LASTEXITCODE" }
 }
 

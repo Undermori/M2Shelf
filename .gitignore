@@ -49,3 +49,5 @@ M2Shelf-Production-Key/
 *.log
 .DS_Store
 Thumbs.db
+
+tools/media-parser/target/

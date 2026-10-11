@@ -361,7 +361,7 @@ fn canonical(path: &Path, root: &Path) -> AppResult<PathBuf> {
     }
     Ok(value)
 }
-fn checked_file(path: &Path, root: &Path, size: u64, stamp: &str) -> AppResult<File> {
+pub(crate) fn checked_file(path: &Path, root: &Path, size: u64, stamp: &str) -> AppResult<File> {
     let resolved = canonical(path, root)?;
     let file = File::open(&resolved).map_err(|_| "COMIC_READ_FAILED".to_string())?;
     // On Windows validate the actual opened handle, not just the pre-open path.

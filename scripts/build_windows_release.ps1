@@ -1,10 +1,12 @@
 param(
   [ValidateSet("none", "nsis")]
   [string]$Bundles = "nsis",
+  [string]$TmdbTokenFile,
   [string]$TargetDirectory
 )
 
 $ErrorActionPreference = "Stop"
+if([string]::IsNullOrWhiteSpace($TmdbTokenFile)){throw "A default TMDb token input file is required for a release candidate."}
 $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
 $tauriConfigPath = Join-Path $repoRoot "src-tauri\tauri.conf.json"
 $tauriConfig = Get-Content -LiteralPath $tauriConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
@@ -140,13 +142,14 @@ $env:CARGO_ENCODED_RUSTFLAGS = if ([string]::IsNullOrWhiteSpace($previousEncoded
   "$previousEncodedFlags$separator$encodedRemaps"
 }
 
+$previousTmdbFile=$env:M2SHELF_TMDB_TOKEN_FILE
+$previousTmdbRequired=$env:M2SHELF_REQUIRE_DEFAULT_TMDB
+
+$env:M2SHELF_TMDB_TOKEN_FILE=[IO.Path]::GetFullPath($TmdbTokenFile)
+$env:M2SHELF_REQUIRE_DEFAULT_TMDB='1'
 Push-Location $repoRoot
 try {
-  if ($Bundles -eq "none") {
-    & npm run tauri build -- --no-bundle
-  } else {
-    & npm run tauri build -- --bundles $Bundles
-  }
+  & npm run tauri build -- --no-bundle
   if ($LASTEXITCODE -ne 0) {
     throw "Tauri release build failed with exit code $LASTEXITCODE"
   }
@@ -170,6 +173,11 @@ try {
   Assert-X64Pe -Path $releaseMobi
   Assert-NoPrivateBuildPath -Path $releaseMobi
   if ($Bundles -eq "nsis") {
+    # Bundle only after all native payloads have reached their final build state.
+    & npm run tauri bundle -- --bundles nsis --no-sign
+    if ($LASTEXITCODE -ne 0) {
+      throw "Tauri NSIS bundling failed with exit code $LASTEXITCODE"
+    }
     $installerName = "${productName}_${version}_x64-setup.exe"
     $installerPath = Join-Path $buildTargetDirectory "release\bundle\nsis\$installerName"
     $installer = Assert-PlainFile -Path $installerPath -Label "x64 NSIS installer"
@@ -216,6 +224,8 @@ try {
     Write-Output "SHA-256: $installerHash"
   }
 } finally {
+  $env:M2SHELF_TMDB_TOKEN_FILE=$previousTmdbFile
+  $env:M2SHELF_REQUIRE_DEFAULT_TMDB=$previousTmdbRequired
   Pop-Location
   if ($null -eq $previousEncodedFlags) {
     Remove-Item Env:CARGO_ENCODED_RUSTFLAGS -ErrorAction SilentlyContinue

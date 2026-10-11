@@ -134,7 +134,7 @@ export function BangumiModal({ node, onClose, onBound, onStale, onMetadataChange
     setErrorKind("bind");
     try {
       if(result.provider==='TMDB'){
-        await api.tmdbBind(nodeId,result.id,language,result.snapshot);if(!requestIsCurrent(generation,nodeId))return;await(onMetadataChanged?.()??onStale());
+        await api.tmdbBind(nodeId,result.id,language,result.snapshot,result.movie.mediaType??"MOVIE");if(!requestIsCurrent(generation,nodeId))return;await(onMetadataChanged?.()??onStale());
       }else{
         const binding=node.workTarget?await api.bindWorkBangumi(node.workTarget,result.subject):await api.bindBangumi(nodeId,result.subject);if(!requestIsCurrent(generation,nodeId))return;await onBound(binding);
       }
