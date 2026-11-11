@@ -140,7 +140,7 @@ function Resolve-NotesPath {
 
 function Resolve-KeyPath {
   $relativeKeyPath = "M2Shelf-Production-Key\encrypted-private-key.m2key"
-  $matches = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+  $keyPaths = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
 
   if (-not [string]::IsNullOrWhiteSpace($UsbRoot)) {
     $normalizedUsbRoot = if ($UsbRoot.Trim() -match '^([A-Za-z])(?::[\\/]?)?$') {
@@ -151,7 +151,7 @@ function Resolve-KeyPath {
     $root = [System.IO.Path]::GetFullPath($normalizedUsbRoot)
     $keyCandidate = Join-Path $root $relativeKeyPath
     if (Test-Path -LiteralPath $keyCandidate -PathType Leaf) {
-      [void]$matches.Add((Get-CanonicalExistingFile -Path $keyCandidate -Label "USB encrypted private key"))
+      [void]$keyPaths.Add((Get-CanonicalExistingFile -Path $keyCandidate -Label "USB encrypted private key"))
     }
   } else {
     foreach ($drive in @([System.IO.DriveInfo]::GetDrives())) {
@@ -161,7 +161,7 @@ function Resolve-KeyPath {
         }
         $keyCandidate = Join-Path $drive.RootDirectory.FullName $relativeKeyPath
         if (Test-Path -LiteralPath $keyCandidate -PathType Leaf -ErrorAction SilentlyContinue) {
-          [void]$matches.Add((Get-CanonicalExistingFile -Path $keyCandidate -Label "USB encrypted private key"))
+          [void]$keyPaths.Add((Get-CanonicalExistingFile -Path $keyCandidate -Label "USB encrypted private key"))
         }
       } catch {
         continue
@@ -169,10 +169,10 @@ function Resolve-KeyPath {
     }
   }
 
-  if ($matches.Count -ne 1) {
-    throw "Expected exactly one mounted M2Shelf production key, but found $($matches.Count). For a USB reported as Fixed by Windows, pass its drive explicitly (for example -UsbRoot H:)."
+  if ($keyPaths.Count -ne 1) {
+    throw "Expected exactly one mounted M2Shelf production key, but found $($keyPaths.Count). For a USB reported as Fixed by Windows, pass its drive explicitly (for example -UsbRoot H:)."
   }
-  $resolvedKey = @($matches)[0]
+  $resolvedKey = @($keyPaths)[0]
   $repoPrefix = $repoRoot.TrimEnd(
     [System.IO.Path]::DirectorySeparatorChar,
     [System.IO.Path]::AltDirectorySeparatorChar
