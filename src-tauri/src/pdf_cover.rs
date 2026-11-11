@@ -107,11 +107,11 @@ pub(crate) fn begin(
         }));
     }
     // Native embedded JPEG remains first. This is only the final placeholder branch.
-    if !MISSING
+    if MISSING
         .lock()
         .unwrap_or_else(|p| p.into_inner())
         .get(&(db.path().into(), book, revision.clone()))
-        .is_some_and(|at| at.elapsed() < Duration::from_secs(120))
+        .is_none_or(|at| at.elapsed() >= Duration::from_secs(120))
     {
         return Ok(None);
     }
