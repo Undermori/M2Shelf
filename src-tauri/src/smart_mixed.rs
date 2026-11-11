@@ -230,7 +230,11 @@ pub fn rebuild(db: &Database, root: i64, cancel: Arc<AtomicBool>) -> AppResult<(
 
 pub fn catalogue(db: &Database, root: i64) -> AppResult<Catalogue> {
     let library = db.get_root(root)?;
-    db.read_snapshot(|c| catalogue_conn(c, &library))
+    db.read_snapshot(|c| {
+        let mut catalogue = catalogue_conn(c, &library)?;
+        crate::card_progress::Hydrator::new(c, None).catalogue(&mut catalogue)?;
+        Ok(catalogue)
+    })
 }
 
 /// Share the caller's read transaction with the cross-library collection.
@@ -643,6 +647,11 @@ mod tests {
                 assert!(db.search("Independent", Some(999)).unwrap().is_empty());
                 for id in &ids {
                     f.connection.execute("INSERT INTO comic_reading_progress(comic_book_id,last_page_index,last_read_at) VALUES(?1,0,'2026-10-10T00:00:00Z')",[id]).unwrap();
+                    crate::collection::record_recent(
+                        &f.connection,
+                        crate::collection::Target::Book(*id),
+                    )
+                    .unwrap();
                 }
                 let recent = db.list_recently_watched().unwrap();
                 assert_eq!(

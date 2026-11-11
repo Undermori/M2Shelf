@@ -40,7 +40,7 @@ export function OtherResourceList({ expandedFolderIds, modifiedSort, files, fold
           key={`folder-${folder.id}`}
           onContextMenu={(event) => { event.preventDefault(); onFolderMenu(event, folder); }}
         >
-          <button className="resource-open" onClick={() => onOpenFolder(folder)} type="button">
+          <button className="resource-open" onClick={() => onOpenFolder(folder)} title={folder.absolutePath} type="button">
             <span className="resource-icon"><Icon name="folder-open" /></span>
             <span className="resource-copy">
               <strong>{folder.folderName}</strong>
@@ -55,15 +55,14 @@ export function OtherResourceList({ expandedFolderIds, modifiedSort, files, fold
       ))}
       {sortedFiles.map((file) => (
         <article className={`resource-row resource-${file.resourceType.toLocaleLowerCase()}`} key={`file-${file.id}`}>
-          <button className="resource-open" onDoubleClick={() => onOpenFile(file)} title={t(['pdf','epub','txt','mobi','azw3','cbz','png','jpg','jpeg','webp','gif','bmp','avif'].includes(file.extension.replace(/^\./,'').toLowerCase())?'comic.doubleClickRead':'resources.doubleClickDefault')} type="button">
+          <button className="resource-open" onDoubleClick={() => onOpenFile(file)} title={`${file.absolutePath}\n${t(['pdf','epub','txt','mobi','azw3','cbz','png','jpg','jpeg','webp','gif','bmp','avif'].includes(file.extension.replace(/^\./,'').toLowerCase())?'comic.doubleClickRead':'resources.doubleClickDefault')}`} type="button">
             <span className="resource-icon"><Icon name={resourceIcons[file.resourceType]} /></span>
             <span className="resource-copy">
               <strong>{file.fileName}</strong>
               {modifiedSort && <FileModifiedTime value={file.modifiedAt} />}
-              <small>{resourceTypeLabel(file.resourceType, file.extension)} · {formatBytes(file.fileSize)}</small>
               <em title={file.absolutePath}>{compactPath(file.absolutePath, 96)}</em>
             </span>
-            <span className="resource-hint">{t("resources.doubleClickOpen")}</span>
+            <span className="resource-meta">{resourceTypeLabel(file.resourceType, file.extension)} · {formatBytes(file.fileSize)}</span>
           </button>
           <button className="resource-reveal" aria-label={t("files.revealNamed", { name: file.fileName })} onClick={() => onRevealFile(file)} title={t("files.reveal")} type="button"><Icon name="external" /></button>
         </article>

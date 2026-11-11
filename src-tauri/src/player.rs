@@ -185,13 +185,7 @@ fn supports_version_probe(path: &Path) -> bool {
 }
 
 pub fn play(executable: &Path, media: &Path) -> AppResult<()> {
-    validate_executable(executable)?;
-    if !media.is_file() {
-        return Err("视频文件已不存在；请重新扫描资源库。".into());
-    }
-    if !media.is_absolute() {
-        return Err("视频路径不是绝对路径；请重新扫描资源库。".into());
-    }
+    validate_playback(executable, media)?;
     // Arguments are passed directly to CreateProcess/std::process, never through a shell.
     Command::new(executable)
         .arg(media)
@@ -200,6 +194,17 @@ pub fn play(executable: &Path, media: &Path) -> AppResult<()> {
         .stderr(Stdio::null())
         .spawn()
         .map_err(|error| format!("启动播放器失败：{error}"))?;
+    Ok(())
+}
+
+pub(crate) fn validate_playback(executable: &Path, media: &Path) -> AppResult<()> {
+    validate_executable(executable)?;
+    if !media.is_file() {
+        return Err("视频文件已不存在；请重新扫描资源库。".into());
+    }
+    if !media.is_absolute() {
+        return Err("视频路径不是绝对路径；请重新扫描资源库。".into());
+    }
     Ok(())
 }
 

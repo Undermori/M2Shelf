@@ -14,6 +14,11 @@ beforeEach(()=>{vi.resetAllMocks();mocks.open.mockResolvedValue({book,pages:Arra
 afterEach(()=>{cleanup();vi.unstubAllGlobals();});
 const reader=(extra={})=>render(<I18nProvider><ComicReaderPage bookId={1} onBack={vi.fn()} onProgress={vi.fn()} {...extra}/></I18nProvider>);
 describe('comic library setup and reader',()=>{
+ it('opens the next listed book when moving forward past the decoded last double-page spread',async()=>{
+  const next={...book,id:2,revision:'next',displayName:'No volume marker',progress:{comicBookId:2,lastPageIndex:3,lastReadAt:'saved'}};mocks.open.mockImplementation(async(id:number)=>({book:id===1?book:next,pages:Array.from({length:8},(_,i)=>({pageIndex:i,pageName:`${i}.png`})),bookmarks:[]}));const switchBook=vi.fn();
+  reader({readingList:[book,next],onNextBook:switchBook});await screen.findByRole('img',{name:'第 1 / 8 页'});fireEvent.keyDown(window,{key:'End'});await screen.findByRole('img',{name:'第 8 / 8 页'});
+  expect(screen.queryByText('已读到本册末尾')).toBeNull();fireEvent.click(screen.getByRole('button',{name:'下一页'}));await waitFor(()=>expect(switchBook).toHaveBeenCalledOnce());expect(switchBook.mock.calls[0][0]).toEqual(next);expect(switchBook.mock.calls[0][1].comicSettings.direction).toBe('RTL');expect(mocks.progress).toHaveBeenCalledWith(1,7,'revision');
+ });
  it('reveals an indexed source without opening the book or triggering row double click',async()=>{
   const read=vi.fn();mocks.reveal.mockResolvedValue(undefined);render(<I18nProvider><ComicBookList books={[book]} onRead={read}/></I18nProvider>);
   const reveal=screen.getByRole('button',{name:'在资源管理器中显示'});fireEvent.click(reveal);fireEvent.doubleClick(reveal);

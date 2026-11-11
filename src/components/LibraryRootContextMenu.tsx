@@ -3,7 +3,7 @@ import type { LibraryRoot } from "../types/media";
 import { Icon } from "./Icon";
 import { useI18n } from "../lib/i18n";
 
-export type LibraryRootAction = "rename" | "explorer" | "scan";
+export type LibraryRootAction = "rename" | "explorer" | "scan" | "toggle-all-visibility";
 
 interface LibraryRootContextMenuProps {
   root: LibraryRoot;
@@ -30,10 +30,11 @@ export function LibraryRootContextMenu({ root, x, y, onAction, onClose }: Librar
     onClose();
   };
   return (
-    <div className="context-menu library-root-menu" ref={menuRef} style={{ left: Math.min(x, window.innerWidth - 270), top: Math.min(y, window.innerHeight - 180) }} tabIndex={-1} onPointerDown={(event) => event.stopPropagation()}>
+    <div className="context-menu library-root-menu" ref={menuRef} style={{ left: Math.min(x, window.innerWidth - 270), top: Math.min(y, window.innerHeight - 230) }} tabIndex={-1} onPointerDown={(event) => event.stopPropagation()}>
       <p title={root.path}>{root.displayName}</p>
       <button onClick={action("rename")} type="button"><Icon name="edit" />{t("menu.rename")}</button>
       <button onClick={action("explorer")} type="button"><Icon name="external" />{t("menu.openExplorerRoot")}</button>
+      <button onClick={action("toggle-all-visibility")} type="button"><Icon name={root.hiddenFromAll ? "folder" : "eye-off"} />{t(root.hiddenFromAll ? "library.showInAll" : "library.hideFromAll")}</button>
       <button onClick={action("scan")} type="button"><Icon name="refresh" />{t("menu.rescan")}</button>
     </div>
   );

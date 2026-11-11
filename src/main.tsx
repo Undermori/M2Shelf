@@ -1,3 +1,5 @@
+import {PrivateNotesLifecycle} from './components/PrivateNote';
+import {CollectionStateProvider} from './lib/collectionState';
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App";
@@ -6,12 +8,14 @@ import { AppSettingsProvider } from "./lib/settingsStore";
 import "./styles.css";
 import "./styles/workspace.css";
 import './styles/comics.css';
+import './styles/collection-layout.css';
+import './styles/ui-polish.css';
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <I18nProvider>
       <AppSettingsProvider>
-      <App />
+      <CollectionStateProvider><PrivateNotesLifecycle/><App /></CollectionStateProvider>
       </AppSettingsProvider>
     </I18nProvider>
   </StrictMode>,

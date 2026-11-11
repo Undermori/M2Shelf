@@ -44,6 +44,10 @@ impl MediaType {
 }
 fn source_type(db: &Database, node: i64) -> AppResult<MediaType> {
     let target = db.get_node(node)?;
+    // A manually selected series entry searches TV; ordinary works keep indexed detection.
+    if target.node_type == NodeType::Container {
+        return Ok(MediaType::Tv);
+    }
     let (parsed, _) = crate::media_scraper::indexed_evidence(db, &target)?;
     Ok(if parsed.subtype == crate::media_scraper::Subtype::Tv {
         MediaType::Tv
@@ -298,7 +302,10 @@ fn scope(node: &MediaNode) -> AppResult<()> {
     if !matches!(
         node.media_kind,
         LibraryMediaKind::LiveAction | LibraryMediaKind::Video
-    ) || !matches!(node.node_type, NodeType::Work | NodeType::AutoWork)
+    ) || !matches!(
+        node.node_type,
+        NodeType::Work | NodeType::AutoWork | NodeType::Container
+    ) || node.parent_node_id.is_none()
         || node.total_video_count <= 0
         || node
             .binding
@@ -306,6 +313,13 @@ fn scope(node: &MediaNode) -> AppResult<()> {
             .is_some_and(|b| b.provider_subject_type == 2)
     {
         return Err("TMDB_REQUIRES_MOVIE_WORK".into());
+    }
+    Ok(())
+}
+fn scope_for(node: &MediaNode, media_type: MediaType) -> AppResult<()> {
+    scope(node)?;
+    if node.node_type == NodeType::Container && media_type != MediaType::Tv {
+        return Err("TMDB_REQUIRES_TV_SERIES".into());
     }
     Ok(())
 }
@@ -395,6 +409,7 @@ pub fn search(
     query: &str,
     year: Option<u16>,
     language: &str,
+    requested_type: Option<MediaType>,
 ) -> AppResult<Search> {
     scope(&db.get_node(node)?)?;
     let language = locale(language)?;
@@ -406,7 +421,11 @@ pub fn search(
         return Err("TMDB_QUERY_INVALID".into());
     }
     let snapshot = fingerprint(&db.connect()?, node)?;
-    let media_type = source_type(db, node)?;
+    let media_type = match requested_type {
+        Some(value) => value,
+        None => source_type(db, node)?,
+    };
+    scope_for(&db.get_node(node)?, media_type)?;
     let generation = crate::tmdb_credentials::generation();
     let key = format!("search:{media_type:?}:{generation}:{language}:{year:?}:{query}");
     let cache = CACHE.get_or_init(|| Mutex::new(VecDeque::new()));
@@ -686,7 +705,7 @@ pub fn bind_for(
     media_type: MediaType,
 ) -> AppResult<Binding> {
     let generation = MUTATION_GENERATION.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
-    scope(&db.get_node(node)?)?;
+    scope_for(&db.get_node(node)?, media_type)?;
     if fingerprint(&db.connect()?, node)? != expected {
         return Err("TMDB_TARGET_STALE".into());
     }
@@ -710,7 +729,7 @@ pub fn bind_for(
         let tx = c
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|e| e.to_string())?;
-        scope(&crate::db::get_node_conn(&tx, node)?)?;
+        scope_for(&crate::db::get_node_conn(&tx, node)?, media_type)?;
         if fingerprint(&tx, node)? != expected {
             return Err("TMDB_TARGET_STALE".into());
         }
@@ -757,6 +776,7 @@ fn retry_cover_using<P: AutomaticProvider, C: Fn() -> bool>(
     let previous = binding(&db.connect()?, node)?
         .filter(|b| b.active)
         .ok_or("TMDB_NO_ACTIVE_BINDING")?;
+    scope_for(&target, previous.movie.media_type)?;
     if target.cover_source == crate::models::CoverSource::Manual {
         return Ok(previous);
     }
@@ -964,6 +984,7 @@ pub(crate) fn diagnostic_for(
         if value.len() <= 65536 {
             tx.execute("INSERT INTO settings(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",params![key,value]).map_err(|e|e.to_string())?;
         }
+        tx.execute("INSERT INTO match_issue_outcomes(node_id,provider,outcome,updated_at) SELECT id,?2,?3,strftime('%Y-%m-%dT%H:%M:%fZ','now') FROM nodes WHERE id=?1 ON CONFLICT(node_id,provider) DO UPDATE SET outcome=excluded.outcome,updated_at=excluded.updated_at",params![node.id,if bangumi {"BANGUMI"} else {"TMDB"},outcome]).map_err(|e|e.to_string())?;
         tx.commit().map_err(|e| e.to_string())?;
         Ok(())
     })();
@@ -1031,7 +1052,7 @@ impl AutomaticProvider for NativeAutomaticProvider {
         year: Option<u16>,
         language: &str,
     ) -> AppResult<Vec<Movie>> {
-        search(db, node, query, year, language).map(|s| s.movies)
+        search(db, node, query, year, language, None).map(|s| s.movies)
     }
     fn detail(&mut self, id: i64, language: &str) -> AppResult<Movie> {
         let mut movie = detail(id, language)?;
@@ -1756,6 +1777,64 @@ pub(crate) fn fixture_movie_cover(root: &Path, movie: &Movie) -> AppResult<PathB
     )
 }
 
+pub(crate) fn cover_candidates(movie: &Movie) -> AppResult<Vec<crate::cover_selection::Candidate>> {
+    let images: MovieImages = request_json(
+        &format!("/{}/{}/images", movie.media_type.endpoint(), movie.id),
+        &[],
+    )?;
+    let mut items: Vec<_> = images
+        .posters
+        .into_iter()
+        .take(1000)
+        .filter(|p| {
+            valid_poster(&p.file_path)
+                && p.width > 0
+                && p.height > 0
+                && p.width <= 30000
+                && p.height <= 30000
+        })
+        .collect();
+    items.sort_by_key(|p| {
+        std::cmp::Reverse((
+            p.iso_639_1 == movie.original_language,
+            p.vote_count.min(10000),
+        ))
+    });
+    Ok(items
+        .into_iter()
+        .take(96)
+        .map(|p| crate::cover_selection::Candidate {
+            url: format!("https://image.tmdb.org/t/p/w780{}", p.file_path),
+            language: p.iso_639_1,
+            width: p.width,
+            height: p.height,
+        })
+        .collect())
+}
+pub(crate) fn candidate_bytes(url: &str) -> AppResult<Vec<u8>> {
+    let path = url
+        .strip_prefix("https://image.tmdb.org/t/p/w780")
+        .ok_or("TMDB_INVALID_POSTER")?;
+    if !valid_poster(path) {
+        return Err("TMDB_INVALID_POSTER".into());
+    }
+    let mut response = client()?
+        .get(url)
+        .send()
+        .map_err(|_| "TMDB_COVER_NETWORK")?;
+    if !response.status().is_success() {
+        return Err("TMDB_COVER_HTTP".into());
+    }
+    let mut bytes = vec![];
+    response
+        .by_ref()
+        .take(15 * 1024 * 1024 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| "TMDB_COVER_READ")?;
+    cache::validate_cover_payload(&bytes)?;
+    Ok(bytes)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2110,7 +2189,7 @@ mod tests {
                 |r| r.get::<_, i64>(0)
             )
             .unwrap(),
-            27
+            36
         );
         assert_eq!(
             c.query_row(
@@ -2216,6 +2295,166 @@ mod tests {
             );
         }
     }
+    #[test]
+    fn manual_tv_series_scope_preserves_automatic_and_source_boundaries() {
+        use m2shelf_smart_mixed_lab::model::LibraryKind;
+        use m2shelf_smart_mixed_shadow::fixture::Factory;
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("series.db");
+        let mut fixture = Factory::create(&path, LibraryKind::LiveAction, "FOLDER").unwrap();
+        let id = fixture.node("Movie").unwrap();
+        fixture
+            .connection
+            .execute(
+                "UPDATE nodes SET node_type='CONTAINER',total_video_count=63 WHERE id=?1",
+                [id],
+            )
+            .unwrap();
+        let db = Database::new(path);
+        db.migrate().unwrap();
+        let node = db.get_node(id).unwrap();
+        assert!(scope_for(&node, MediaType::Tv).is_ok());
+        assert_eq!(source_type(&db, id).unwrap(), MediaType::Tv);
+        assert_eq!(
+            scope_for(&node, MediaType::Movie).unwrap_err(),
+            "TMDB_REQUIRES_TV_SERIES"
+        );
+        // Invalid namespace requests fail before credentials, HTTP or a binding write.
+        assert_eq!(
+            search(&db, id, "Series", None, "zh-CN", Some(MediaType::Movie))
+                .err()
+                .unwrap(),
+            "TMDB_REQUIRES_TV_SERIES"
+        );
+        assert_eq!(
+            bind_for(&db, id, 7, "zh-CN", "unused", temp.path(), MediaType::Movie).unwrap_err(),
+            "TMDB_REQUIRES_TV_SERIES"
+        );
+        let (_, evidence) = crate::media_scraper::indexed_evidence(&db, &node).unwrap();
+        assert!(!indexed_source(&db, &node, &evidence, &[]).unwrap());
+        let mut target = node.clone();
+        target.parent_node_id = None;
+        assert!(scope_for(&target, MediaType::Tv).is_err());
+        target = node.clone();
+        target.total_video_count = 0;
+        assert!(scope_for(&target, MediaType::Tv).is_err());
+        target = node.clone();
+        target.node_type = NodeType::Mixed;
+        assert!(scope_for(&target, MediaType::Tv).is_err());
+        target = node.clone();
+        target.media_kind = LibraryMediaKind::Animation;
+        assert!(scope_for(&target, MediaType::Tv).is_err());
+        target = node.clone();
+        target.media_kind = LibraryMediaKind::Ebook;
+        assert!(scope_for(&target, MediaType::Tv).is_err());
+        assert!(binding(&db.connect().unwrap(), id).unwrap().is_none());
+    }
+
+    #[test]
+    fn schema36_upgrades_real_binding_writes_and_retains_schema35_movie_rows() {
+        use m2shelf_smart_mixed_lab::model::LibraryKind;
+        use m2shelf_smart_mixed_shadow::fixture::Factory;
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("upgrade.db");
+        let mut fixture = Factory::create(&path, LibraryKind::LiveAction, "FOLDER").unwrap();
+        let film = fixture.node("Movie (2015)").unwrap();
+        let series = fixture.node("Series (2015)").unwrap();
+        let prepared = Database::new(path.clone());
+        prepared.migrate().unwrap();
+        let c = &fixture.connection;
+        c.execute(
+            "UPDATE nodes SET node_type='WORK',total_video_count=1 WHERE id=?1",
+            [film],
+        )
+        .unwrap();
+        c.execute("UPDATE nodes SET node_type='CONTAINER',total_video_count=3,manual_display_name=1,display_name='My series' WHERE id=?1",[series]).unwrap();
+        c.execute_batch("DROP TRIGGER tmdb_movie_scope;DROP TRIGGER tmdb_movie_update_scope;DELETE FROM mediashelf_schema_migrations WHERE version=36;").unwrap();
+        let old = include_str!("../migrations/0025_smart_mixed.sql");
+        for name in ["tmdb_movie_scope", "tmdb_movie_update_scope"] {
+            let tail = &old[old.find(&format!("CREATE TRIGGER {name} ")).unwrap()..];
+            let end = tail.find(" END;").unwrap() + 5;
+            c.execute_batch(&tail[..end]).unwrap();
+        }
+        let legacy=serde_json::json!({"id":7,"title":"Old movie","originalTitle":"Old movie","overview":"","releaseDate":null,"posterPath":null}).to_string();
+        c.execute("INSERT INTO tmdb_movie_bindings(node_id,movie_id,payload_json,cover_cache_path,cover_error) VALUES(?1,7,?2,'retained-cover','retained-error')",params![film,legacy]).unwrap();
+        c.execute("INSERT INTO metadata_bindings(node_id,provider,provider_subject_id,provider_subject_type,provider_title) VALUES(?1,'BANGUMI',99,6,'Retained Bangumi')",[series]).unwrap();
+        let tv=serde_json::json!({"mediaType":"TV","id":7,"title":"TV series","originalTitle":"TV series","overview":"","releaseDate":null,"posterPath":null}).to_string();
+        let insert =
+            "INSERT INTO tmdb_movie_bindings(node_id,movie_id,payload_json) VALUES(?1,7,?2)";
+        assert!(c
+            .execute(insert, params![series, tv])
+            .unwrap_err()
+            .to_string()
+            .contains("TMDB_REQUIRES_MOVIE_WORK"));
+        let db = Database::new(path);
+        db.migrate().unwrap();
+        let retained:(String,String,String)=c.query_row("SELECT payload_json,cover_cache_path,cover_error FROM tmdb_movie_bindings WHERE node_id=?1",[film],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).unwrap();
+        assert_eq!(
+            retained,
+            (
+                legacy.clone(),
+                "retained-cover".into(),
+                "retained-error".into()
+            )
+        );
+        assert_eq!(
+            db.get_node(film)
+                .unwrap()
+                .tmdb_binding
+                .unwrap()
+                .movie
+                .media_type,
+            MediaType::Movie
+        );
+        c.execute(insert, params![series, tv]).unwrap();
+        c.execute(
+            "UPDATE tmdb_movie_bindings SET active=0 WHERE node_id=?1",
+            [series],
+        )
+        .unwrap();
+        c.execute(
+            "UPDATE tmdb_movie_bindings SET active=1 WHERE node_id=?1",
+            [series],
+        )
+        .unwrap();
+        assert!(c
+            .execute(
+                "UPDATE tmdb_movie_bindings SET payload_json=?2 WHERE node_id=?1",
+                params![series, legacy]
+            )
+            .is_err());
+        assert_eq!(
+            binding(c, series).unwrap().unwrap().movie.media_type,
+            MediaType::Tv
+        );
+        assert_eq!(
+            db.get_node(series)
+                .unwrap()
+                .binding
+                .unwrap()
+                .provider_subject_id,
+            99
+        );
+        assert_eq!(db.get_node(series).unwrap().display_name, "My series");
+        assert_eq!(
+            c.query_row(
+                "SELECT max(version) FROM mediashelf_schema_migrations",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+            36
+        );
+        assert!(c
+            .prepare("PRAGMA foreign_key_check")
+            .unwrap()
+            .query([])
+            .unwrap()
+            .next()
+            .unwrap()
+            .is_none());
+    }
+
     #[test]
     fn provider_namespace_scope_manual_cover_and_stale_edits() {
         let _serial = crate::tmdb::MOVIE_TEST_GATE

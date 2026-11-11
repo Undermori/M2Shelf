@@ -18,6 +18,15 @@ const detail: NodeDetail = {node: node(1, 'Original', 208), comicBooks: books, c
 const props = (snapshot = detail): WorkDetailPageProps => ({detail: snapshot, loading: false, rootLabel: 'Comics', coverRevision: 0, onRoot: vi.fn(), onBack: vi.fn(), onBreadcrumb: vi.fn(), onBangumi: vi.fn(), onOpenBangumi: vi.fn(), onRetryCover: vi.fn(), onRetryCoverNode: vi.fn(), onClearBangumi: vi.fn(), onReveal: vi.fn(), onMenu: vi.fn(), onReadComic: vi.fn(), onPlay: vi.fn(), onRevealMedia: vi.fn(), onOpenChild: vi.fn(), onBangumiNode: vi.fn(), onOpenResource: vi.fn(), onRevealResource: vi.fn()});
 beforeEach(() => {vi.resetAllMocks(); mocks.reveal.mockResolvedValue(undefined);});
 afterEach(cleanup);
+it('retains the confirmed book detail while navigating without another book query',()=>{
+ const p=props(),view=render(<I18nProvider><ComicDetailPage {...p}/></I18nProvider>);
+ const hero=view.container.querySelector('.detail-hero');
+ view.rerender(<I18nProvider><ComicDetailPage {...p} loading/></I18nProvider>);
+ expect(view.container.querySelector('.detail-hero')).toBe(hero);
+ expect(view.container.querySelector('.detail-content')?.hasAttribute('inert')).toBe(true);
+ expect(mocks.detail).not.toHaveBeenCalled();
+ fireEvent.click(screen.getByRole('button',{name:'返回'}));expect(p.onBack).toHaveBeenCalledOnce();
+});
 
 describe('complete indexed comic details', () => {
   it('shows previously indexed MOBI/AZW3 attachments as readable files before their first open', () => {
@@ -50,7 +59,7 @@ describe('complete indexed comic details', () => {
     expect(screen.queryByText(/附属资源目录/)).toBeNull();
     fireEvent.click(child.querySelector('.media-card-open') ?? child); expect(actions.onOpenChild).toHaveBeenCalledWith(continuation);
     fireEvent.doubleClick(screen.getByText('Volume 1').closest('.comic-book-row')!);
-    expect(actions.onReadComic).toHaveBeenCalledWith(books[0]);
+    expect(actions.onReadComic).toHaveBeenCalledWith(books[0],books);
     expect(mocks.detail).not.toHaveBeenCalled();
   });
 

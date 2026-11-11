@@ -48,6 +48,20 @@ impl LogicalWorkIndex {
         Self::load_with_classification(connection, false)
     }
 
+    /// Same ownership model, without unrelated video payloads or per-node subtree activity.
+    /// Disc-title evidence is retained. Detail callers fetch owned/target files afterwards.
+    pub fn load_for_detail(connection: &Connection) -> AppResult<Self> {
+        Self::load_inner(connection, false, true, true)
+    }
+
+    pub fn load_for_root_detail(connection: &Connection, root: i64) -> AppResult<Self> {
+        Self::load_selected(connection, false, true, true, Some(root))
+    }
+
+    pub fn load_for_catalogue(connection: &Connection) -> AppResult<Self> {
+        Self::load_inner(connection, false, false, true)
+    }
+
     pub fn reclassify(connection: &Connection, root_id: Option<i64>) -> AppResult<()> {
         Self::load_with_classification(connection, true)?
             .persist_automatic_types(connection, root_id)
@@ -91,15 +105,38 @@ impl LogicalWorkIndex {
     }
 
     fn load_with_classification(connection: &Connection, reclassify: bool) -> AppResult<Self> {
+        Self::load_inner(connection, reclassify, false, false)
+    }
+
+    fn load_inner(
+        connection: &Connection,
+        reclassify: bool,
+        detail: bool,
+        skip_activity: bool,
+    ) -> AppResult<Self> {
+        Self::load_selected(connection, reclassify, detail, skip_activity, None)
+    }
+
+    fn load_selected(
+        connection: &Connection,
+        reclassify: bool,
+        detail: bool,
+        skip_activity: bool,
+        root: Option<i64>,
+    ) -> AppResult<Self> {
         let mut statement = connection
-            .prepare(&format!("{} WHERE n.library_root_id IN (SELECT id FROM library_roots WHERE media_kind='VIDEO')",db::node_select()))
+            .prepare(&format!("{} WHERE n.library_root_id IN (SELECT id FROM library_roots WHERE media_kind='VIDEO'){}",db::node_select(), if root.is_some() { " AND n.library_root_id=?1" } else { "" }))
             .map_err(|e| e.to_string())?;
         let mut nodes = statement
-            .query_map([], db::node_from_row)
+            .query_map(rusqlite::params_from_iter(root), db::node_from_row)
             .map_err(|e| e.to_string())?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| e.to_string())?;
-        db::hydrate_nodes_metadata_conn(connection, &mut nodes)?;
+        if skip_activity {
+            db::hydrate_node_labels_conn(connection, &mut nodes)?;
+        } else {
+            db::hydrate_nodes_metadata_conn(connection, &mut nodes)?;
+        }
         let mut statement = connection
             .prepare("SELECT id FROM library_roots WHERE recognition_mode='FOLDER'")
             .map_err(|e| e.to_string())?;
@@ -108,18 +145,28 @@ impl LogicalWorkIndex {
             .map_err(|e| e.to_string())?
             .collect::<Result<HashSet<i64>, _>>()
             .map_err(|e| e.to_string())?;
-        let mut statement = connection
-            .prepare(&format!(
-                "SELECT {} FROM media_files f",
-                db::media_columns("f")
-            ))
-            .map_err(|e| e.to_string())?;
-        let rows = statement
-            .query_map([], db::media_from_row)
-            .map_err(|e| e.to_string())?;
+        let files = if detail {
+            let disc_ids = nodes
+                .iter()
+                .filter(|node| is_disc_name(&node.folder_name))
+                .map(|node| node.id)
+                .collect::<Vec<_>>();
+            db::list_media_for_nodes_conn(connection, &disc_ids)?
+        } else {
+            let mut statement = connection
+                .prepare(&format!(
+                    "SELECT {} FROM media_files f",
+                    db::media_columns("f")
+                ))
+                .map_err(|e| e.to_string())?;
+            let rows = statement
+                .query_map([], db::media_from_row)
+                .map_err(|e| e.to_string())?;
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(|e| e.to_string())?
+        };
         let mut videos: HashMap<i64, Vec<MediaFile>> = HashMap::new();
-        for row in rows {
-            let file = row.map_err(|e| e.to_string())?;
+        for file in files {
             videos.entry(file.node_id).or_default().push(file);
         }
         let mut index = Self {
@@ -256,11 +303,6 @@ impl LogicalWorkIndex {
     }
 
     fn is_multi_disc_work(&self, id: i64) -> bool {
-        let parent = &self.nodes[&id];
-        let title = extract_title_signals(&parent.display_name);
-        if !useful_title(&title.cleaned_title) {
-            return false;
-        }
         let children = self.media_children(id);
         if !children.iter().any(|n| is_disc_name(&n.folder_name)) {
             return false;
@@ -270,6 +312,12 @@ impl LogicalWorkIndex {
                 || (!is_disc_name(&n.folder_name)
                     && !is_supplementary_directory_name(&n.folder_name))
         }) {
+            return false;
+        }
+        // Almost every node has no numbered discs. Avoid parsing its title on that path.
+        let parent = &self.nodes[&id];
+        let title = extract_title_signals(&parent.display_name);
+        if !useful_title(&title.cleaned_title) {
             return false;
         }
         let mut pending = children
@@ -345,6 +393,92 @@ impl LogicalWorkIndex {
         let mut ids = self.content.get(&id).cloned().unwrap_or_default();
         ids.sort_unstable();
         ids
+    }
+
+    pub fn load_detail_videos(
+        &mut self,
+        connection: &Connection,
+        sources: &[i64],
+        target_snapshot: bool,
+    ) -> AppResult<()> {
+        let mut ids = HashSet::new();
+        if target_snapshot {
+            let mut pending = sources.to_vec();
+            while let Some(id) = pending.pop() {
+                if ids.insert(id) {
+                    pending.extend(self.children.get(&id).into_iter().flatten().copied());
+                }
+            }
+        } else {
+            for id in sources {
+                ids.extend(self.owned_nodes(*id));
+            }
+        }
+        let missing = ids
+            .into_iter()
+            .filter(|id| !self.videos.contains_key(id))
+            .collect::<Vec<_>>();
+        for file in db::list_media_for_nodes_conn(connection, &missing)? {
+            self.videos.entry(file.node_id).or_default().push(file);
+        }
+        for id in missing {
+            self.videos.entry(id).or_default();
+        }
+        Ok(())
+    }
+
+    pub fn sources_for_ids(
+        &self,
+        connection: &Connection,
+        ids: &[i64],
+    ) -> AppResult<Vec<MediaNode>> {
+        let mut sources = ids
+            .iter()
+            .filter(|id| self.is_source(**id))
+            .filter_map(|id| self.nodes.get(id))
+            .cloned()
+            .collect::<Vec<_>>();
+        let wanted = sources.iter().map(|node| node.id).collect::<HashSet<_>>();
+        let owned = self
+            .owners
+            .iter()
+            .filter(|(_, owner)| wanted.contains(owner))
+            .map(|(id, _)| *id)
+            .collect::<Vec<_>>();
+        let mut times: HashMap<i64, (Option<String>, Option<String>)> = HashMap::new();
+        for chunk in owned.chunks(500) {
+            let placeholders = vec!["?"; chunk.len()].join(",");
+            let sql = format!("WITH selected(id) AS (SELECT id FROM nodes WHERE id IN ({placeholders})), activity(node_id,modified,watched) AS (
+                SELECT node_id,julianday(modified_at),NULL FROM media_files WHERE node_id IN (SELECT id FROM selected)
+                UNION ALL SELECT node_id,julianday(modified_at),NULL FROM resource_files WHERE node_id IN (SELECT id FROM selected)
+                UNION ALL SELECT node_id,NULL,julianday(last_watched_at) FROM watch_history WHERE node_id IN (SELECT id FROM selected)
+            ) SELECT node_id,strftime('%Y-%m-%dT%H:%M:%fZ',MAX(modified)),strftime('%Y-%m-%dT%H:%M:%fZ',MAX(watched)) FROM activity GROUP BY node_id");
+            let mut statement = connection.prepare(&sql).map_err(|e| e.to_string())?;
+            for row in statement
+                .query_map(rusqlite::params_from_iter(chunk), |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                    ))
+                })
+                .map_err(|e| e.to_string())?
+            {
+                let (id, modified, watched) = row.map_err(|e| e.to_string())?;
+                if let Some(owner) = self.owners.get(&id) {
+                    let entry = times.entry(*owner).or_default();
+                    entry.0 = entry.0.clone().max(modified);
+                    entry.1 = entry.1.clone().max(watched);
+                }
+            }
+        }
+        for node in &mut sources {
+            node.total_video_count = self.video_counts.get(&node.id).copied().unwrap_or_default();
+            let (modified, watched) = times.remove(&node.id).unwrap_or_default();
+            node.latest_file_modified_at = modified;
+            node.last_watched_at = watched;
+        }
+        Ok(sources)
     }
 
     pub fn sources(&self, connection: &Connection) -> AppResult<Vec<MediaNode>> {

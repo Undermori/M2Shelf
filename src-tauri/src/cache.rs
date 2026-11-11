@@ -301,13 +301,59 @@ pub fn copy_manual_cover(
     }
     validate_manual_cover(&bytes, expected_format)?;
 
+    write_manual_payload(cache_root, &format!("node-{node_id}"), &extension, &bytes)
+}
+
+pub(crate) fn store_manual_payload(
+    _guard: &CoverCacheOperationGuard,
+    cache_root: &Path,
+    target: crate::collection::Target,
+    bytes: &[u8],
+) -> AppResult<PathBuf> {
+    if bytes.is_empty() || bytes.len() as u64 > MAX_COVER_BYTES {
+        return Err("COVER_SELECTION_INVALID".into());
+    }
+    validate_cover_payload(bytes)?;
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format()
+        .map_err(|_| "COVER_SELECTION_INVALID")?;
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(MAX_COVER_DIMENSION);
+    limits.max_image_height = Some(MAX_COVER_DIMENSION);
+    limits.max_alloc = Some(192 * 1024 * 1024);
+    reader.limits(limits);
+    drop(reader.decode().map_err(|_| "COVER_SELECTION_INVALID")?);
+    let ext = match image::guess_format(bytes).map_err(|_| "COVER_SELECTION_INVALID")? {
+        image::ImageFormat::Jpeg => "jpg",
+        image::ImageFormat::Png => "png",
+        image::ImageFormat::WebP => "webp",
+        _ => return Err("COVER_SELECTION_INVALID".into()),
+    };
+    let stem = match target {
+        crate::collection::Target::Node(id) => format!("node-{id}"),
+        crate::collection::Target::Book(id) => format!("book-{id}"),
+    };
+    // Unique original: failed DB commit or cancelled request never overwrites the old image.
+    write_manual_payload(
+        cache_root,
+        &format!("{stem}-{}", Uuid::new_v4().simple()),
+        ext,
+        bytes,
+    )
+}
+fn write_manual_payload(
+    cache_root: &Path,
+    stem: &str,
+    extension: &str,
+    bytes: &[u8],
+) -> AppResult<PathBuf> {
     ensure_existing_custom_cache(cache_root)?;
     let manual_directory = cache_root.join("manual");
-    let destination = manual_directory.join(format!("node-{node_id}.{extension}"));
+    let destination = manual_directory.join(format!("{stem}.{extension}"));
     let (mut pending_file, mut temporary_file) = create_pending_cache_file(&destination, false)
         .map_err(|error| format!("无法创建封面缓存临时文件：{error}"))?;
     temporary_file
-        .write_all(&bytes)
+        .write_all(bytes)
         .map_err(|error| format!("复制封面到应用缓存失败：{error}"))?;
     temporary_file
         .flush()
@@ -786,6 +832,18 @@ fn is_bangumi_file_name(name: &str) -> bool {
         )
 }
 
+pub(crate) fn is_manual_stem(stem: &str) -> bool {
+    let Some(body) = stem
+        .strip_prefix("node-")
+        .or_else(|| stem.strip_prefix("book-"))
+    else {
+        return false;
+    };
+    positive_decimal(body)
+        || body.split_once('-').is_some_and(|(id, hash)| {
+            positive_decimal(id) && hash.len() == 32 && hash.bytes().all(|b| b.is_ascii_hexdigit())
+        })
+}
 fn is_manual_file_name(name: &str) -> bool {
     if is_unique_temporary_name(name, true) {
         return true;
@@ -797,8 +855,7 @@ fn is_manual_file_name(name: &str) -> bool {
         .and_then(OsStr::to_str)
         .unwrap_or_default()
         .to_ascii_lowercase();
-    stem.strip_prefix("node-").is_some_and(positive_decimal)
-        && matches!(extension.as_str(), "jpg" | "jpeg" | "png" | "webp")
+    is_manual_stem(stem) && matches!(extension.as_str(), "jpg" | "jpeg" | "png" | "webp")
 }
 
 fn is_unique_temporary_name(name: &str, manual: bool) -> bool {
@@ -812,7 +869,7 @@ fn is_unique_temporary_name(name: &str, manual: bool) -> bool {
         return false;
     };
     let valid_stem = if manual {
-        stem.strip_prefix("node-").is_some_and(positive_decimal)
+        is_manual_stem(stem)
     } else {
         positive_decimal(stem) || is_tmdb_stem(stem)
     };

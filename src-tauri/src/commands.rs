@@ -6,7 +6,7 @@ use std::{
     },
 };
 
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use uuid::Uuid;
 
 use crate::{
@@ -16,7 +16,7 @@ use crate::{
         AllResourcesResult, AppBootstrap, AppSettings, BangumiSearchPrefill, BangumiSubject,
         BatchMutationResult, BrowseResult, CacheStats, CollectionSort, CollectionSortPreferences,
         CollectionSortScope, CoverSource, FavoriteFolder, LibraryMediaKind, LibraryRecognitionMode,
-        LibraryRoot, MediaFile, MediaNode, MetadataBinding, NodeDetail, NodeType, PlayerTestResult,
+        LibraryRoot, MediaFile, MediaNode, MetadataBinding, NodeType, PlayerTestResult,
         RebuildResult, RecentlyWatchedEntry, ScanPhase, ScanProgress, ScanStarted, ScanStatus,
         SearchHit, UpdateCheckResult, UpdateDistribution, UpdateDownloadStatus, UserTag,
         UserTagMembership, WorkTarget,
@@ -180,11 +180,12 @@ pub async fn tmdb_search(
     query: String,
     year: Option<u16>,
     language: String,
+    media_type: Option<crate::tmdb::MediaType>,
     state: State<'_, AppState>,
 ) -> AppResult<crate::tmdb::Search> {
     let db = state.database.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        crate::tmdb::search(&db, node_id, &query, year, &language)
+        crate::tmdb::search(&db, node_id, &query, year, &language, media_type)
     })
     .await
     .map_err(|_| "TMDB_SEARCH_FAILED")?
@@ -406,12 +407,6 @@ pub fn show_main_window(app: AppHandle, state: State<'_, AppState>) -> AppResult
         app.exit(1);
         return Err(error);
     }
-    if let Ok(cache_root) = state
-        .database
-        .poster_cache_root(&state.default_cover_cache_dir)
-    {
-        crate::poster_cache::resume_warmup(&state.database, &cache_root);
-    }
     if let Err(error) = window.show() {
         // A Portable helper may already have observed the health marker above. Exiting inside its
         // survival grace makes the transaction fail closed and preserves rollback material.
@@ -420,6 +415,14 @@ pub fn show_main_window(app: AppHandle, state: State<'_, AppState>) -> AppResult
     }
     // Match normal desktop startup behavior without making focus a prerequisite for visibility.
     let _ = window.set_focus();
+    // Cache recovery is optional background work; it must not delay the prepared first frame.
+    let database = state.database.clone();
+    let default_cache = state.default_cover_cache_dir.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        if let Ok(cache_root) = database.poster_cache_root(&default_cache) {
+            crate::poster_cache::resume_warmup(&database, &cache_root);
+        }
+    });
     Ok(())
 }
 
@@ -556,10 +559,90 @@ fn display_architecture() -> &'static str {
 }
 
 #[tauri::command]
-pub fn list_library_roots(state: State<'_, AppState>) -> AppResult<Vec<LibraryRoot>> {
-    state.database.list_roots()
+pub async fn list_library_roots(state: State<'_, AppState>) -> AppResult<Vec<LibraryRoot>> {
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || database.list_roots())
+        .await
+        .map_err(|error| error.to_string())?
 }
 
+#[tauri::command]
+pub async fn get_next_volume(
+    comic_book_id: i64,
+    expected_revision: String,
+    state: State<'_, AppState>,
+) -> AppResult<crate::next_volume::NextVolumeResult> {
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::next_volume::lookup(&database, comic_book_id, Some(&expected_revision))
+    })
+    .await
+    .map_err(|_| "NEXT_VOLUME_FAILED".to_string())?
+}
+#[tauri::command]
+pub async fn confirm_next_volume(
+    comic_book_id: i64,
+    expected_revision: String,
+    next_book_id: i64,
+    snapshot: String,
+    state: State<'_, AppState>,
+) -> AppResult<crate::next_volume::NextVolumeResult> {
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::next_volume::confirm(
+            &database,
+            comic_book_id,
+            &expected_revision,
+            next_book_id,
+            &snapshot,
+        )
+    })
+    .await
+    .map_err(|_| "NEXT_VOLUME_FAILED".to_string())?
+}
+#[tauri::command]
+pub async fn episode_watch_snapshot(
+    node_id: i64,
+    work_view: bool,
+    state: State<'_, AppState>,
+) -> AppResult<crate::episode_watch::EpisodeWatchSnapshot> {
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        database.episode_watch_snapshot(node_id, work_view)
+    })
+    .await
+    .map_err(|_| "EPISODE_WATCH_FAILED".to_string())?
+}
+#[tauri::command]
+pub async fn set_episode_watched(
+    node_id: i64,
+    work_view: bool,
+    file_id: i64,
+    watched: bool,
+    snapshot: String,
+    state: State<'_, AppState>,
+) -> AppResult<crate::episode_watch::EpisodeWatchSnapshot> {
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        database.set_episode_watched(node_id, work_view, file_id, watched, &snapshot)
+    })
+    .await
+    .map_err(|_| "EPISODE_WATCH_FAILED".to_string())?
+}
+#[tauri::command]
+pub async fn clear_episode_watch(
+    node_id: i64,
+    work_view: bool,
+    snapshot: String,
+    state: State<'_, AppState>,
+) -> AppResult<crate::episode_watch::EpisodeWatchSnapshot> {
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        database.clear_episode_watch(node_id, work_view, &snapshot)
+    })
+    .await
+    .map_err(|_| "EPISODE_WATCH_FAILED".to_string())?
+}
 #[tauri::command]
 pub fn get_comic_detail(
     node_id: i64,
@@ -665,56 +748,71 @@ pub async fn read_epub_illustration(
 }
 
 #[tauri::command]
-pub fn update_comic_progress(
+pub async fn update_comic_progress(
     comic_book_id: i64,
     page_index: i64,
     expected_revision: Option<String>,
     text_position: Option<crate::comics::TextPosition>,
     state: State<'_, AppState>,
 ) -> AppResult<()> {
-    crate::comic_reader::progress_with_position_at_revision(
-        &state.database,
-        comic_book_id,
-        page_index,
-        expected_revision.as_deref(),
-        text_position,
-    )
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::comic_reader::progress_with_position_at_revision(
+            &database,
+            comic_book_id,
+            page_index,
+            expected_revision.as_deref(),
+            text_position,
+        )
+    })
+    .await
+    .map_err(|_| "COMIC_PROGRESS_FAILED".to_string())?
 }
 #[tauri::command]
 pub fn list_comic_bookmarks(comic_book_id: i64, state: State<'_, AppState>) -> AppResult<Vec<i64>> {
     crate::comic_reader::bookmarks(&state.database, comic_book_id)
 }
 #[tauri::command]
-pub fn add_comic_bookmark(
+pub async fn add_comic_bookmark(
     comic_book_id: i64,
     page_index: i64,
     expected_revision: Option<String>,
     text_position: Option<crate::comics::TextPosition>,
     state: State<'_, AppState>,
 ) -> AppResult<Vec<i64>> {
-    crate::comic_reader::bookmark_with_position_at_revision(
-        &state.database,
-        comic_book_id,
-        page_index,
-        true,
-        expected_revision.as_deref(),
-        text_position,
-    )
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::comic_reader::bookmark_with_position_at_revision(
+            &database,
+            comic_book_id,
+            page_index,
+            true,
+            expected_revision.as_deref(),
+            text_position,
+        )
+    })
+    .await
+    .map_err(|_| "COMIC_BOOKMARK_FAILED".to_string())?
 }
 #[tauri::command]
-pub fn remove_comic_bookmark(
+pub async fn remove_comic_bookmark(
     comic_book_id: i64,
     page_index: i64,
     expected_revision: Option<String>,
     state: State<'_, AppState>,
 ) -> AppResult<Vec<i64>> {
-    crate::comic_reader::bookmark_at_revision(
-        &state.database,
-        comic_book_id,
-        page_index,
-        false,
-        expected_revision.as_deref(),
-    )
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::comic_reader::bookmark_at_revision(
+            &database,
+            comic_book_id,
+            page_index,
+            false,
+            expected_revision.as_deref(),
+        )
+    })
+    .await
+    .map_err(|_| "COMIC_BOOKMARK_FAILED".to_string())?
 }
 
 #[tauri::command]
@@ -740,21 +838,25 @@ pub fn add_library_root(
         library_root_paths(&state)?,
     )?;
     let kind = media_kind.unwrap_or_default();
-    state.database.add_root_with_strategy(
+    let root = state.database.add_root_with_strategy(
         &canonical,
         display_name,
         kind,
         recognition_mode,
         auto_bangumi.unwrap_or(!kind.is_book()),
         book_organization_strategy.as_deref().unwrap_or("LEGACY"),
-    )
+    )?;
+    crate::poster_resource::clear_memory();
+    Ok(root)
 }
 
 #[tauri::command]
 pub fn remove_library_root(root_id: i64, state: State<'_, AppState>) -> AppResult<()> {
     let _scan_lifecycle = lock_scan_lifecycle(&state);
     ensure_no_active_scan(&state)?;
-    state.database.remove_root(root_id)
+    state.database.remove_root(root_id)?;
+    crate::poster_resource::clear_memory();
+    Ok(())
 }
 
 #[tauri::command]
@@ -784,18 +886,49 @@ pub fn set_library_auto_bangumi(
 }
 
 #[tauri::command]
+pub async fn set_library_hidden_from_all(
+    root_id: i64,
+    hidden: bool,
+    state: State<'_, AppState>,
+) -> AppResult<LibraryRoot> {
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || database.set_root_hidden_from_all(root_id, hidden))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
 pub fn list_hidden_nodes(state: State<'_, AppState>) -> AppResult<Vec<MediaNode>> {
     state.database.list_hidden_nodes()
 }
 
 #[tauri::command]
-pub fn get_all_resources(state: State<'_, AppState>) -> AppResult<AllResourcesResult> {
-    state.database.list_all_resources()
+pub async fn card_progress(
+    requests: Vec<crate::card_progress::Request>,
+    state: State<'_, AppState>,
+) -> AppResult<Vec<crate::card_progress::Summary>> {
+    let db = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || crate::card_progress::read(&db, &requests))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-pub fn list_recently_watched(state: State<'_, AppState>) -> AppResult<Vec<RecentlyWatchedEntry>> {
-    state.database.list_recently_watched()
+pub async fn get_all_resources(state: State<'_, AppState>) -> AppResult<AllResourcesResult> {
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || database.list_all_resources())
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub async fn list_recently_watched(
+    state: State<'_, AppState>,
+) -> AppResult<Vec<RecentlyWatchedEntry>> {
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || database.list_recently_watched())
+        .await
+        .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
@@ -826,11 +959,14 @@ pub fn delete_favorite_folder(folder_id: i64, state: State<'_, AppState>) -> App
 }
 
 #[tauri::command]
-pub fn list_favorite_folder_nodes(
+pub async fn list_favorite_folder_nodes(
     folder_id: i64,
     state: State<'_, AppState>,
 ) -> AppResult<Vec<MediaNode>> {
-    state.database.list_favorite_folder_nodes(folder_id)
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || database.list_favorite_folder_nodes(folder_id))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -856,15 +992,27 @@ pub fn batch_remove_nodes_from_favorite(
 }
 
 #[tauri::command]
-pub fn browse_library(
+pub async fn browse_library(
     root_id: i64,
     parent_node_id: Option<i64>,
     state: State<'_, AppState>,
 ) -> AppResult<BrowseResult> {
-    let root = state.database.get_root(root_id)?;
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        browse_library_snapshot(&database, root_id, parent_node_id)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+fn browse_library_snapshot(
+    database: &Database,
+    root_id: i64,
+    parent_node_id: Option<i64>,
+) -> AppResult<BrowseResult> {
+    let root = database.get_root(root_id)?;
     let parent_id = match parent_node_id {
         Some(id) => id,
-        None => match state.database.hidden_root_node_id(&root)? {
+        None => match database.hidden_root_node_id(&root)? {
             Some(id) => id,
             None => {
                 return Ok(BrowseResult {
@@ -878,39 +1026,222 @@ pub fn browse_library(
             }
         },
     };
-    state.database.read_snapshot(|connection| {
+    database.read_snapshot(|connection| {
         crate::db::ensure_node_visible_conn(connection, parent_id)?;
-        if crate::db::get_node_conn(connection, parent_id)?.library_root_id != root_id {
+        let parent_root: i64 = connection
+            .query_row(
+                "SELECT library_root_id FROM nodes WHERE id=?1",
+                [parent_id],
+                |r| r.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        if parent_root != root_id {
             return Err("目录节点不属于该资源库。".into());
         }
+        let mut nodes = crate::db::list_children_conn(connection, parent_id)?;
+        crate::card_progress::hydrate_library_nodes_conn(connection, root_id, &mut nodes)?;
         Ok(BrowseResult {
             comic_books: crate::comics::books(connection, parent_id)?,
             root,
             breadcrumbs: crate::db::breadcrumbs_conn(connection, parent_id, true)?,
-            nodes: crate::db::list_children_conn(connection, parent_id)?,
+            nodes,
             media_files: crate::db::list_media_conn(connection, parent_id)?,
             resource_files: crate::db::list_resources_conn(connection, parent_id)?,
         })
     })
 }
 
-#[tauri::command]
-pub fn get_node_detail(node_id: i64, state: State<'_, AppState>) -> AppResult<NodeDetail> {
-    crate::works::node_detail(&state.database, node_id)
+#[cfg(test)]
+mod browse_phase_profile {
+    use super::*;
+    #[test]
+    fn library_browse_matches_uncached_snapshot_after_ownership_and_metadata_edits() {
+        let temp = crate::db::test_temp_dir();
+        let db = Database::new(temp.path().join("library-browse.db"));
+        db.migrate().unwrap();
+        let c = db.connect().unwrap();
+        let root = temp.path().join("Synthetic");
+        c.execute("INSERT INTO library_roots(id,path,display_name,media_kind,video_subject_scope) VALUES(1,?1,'Library','VIDEO','ANIMATION')",[root.to_string_lossy()]).unwrap();
+        for (id, parent, name, kind, files, branches) in [
+            (1, None, "Synthetic", "CONTAINER", 2, 1),
+            (2, Some(1), "Series", "CONTAINER", 2, 2),
+            (3, Some(2), "First Story", "WORK", 1, 0),
+            (4, Some(2), "Second Story", "WORK", 1, 0),
+        ] {
+            let path = if id == 1 {
+                root.clone()
+            } else {
+                root.join(name)
+            };
+            c.execute("INSERT INTO nodes(id,library_root_id,parent_node_id,absolute_path,folder_name,display_name,node_type,manual_type_override,direct_video_count,total_video_count,child_media_branch_count) VALUES(?1,1,?2,?3,?4,?4,?5,1,?6,?7,?8)",rusqlite::params![id,parent,path.to_string_lossy(),name,kind,if id>=3{1}else{0},files,branches]).unwrap();
+            if id >= 3 {
+                c.execute("INSERT INTO media_files(id,node_id,absolute_path,file_name,extension,file_size,modified_at) VALUES(?1,?2,?3,'Story S01E01.mkv','mkv',123,'stamp')",rusqlite::params![id-2,id,path.join("Story S01E01.mkv").to_string_lossy()]).unwrap();
+            }
+        }
+        let verify = || {
+            let optimized = browse_library_snapshot(&db, 1, None).unwrap();
+            let expected = db
+                .read_snapshot(|c| {
+                    let mut nodes = crate::db::list_children_conn(c, 1)?;
+                    crate::card_progress::hydrate_nodes_conn(c, &mut nodes)?;
+                    Ok(BrowseResult {
+                        root: db.get_root(1)?,
+                        breadcrumbs: crate::db::breadcrumbs_conn(c, 1, true)?,
+                        nodes,
+                        comic_books: crate::comics::books(c, 1)?,
+                        media_files: crate::db::list_media_conn(c, 1)?,
+                        resource_files: crate::db::list_resources_conn(c, 1)?,
+                    })
+                })
+                .unwrap();
+            assert_eq!(
+                serde_json::to_value(&optimized).unwrap(),
+                serde_json::to_value(expected).unwrap()
+            );
+            optimized.nodes[0].card_progress.clone().unwrap()
+        };
+        assert_eq!(verify().total, 2);
+        assert_eq!(verify().total, 2); // Revisit uses the same identities.
+        let watch = db.episode_watch_snapshot(2, false).unwrap();
+        db.set_episode_watched(2, false, 1, true, &watch.snapshot)
+            .unwrap();
+        assert_eq!(verify().watched, 1);
+        for change in [
+            "UPDATE nodes SET display_name='Renamed',manual_display_name=1 WHERE id=2",
+            "UPDATE nodes SET node_type='IGNORED' WHERE id=4",
+            "UPDATE nodes SET node_type='WORK' WHERE id=4",
+            "INSERT INTO metadata_bindings(node_id,provider,provider_subject_id,provider_subject_type,provider_title) VALUES(3,'BANGUMI',9001,2,'One Story'),(4,'BANGUMI',9001,2,'One Story')",
+            "UPDATE nodes SET parent_node_id=1 WHERE id=4",
+        ] { c.execute(change,[]).unwrap(); verify(); verify(); }
+        let error = browse_library_snapshot(&db, 999, Some(2));
+        assert!(error.is_err());
+        c.execute("UPDATE nodes SET node_type='IGNORED' WHERE id=2", [])
+            .unwrap();
+        assert!(browse_library_snapshot(&db, 1, Some(2)).is_err());
+    }
+    #[test]
+    #[ignore = "Explicit read-only synthetic library-switch profiling"]
+    fn synthetic_library_switch_phases() {
+        let path = PathBuf::from(
+            std::env::var("M2SHELF_SYNTHETIC_PROFILE_DB").expect("synthetic copy required"),
+        );
+        let base = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .join(".tmp")
+            .canonicalize()
+            .unwrap();
+        assert!(path.canonicalize().unwrap().starts_with(&base));
+        let db = Database::new(path);
+        for round in 0..2 {
+            for title in ["Repair Audit", "Comic Atlas", "Folder Performance"] {
+                db.read_snapshot(|c| {
+                    let paths = c.prepare("SELECT path FROM library_roots").unwrap().query_map([],|r|r.get::<_,String>(0)).unwrap().collect::<Result<Vec<_>,_>>().unwrap();
+                    let prefix=base.to_string_lossy().replace("\\\\?\\", "").replace('\\',"/").to_lowercase()+"/";
+                    assert!(paths.iter().all(|p|p.replace('\\',"/").to_lowercase().starts_with(&prefix)&&!p.replace('\\',"/").split('/').any(|s|s=="..")));
+                    let (root_id,parent): (i64,i64) = c.query_row("SELECT r.id,n.id FROM library_roots r JOIN nodes n ON n.library_root_id=r.id AND n.parent_node_id IS NULL WHERE r.display_name=?1",[title],|r|Ok((r.get(0)?,r.get(1)?))).unwrap();
+                    let mut times=Vec::new();
+                    macro_rules! phase { ($name:expr,$body:expr) => {{let start=std::time::Instant::now();let v=$body;times.push(($name,start.elapsed().as_secs_f64()*1000.));v}}; }
+                    phase!("visibility",crate::db::ensure_node_visible_conn(c,parent)?);
+                    let node=phase!("parent_full_metadata",crate::db::get_node_conn(c,parent)?);
+                    let mut nodes=phase!("children_full_metadata",crate::db::list_children_conn(c,parent)?);
+                    let graph=phase!("ownership_graph",if node.media_kind.is_book(){None}else{Some(crate::logical_works::LogicalWorkIndex::load_for_root_detail(c,root_id)?)});
+                    phase!("card_progress",crate::card_progress::Hydrator::new(c,graph).nodes(&mut nodes,false)?);
+                    let books=phase!("books",crate::comics::books(c,parent)?);
+                    phase!("breadcrumbs",crate::db::breadcrumbs_conn(c,parent,true)?);
+                    let media=phase!("direct_media",crate::db::list_media_conn(c,parent)?);
+                    let resources=phase!("direct_resources",crate::db::list_resources_conn(c,parent)?);
+                    eprintln!("ROOT_PHASES {}",serde_json::json!({"round":round,"root":title,"nodes":nodes.len(),"books":books.len(),"files":media.len()+resources.len(),"ms":times}));
+                    Ok(())
+                }).unwrap();
+                for cached in 0..2 {
+                    let start = std::time::Instant::now();
+                    let id = db
+                        .list_roots()
+                        .unwrap()
+                        .iter()
+                        .find(|r| r.display_name == title)
+                        .unwrap()
+                        .id;
+                    let response = browse_library_snapshot(&db, id, None).unwrap();
+                    eprintln!(
+                        "ROOT_OPTIMIZED {}",
+                        serde_json::json!({"round":round,"cached":cached,"root":title,"nodes":response.nodes.len(),"ms":start.elapsed().as_secs_f64()*1000.})
+                    );
+                }
+            }
+        }
+    }
 }
 
 #[tauri::command]
-pub fn get_work_detail(node_id: i64, state: State<'_, AppState>) -> AppResult<NodeDetail> {
-    crate::works::work_detail(&state.database, node_id)
+pub async fn get_node_detail(
+    node_id: i64,
+    state: State<'_, AppState>,
+) -> AppResult<crate::works::PresentationDetail> {
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::works::presentation_detail(&database, node_id, false)
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
-pub fn search_library(
+pub async fn get_work_detail(
+    node_id: i64,
+    state: State<'_, AppState>,
+) -> AppResult<crate::works::PresentationDetail> {
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::works::presentation_detail(&database, node_id, true)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub async fn search_library(
     query: String,
     root_id: Option<i64>,
+    filters: Option<crate::search_filters::SearchFilters>,
     state: State<'_, AppState>,
 ) -> AppResult<Vec<SearchHit>> {
-    state.database.search(&query, root_id)
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || match filters {
+        Some(filters) => database.search_filtered(&query, root_id, &filters),
+        None => database.search(&query, root_id),
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+#[tauri::command]
+pub async fn organize_issues(state: State<'_, AppState>) -> AppResult<Vec<crate::organize::Issue>> {
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || crate::organize::list(&database))
+        .await
+        .map_err(|e| e.to_string())?
+}
+#[tauri::command]
+pub fn set_issue_reminder(
+    node_id: i64,
+    kind: String,
+    ignored: bool,
+    state: State<'_, AppState>,
+) -> AppResult<()> {
+    crate::organize::remind(&state.database, node_id, &kind, ignored)
+}
+#[tauri::command]
+pub async fn search_extensions(
+    root_id: Option<i64>,
+    state: State<'_, AppState>,
+) -> AppResult<Vec<String>> {
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::search_filters::extensions(&database, root_id)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -1651,6 +1982,46 @@ pub fn clear_node_cover(node_id: i64, state: State<'_, AppState>) -> AppResult<M
 }
 
 #[tauri::command]
+pub async fn begin_pdf_cover(
+    node_id: Option<i64>,
+    comic_book_id: Option<i64>,
+    expected_revision: Option<String>,
+    state: State<'_, AppState>,
+) -> AppResult<Option<crate::pdf_cover::Request>> {
+    let db = state.database.clone();
+    let cache = db.poster_cache_root(&state.default_cover_cache_dir)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::pdf_cover::begin(
+            &db,
+            &cache,
+            node_id,
+            comic_book_id,
+            expected_revision.as_deref(),
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+#[tauri::command]
+pub async fn commit_pdf_cover(
+    ticket: String,
+    png_base64: String,
+    state: State<'_, AppState>,
+) -> AppResult<bool> {
+    let db = state.database.clone();
+    let cache = db.poster_cache_root(&state.default_cover_cache_dir)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::pdf_cover::commit(&db, &cache, &ticket, &png_base64)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+#[tauri::command]
+pub fn cancel_pdf_cover(ticket: String) {
+    crate::pdf_cover::cancel(&ticket);
+}
+
+#[tauri::command]
 pub async fn get_cover_data_url(
     node_id: i64,
     width: Option<u32>,
@@ -1709,7 +2080,18 @@ pub async fn get_book_cover_data_url(
             Ok(value) => Ok(value),
             Err(_) => {
                 use base64::Engine;
-                crate::comic_reader::read_book_cover(&database, comic_book_id, &expected_revision)
+                crate::cover_selection::book_manual(&database, comic_book_id)
+                    .and_then(|path| {
+                        if let Some(path) = path {
+                            cache::read_cover_payload(&path).map(Some)
+                        } else {
+                            crate::comic_reader::read_book_cover(
+                                &database,
+                                comic_book_id,
+                                &expected_revision,
+                            )
+                        }
+                    })
                     .map(|bytes| {
                         bytes.map(|bytes| {
                             let mime = image::guess_format(&bytes)
@@ -1776,6 +2158,8 @@ pub fn update_settings(
         .database
         .update_settings(&settings, &state.default_cover_cache_dir)?;
     if !same_path(&previous_cache, &cache_directory) {
+        crate::poster_resource::clear_memory();
+        crate::pdf_cover::cancel_all();
         crate::poster_cache::cancel_warmup();
         crate::poster_cache::schedule_warmup(&state.database, &cache_directory);
     }
@@ -1818,18 +2202,31 @@ pub async fn test_mpv(
 }
 
 #[tauri::command]
-pub fn play_media(media_file_id: i64, state: State<'_, AppState>) -> AppResult<()> {
-    let media = state.database.get_media_file(media_file_id)?;
-    let settings = state
-        .database
-        .get_settings(&state.default_cover_cache_dir)?;
-    let mpv = player::resolve(&settings)?;
-    launch_media_and_record_watch(
-        &state.database,
-        &media,
-        mpv.as_deref().unwrap_or(Path::new("")),
-        |_, source| player::play_selected(mpv.as_deref(), source),
-    )
+pub async fn play_media(
+    media_file_id: i64,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> AppResult<()> {
+    let database = state.database.clone();
+    let cache = state.default_cover_cache_dir.clone();
+    let monitor = state.mpv_monitor.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let media = database.get_media_file(media_file_id)?;
+        let settings = database.get_settings(&cache)?;
+        let mpv = player::resolve(&settings)?;
+        launch_media_and_record_watch(
+            &database,
+            &media,
+            mpv.as_deref().unwrap_or(Path::new("")),
+            |_, _| {
+                monitor.launch(&database, mpv.as_deref(), &media, move |event| {
+                    let _ = app.emit("mpv-playback", event);
+                })
+            },
+        )
+    })
+    .await
+    .map_err(|_| "PLAYER_LAUNCH_FAILED".to_string())?
 }
 
 fn launch_media_and_record_watch<F>(
@@ -1977,6 +2374,8 @@ pub fn clear_cover_cache(state: State<'_, AppState>) -> AppResult<CacheStats> {
         .into_iter()
         .filter(|(_, _, path)| cache::is_equal_or_within(path, &cache_root))
         .collect::<Vec<_>>();
+    crate::pdf_cover::cancel_all();
+    crate::poster_resource::clear_memory();
     cache::clear_cover_cache(&cache_clear, &cache_root)?;
     state.database.clear_cover_paths_for_nodes(&affected)?;
     state.database.clear_poster_checkpoint()?;
@@ -2494,4 +2893,268 @@ pub fn update_text_reader_settings(
     state: State<'_, AppState>,
 ) -> AppResult<crate::text_reader_settings::TextReaderSettings> {
     crate::text_reader_settings::save(&state.database, settings)
+}
+
+#[tauri::command]
+pub async fn remove_recent_activity(
+    state: State<'_, AppState>,
+    targets: Vec<crate::collection::Target>,
+) -> AppResult<()> {
+    let db = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || crate::collection::remove_recent(&db, &targets))
+        .await
+        .map_err(|e| e.to_string())?
+}
+#[tauri::command]
+pub async fn clear_recent_activity(state: State<'_, AppState>) -> AppResult<()> {
+    let db = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || crate::collection::clear_recent(&db))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn collection_statuses(
+    state: State<'_, AppState>,
+) -> AppResult<crate::collection::StatusSnapshot> {
+    let db = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || crate::collection::statuses(&db))
+        .await
+        .map_err(|e| e.to_string())?
+}
+#[tauri::command]
+pub async fn set_collection_status(
+    state: State<'_, AppState>,
+    target: crate::collection::Target,
+    status: Option<crate::collection::Status>,
+) -> AppResult<()> {
+    let db = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || crate::collection::set_status(&db, target, status))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn export_collection_backup(app: AppHandle, destination: String) -> AppResult<()> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let _lifecycle = lock_scan_lifecycle(&state);
+        ensure_no_active_scan(&state)?;
+        if state.update_exit_in_progress.load(Ordering::SeqCst) {
+            return Err("BACKUP_BUSY".into());
+        }
+        let data = app.path().app_data_dir().map_err(|_| "BACKUP_IO")?;
+        crate::collection_backup::export(&state.database, &data, Path::new(&destination))
+    })
+    .await
+    .map_err(|_| "BACKUP_IO")?
+}
+#[tauri::command]
+pub async fn prepare_collection_restore(
+    app: AppHandle,
+    source: String,
+) -> AppResult<crate::collection_backup::Preview> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let _lifecycle = lock_scan_lifecycle(&state);
+        ensure_no_active_scan(&state)?;
+        if state.update_exit_in_progress.load(Ordering::SeqCst) {
+            return Err("BACKUP_BUSY".into());
+        }
+        let data = app.path().app_data_dir().map_err(|_| "BACKUP_IO")?;
+        crate::collection_backup::prepare(&data, Path::new(&source))
+    })
+    .await
+    .map_err(|_| "BACKUP_IO")?
+}
+#[tauri::command]
+pub async fn discard_collection_restore(app: AppHandle, token: String) -> AppResult<()> {
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::collection_backup::discard(
+            &app.path().app_data_dir().map_err(|_| "BACKUP_IO")?,
+            &token,
+        )
+    })
+    .await
+    .map_err(|_| "BACKUP_IO")?
+}
+#[tauri::command]
+pub async fn apply_collection_restore(app: AppHandle, token: String) -> AppResult<()> {
+    let handle = app.clone();
+    let restart_token = token.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = handle.state::<AppState>();
+        let _lifecycle = lock_scan_lifecycle(&state);
+        ensure_no_active_scan(&state)?;
+        if state.update_exit_in_progress.load(Ordering::SeqCst) {
+            return Err("BACKUP_BUSY".into());
+        }
+        crate::collection_backup::arm(
+            &handle.path().app_data_dir().map_err(|_| "BACKUP_IO")?,
+            &token,
+            &state.database,
+        )
+    })
+    .await
+    .map_err(|_| "BACKUP_IO")??;
+    if let Err(error) = crate::single_instance::spawn_collection_restart() {
+        crate::collection_backup::disarm(
+            &app.path().app_data_dir().map_err(|_| "BACKUP_IO")?,
+            &restart_token,
+        )?;
+        return Err(error);
+    }
+    app.state::<AppState>()
+        .update_exit_in_progress
+        .store(true, Ordering::SeqCst);
+    app.exit(0);
+    Ok(())
+}
+#[tauri::command]
+pub fn collection_restore_notice(state: State<'_, AppState>) -> Option<String> {
+    state
+        .collection_restore_notice
+        .lock()
+        .ok()
+        .and_then(|mut notice| notice.take())
+}
+
+#[tauri::command]
+pub async fn get_private_note(
+    target: crate::collection::Target,
+    state: State<'_, AppState>,
+) -> AppResult<crate::notes::Note> {
+    let db = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || crate::notes::get(&db, target))
+        .await
+        .map_err(|e| e.to_string())?
+}
+#[tauri::command]
+pub async fn save_private_note(
+    target: crate::collection::Target,
+    body: String,
+    revision: i64,
+    state: State<'_, AppState>,
+) -> AppResult<crate::notes::Note> {
+    let db = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || crate::notes::save(&db, target, body, revision))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn validate_library_path(path: String, state: State<'_, AppState>) -> AppResult<String> {
+    let db = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::library_paths::validate(&db, Path::new(&path))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn begin_cover_selection(
+    target: crate::collection::Target,
+    state: State<'_, AppState>,
+) -> AppResult<String> {
+    let db = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || crate::cover_selection::begin(&db, target))
+        .await
+        .map_err(|e| e.to_string())?
+}
+#[tauri::command]
+pub async fn cover_selection_candidates(
+    token: String,
+    state: State<'_, AppState>,
+) -> AppResult<Vec<crate::cover_selection::Candidate>> {
+    let db = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || crate::cover_selection::online(&db, &token))
+        .await
+        .map_err(|e| e.to_string())?
+}
+#[allow(clippy::too_many_arguments)]
+#[tauri::command]
+pub async fn apply_cover_selection(
+    token: String,
+    local: Option<String>,
+    index: Option<usize>,
+    page: Option<i64>,
+    raster: Option<String>,
+    clear: bool,
+    state: State<'_, AppState>,
+) -> AppResult<()> {
+    let db = state.database.clone();
+    let root = active_cover_cache_directory(&state)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::cover_selection::apply(
+            &db,
+            &root,
+            &token,
+            local.as_deref().map(Path::new),
+            index,
+            page,
+            raster.as_deref(),
+            clear,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+#[tauri::command]
+pub fn discard_cover_selection(token: String) {
+    crate::cover_selection::discard(&token);
+}
+
+#[tauri::command]
+pub async fn preview_library_relocation(
+    root_id: i64,
+    path: String,
+    state: State<'_, AppState>,
+) -> AppResult<crate::library_relocation::Preview> {
+    ensure_no_active_scan(&state)?;
+    let db = state.database.clone();
+    let cache = active_cover_cache_directory(&state)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        cache::validate_cache_location(&cache, [PathBuf::from(&path)])?;
+        crate::library_relocation::preview(&db, root_id, Path::new(&path))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+#[tauri::command]
+pub async fn apply_library_relocation(token: String, app: AppHandle) -> AppResult<()> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let _lifecycle = state.scan_lifecycle.lock().map_err(|_| "RELOCATE_BUSY")?;
+        ensure_no_active_scan(&state)?;
+        crate::poster_cache::cancel_warmup();
+        let result = {
+            let _covers = cache::begin_cover_cache_clear();
+            crate::library_relocation::apply(&state.database, &token)
+        };
+        crate::poster_resource::clear_memory();
+        if let Ok(root) = active_cover_cache_directory(&state) {
+            crate::poster_cache::schedule_warmup(&state.database, &root);
+        }
+        result
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+#[tauri::command]
+pub fn discard_library_relocation(token: String) {
+    crate::library_relocation::discard(&token);
+}
+
+#[tauri::command]
+pub async fn preview_embedded_cover(
+    token: String,
+    state: State<'_, AppState>,
+) -> AppResult<Option<String>> {
+    let db = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::cover_selection::embedded_preview(&db, &token)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }

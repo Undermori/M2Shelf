@@ -3,7 +3,7 @@ use crate::{
     comics::{self, ComicBook, ComicOpenResult, ComicPage},
     db::{self, AppResult, Database},
 };
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use std::{
     fs::{self, File},
     io::{Read, Seek, SeekFrom},
@@ -155,21 +155,44 @@ pub(crate) fn cover_identity(
     id: i64,
     revision: &str,
 ) -> AppResult<Option<String>> {
+    database.read_snapshot(|c| cover_identity_conn(c, id, revision))
+}
+
+pub(crate) fn cover_identity_conn(
+    c: &Connection,
+    id: i64,
+    revision: &str,
+) -> AppResult<Option<String>> {
+    let (book, _, _, _, _, _) = validate_book(c, id)?;
+    if book.revision != revision {
+        return Err("COMIC_PAGE_CHANGED".into());
+    }
+    if book.index_error.is_some() || book.page_count == 0 {
+        return Ok(None);
+    }
+    c.query_row(
+        "SELECT page_name FROM comic_pages WHERE comic_book_id=?1 AND page_index=0",
+        [id],
+        |r| r.get(0),
+    )
+    .optional()
+    .map_err(|e| e.to_string())
+}
+
+pub(crate) fn pdf_cover_context(
+    database: &Database,
+    id: i64,
+    revision: &str,
+) -> AppResult<Option<u64>> {
     database.read_snapshot(|c| {
-        let (book, _, _, _, _, _) = validate_book(c, id)?;
+        let (book, _, _, size, _, _) = validate_book(c, id)?;
         if book.revision != revision {
             return Err("COMIC_PAGE_CHANGED".into());
         }
-        if book.index_error.is_some() || book.page_count == 0 {
-            return Ok(None);
-        }
-        c.query_row(
-            "SELECT page_name FROM comic_pages WHERE comic_book_id=?1 AND page_index=0",
-            [id],
-            |r| r.get(0),
-        )
-        .optional()
-        .map_err(|e| e.to_string())
+        Ok((book.document_format.as_deref() == Some("PDF")
+            && size > 0
+            && size <= crate::ebooks::MAX_PDF_BYTES)
+            .then_some(size))
     })
 }
 
@@ -646,7 +669,11 @@ pub fn progress_with_position_at_revision(
     position: Option<crate::comics::TextPosition>,
 ) -> AppResult<()> {
     let mut c = database.connect()?;
-    let tx = c.transaction().map_err(|e| e.to_string())?;
+    // Reserve the writer before revision reads: a background cache checkpoint must not
+    // turn the validated deferred snapshot into SQLITE_BUSY_SNAPSHOT on its first write.
+    let tx = c
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(|e| e.to_string())?;
     validate_page(&tx, id, index)?;
     if let Some(revision) = expected {
         if validate_book(&tx, id)?.0.revision != revision {
@@ -655,6 +682,7 @@ pub fn progress_with_position_at_revision(
     }
     validate_position(&tx, id, position.as_ref())?;
     tx.execute("INSERT INTO comic_reading_progress(comic_book_id,last_page_index,text_block_index,text_character_offset) VALUES(?1,?2,?3,?4) ON CONFLICT(comic_book_id) DO UPDATE SET last_page_index=excluded.last_page_index,text_block_index=excluded.text_block_index,text_character_offset=excluded.text_character_offset,last_read_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')",params![id,index,position.as_ref().map(|p|p.block_index),position.as_ref().map_or(0,|p|p.character_offset)]).map_err(|_|"COMIC_PROGRESS_FAILED".to_string())?;
+    crate::collection::record_recent(&tx, crate::collection::Target::Book(id))?;
     tx.commit().map_err(|_| "COMIC_PROGRESS_FAILED".to_string())
 }
 fn bookmarks_conn(c: &Connection, id: i64) -> AppResult<Vec<i64>> {
@@ -698,7 +726,9 @@ pub fn bookmark_with_position_at_revision(
     position: Option<crate::comics::TextPosition>,
 ) -> AppResult<Vec<i64>> {
     let mut c = database.connect()?;
-    let tx = c.transaction().map_err(|e| e.to_string())?;
+    let tx = c
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(|e| e.to_string())?;
     validate_page(&tx, id, index)?;
     if let Some(revision) = expected {
         if validate_book(&tx, id)?.0.revision != revision {

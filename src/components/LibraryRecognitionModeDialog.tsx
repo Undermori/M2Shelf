@@ -1,18 +1,19 @@
 import { useEffect, useRef, useState } from "react";
 import {isBookKind, type LibraryRecognitionMode, type LibraryMediaKind } from "../types/media";
-import { basename } from "../lib/format";
 import { useI18n } from "../lib/i18n";
 import { isolateModalSiblings } from "../lib/modalA11y";
 import { Icon } from "./Icon";
 
 interface LibraryRecognitionModeDialogProps {
   path: string | null;
+  suspended?:boolean;
+  onEditPath?:()=>void;
   busy: boolean;
   onChoose: (mode: LibraryRecognitionMode,kind:LibraryMediaKind,autoBangumi:boolean,strategy?:"LEGACY"|"SMART_MIXED") => void;
   onClose: () => void;
 }
 
-export function LibraryRecognitionModeDialog({ path, busy, onChoose, onClose }: LibraryRecognitionModeDialogProps) {
+export function LibraryRecognitionModeDialog({ path, busy, onChoose, onClose,onEditPath,suspended=false }: LibraryRecognitionModeDialogProps) {
   const { t } = useI18n();
   const [kind,setKind]=useState<LibraryMediaKind>('ANIMATION');
   const [noAuto,setNoAuto]=useState(true);
@@ -28,14 +29,14 @@ export function LibraryRecognitionModeDialog({ path, busy, onChoose, onClose }: 
     if(isBookKind(kind))onChoose(mode,kind,!noAuto,selection==='SMART_MIXED'?'SMART_MIXED':'LEGACY');
     else onChoose(mode,kind,true);
   };
-  useEffect(()=>{setKind('ANIMATION');setNoAuto(true);setSelection(null);setSelectionRequired(false);},[path]);
+  useEffect(()=>{if(!path){setKind('ANIMATION');setNoAuto(true);setSelection(null);setSelectionRequired(false);}},[path]);
   const backdropRef = useRef<HTMLDivElement>(null);
   const dialogRef = useRef<HTMLElement>(null);
   const busyRef = useRef(busy);
   busyRef.current = busy;
 
   useEffect(() => {
-    if (!path) return;
+    if (!path||suspended) return;
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const dialog = dialogRef.current;
     const restoreBackground = isolateModalSiblings(backdropRef.current);
@@ -62,9 +63,9 @@ export function LibraryRecognitionModeDialog({ path, busy, onChoose, onClose }: 
       restoreBackground();
       previous?.focus();
     };
-  }, [path]);
+  }, [path,suspended]);
 
-  if (!path) return null;
+  if (!path||suspended) return null;
   return (
     <div className="modal-backdrop" onPointerDown={(event) => { if (event.currentTarget === event.target && !busy) onClose(); }} ref={backdropRef} role="presentation">
       <section aria-describedby="root-mode-description" aria-labelledby="root-mode-title" aria-modal="true" className="root-mode-dialog" ref={dialogRef} role="dialog" tabIndex={-1}>
@@ -73,7 +74,7 @@ export function LibraryRecognitionModeDialog({ path, busy, onChoose, onClose }: 
           <button aria-label={t("common.close")} className="modal-close" disabled={busy} onClick={onClose} type="button"><Icon name="close" /></button>
         </header>
         <div className="root-mode-body">
-          <p className="root-mode-path" title={path}>{basename(path)}</p>
+          <div className="root-mode-location"><Icon name="folder"/><span className="root-mode-path" title={path}>{path}</span>{onEditPath&&<button className="button secondary" type="button" disabled={busy} onClick={onEditPath}>{t("layout.editPath")}</button>}</div>
           <div className="media-kind-choice" role="group" aria-label={t('comic.kind')}>
             <button className="button secondary" aria-pressed={kind==='ANIMATION'} disabled={busy} onClick={()=>changeKind('ANIMATION')} type="button">{t('comic.animation')}</button>
             <button className="button secondary" aria-pressed={kind==='LIVE_ACTION'} disabled={busy} onClick={()=>changeKind('LIVE_ACTION')} type="button">{t('library.liveAction')}</button>

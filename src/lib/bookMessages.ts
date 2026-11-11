@@ -1,6 +1,11 @@
 const copy = {
  'match.title': ["从 {provider} 选择作品", "Choose a {provider} title", "{provider} の作品を選択", "{provider} 작품 선택"],
- 'match.tmdbDescription': ["为「{name}」选择 TMDb 电影。", "Choose a TMDb movie for “{name}”.", "「{name}」の TMDb 映画を選択します。", "“{name}”의 TMDb 영화를 선택하세요."],
+ 'match.tmdbDescription': ["为「{name}」选择 TMDb 作品。", "Choose a TMDb title for “{name}”.", "「{name}」の TMDb 作品を選択します。", "“{name}”의 TMDb 작품을 선택하세요."],
+ 'match.tmdbType':['TMDb 类型','TMDb type','TMDb の種類','TMDb 유형'],
+ 'match.typeAuto':['自动识别','Automatic','自動判定','자동 인식'],
+ 'match.typeMovie':['电影','Movie','映画','영화'],
+ 'match.typeTv':['剧集','TV series','テレビシリーズ','TV 시리즈'],
+ 'tmdb.scopeError':['请选择包含视频的真人影视作品或系列。','Choose a live-action work or series containing indexed videos.','動画のある実写作品またはシリーズを選択してください。','동영상이 있는 실사 작품 또는 시리즈를 선택하세요.'],
  'match.provider': ["数据来源", "Metadata provider", "データ提供元", "메타데이터 제공자"],
  'match.keywordAria': ["{provider} 搜索关键词", "{provider} search keyword", "{provider} 検索キーワード", "{provider} 검색어"],
  'match.connecting': ["正在连接 {provider}…", "Connecting to {provider}…", "{provider} に接続中…", "{provider} 연결 중…"],

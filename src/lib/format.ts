@@ -111,6 +111,7 @@ export function bindingDisplayTitle(node: MediaNode, language: AppLanguage = get
 }
 
 export function nodeDisplayTitle(node: MediaNode, language: AppLanguage = getActiveLanguage()): string {
+  if (node.manualDisplayName && node.displayName?.trim()) return node.displayName.trim();
   const bindingTitle = (node.tmdbBinding?.active ? node.tmdbBinding.movie.title : null) || bindingDisplayTitle(node, language);
   let title = bindingTitle || node.displayName?.trim() || node.folderName?.trim() || translate(language, "format.unnamedDirectory");
   const suffix = translate(language, "node.seriesSuffix");
@@ -126,6 +127,15 @@ export function nodeHasVideo(node: MediaNode): boolean {
 export function canBindBangumi(node: MediaNode): boolean {
   const work = node.nodeType === "WORK" || node.nodeType === "AUTO_WORK";
   return work || (node.nodeType === "CONTAINER" && (nodeHasVideo(node) || (node.totalComicBookCount??0)>0));
+}
+
+/** Manual provider entry only. Aggregate edits retain their real-source boundary. */
+export function canBindTmdb(node: MediaNode): boolean {
+  return ['WORK','AUTO_WORK','CONTAINER'].includes(node.nodeType)
+    && (node.mediaKind === 'LIVE_ACTION' || node.mediaKind === 'VIDEO')
+    && node.parentNodeId != null && nodeHasVideo(node)
+    && node.binding?.providerSubjectType !== 2
+    && (!node.workTarget || node.workTarget.sourceNodeIds.length === 1);
 }
 
 export function mediaBadge(node:MediaNode):string {

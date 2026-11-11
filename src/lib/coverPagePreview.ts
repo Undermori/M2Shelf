@@ -1,0 +1,18 @@
+import {api} from './api';
+import type {ComicBook} from '../types/comic';
+/** Transient, bounded page preview. This never enters the persistent poster cache. */
+export async function coverPagePreview(book:ComicBook,index:number,signal:AbortSignal):Promise<Blob>{
+ if(signal.aborted)throw Error('cancelled');
+ if(!book.documentFormat){const bytes=await api.readComicPage(book.id,index,book.revision);if(signal.aborted)throw Error('cancelled');const image=new Blob([bytes]);return await resizePreview(image,signal);}
+ if(book.documentFormat!=='PDF')throw Error('unsupported');
+ const pdf=await import('pdfjs-dist');const{default:workerUrl}=await import('pdfjs-dist/build/pdf.worker.min.mjs?url');pdf.GlobalWorkerOptions.workerSrc=workerUrl;
+ let stopped=false,read=0,chain=Promise.resolve();let failure:(e:unknown)=>void=()=>{};const failed=new Promise<never>((_,reject)=>failure=reject);
+ const rangeRead=async(begin:number,end:number)=>{read+=end-begin;if(stopped||signal.aborted||read>32*1024*1024)throw Error('bounded');return new Uint8Array(await api.readPdfRange(book.id,begin,end,book.revision));};
+ const initial=await rangeRead(0,Math.min(book.sourceSize??0,65536));if(signal.aborted)throw Error('cancelled');
+ class Transport extends pdf.PDFDataRangeTransport{override requestDataRange(begin:number,end:number){chain=chain.then(async()=>{for(let at=begin;at<end&&!stopped;){const next=Math.min(end,at+2*1024*1024);const bytes=await rangeRead(at,next);if(!stopped)this.onDataRange(at,bytes);at=next;}}).catch(failure);}override abort(){stopped=true;}}
+ const loading=pdf.getDocument({range:new Transport(book.sourceSize??0,initial,true),rangeChunkSize:256*1024,disableAutoFetch:true,disableStream:true,useSystemFonts:true,disableFontFace:true,enableXfa:false,maxImageSize:4_000_000,canvasMaxAreaInBytes:12*1024*1024,cMapUrl:new URL('/pdf-resources/cmaps/',location.href).href,cMapPacked:true,wasmUrl:new URL('/pdf-resources/wasm/',location.href).href});
+ const abort=()=>{stopped=true;failure(Error('cancelled'));void loading.destroy();};signal.addEventListener('abort',abort,{once:true});const timer=setTimeout(abort,20000);
+ try{const document=await Promise.race([loading.promise,failed]);const page=await Promise.race([document.getPage(index+1),failed]);const natural=page.getViewport({scale:1});const scale=Math.min(768/natural.width,2048/natural.height,Math.sqrt(1_600_000/(natural.width*natural.height)));const viewport=page.getViewport({scale});const canvas=window.document.createElement('canvas');canvas.width=Math.ceil(viewport.width);canvas.height=Math.ceil(viewport.height);const context=canvas.getContext('2d');if(!context)throw Error('canvas');await Promise.race([page.render({canvas,canvasContext:context,viewport,background:'#fff'}).promise,failed]);if(signal.aborted)throw Error('cancelled');return await new Promise<Blob>((resolve,reject)=>canvas.toBlob(blob=>blob?resolve(blob):reject(Error('image')),'image/png'));}
+ finally{clearTimeout(timer);signal.removeEventListener('abort',abort);stopped=true;await loading.destroy();}
+}
+async function resizePreview(blob:Blob,signal:AbortSignal){const url=URL.createObjectURL(blob);try{const img=new Image();img.src=url;await img.decode();if(signal.aborted)throw Error('cancelled');const scale=Math.min(1,768/img.naturalWidth,2048/img.naturalHeight);const canvas=document.createElement('canvas');canvas.width=Math.max(1,Math.round(img.naturalWidth*scale));canvas.height=Math.max(1,Math.round(img.naturalHeight*scale));canvas.getContext('2d')?.drawImage(img,0,0,canvas.width,canvas.height);return await new Promise<Blob>((resolve,reject)=>canvas.toBlob(value=>value?resolve(value):reject(Error('image')),'image/png'));}finally{URL.revokeObjectURL(url);}}

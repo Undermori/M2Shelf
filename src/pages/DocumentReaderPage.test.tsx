@@ -2,7 +2,7 @@
 import {afterEach,beforeEach,describe,expect,it,vi} from 'vitest';
 import {cleanup,fireEvent,render,screen,waitFor} from '@testing-library/react';
 import {DocumentReaderPage} from './DocumentReaderPage';
-import {I18nProvider} from '../lib/i18n';
+import {I18nProvider,useI18n} from '../lib/i18n';
 import {defaultTextReaderSettings} from '../types/textReader';
 import type {ComicOpenResult} from '../types/comic';
 
@@ -18,6 +18,13 @@ beforeEach(()=>{
 afterEach(()=>{cleanup();vi.unstubAllGlobals();});
 const reader=(onBack=vi.fn())=>render(<I18nProvider><DocumentReaderPage opened={opened} onBack={onBack} onProgress={vi.fn()}/></I18nProvider>);
 describe('local EPUB reader',()=>{
+ it('changes interface language without rereading or losing the current position',async()=>{
+  function Locale(){const {setLanguage}=useI18n();return <button onClick={()=>setLanguage('en-US')}>Change locale</button>;}
+  render(<I18nProvider><Locale/><DocumentReaderPage opened={opened} onBack={vi.fn()} onProgress={vi.fn()}/></I18nProvider>);
+  await screen.findByText('Chapter 2 <script>literal only</script>');await new Promise(resolve=>setTimeout(resolve,35));const viewport=document.querySelector('.document-viewport')!;viewport.scrollTop=185;
+  fireEvent.click(screen.getByRole('button',{name:'Change locale'}));await screen.findByRole('button',{name:'Back to library'});
+  expect(mocks.read).toHaveBeenCalledTimes(1);expect(viewport.scrollTop).toBe(185);
+ });
  it.each(['MOBI','AZW3'] as const)('reuses text preferences, directory jumping and bookmarks for %s',async format=>{
   render(<I18nProvider><DocumentReaderPage opened={{...opened,book:{...opened.book,documentFormat:format}}} onBack={vi.fn()} onProgress={vi.fn()}/></I18nProvider>);
   await screen.findByText('Chapter 2 <script>literal only</script>');

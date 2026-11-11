@@ -185,6 +185,20 @@ pub fn parse(raw: &str, kind: Kind) -> Parsed {
 pub fn parse_for_grouping(raw: &str, kind: Kind) -> Parsed {
     parse_normalized(raw, kind, strip_extension(raw).chars().take(2048).collect())
 }
+fn video_episode_labels() -> &'static Regex {
+    static EPISODES: OnceLock<Regex> = OnceLock::new();
+    re(
+        &EPISODES,
+        r"(?i)(?:\bS(?P<s>\d{1,2})[ ._-]*E(?P<e>\d{1,4})(?:(?:[ ._-]*E|-)(?P<end>\d{1,4}))?|\b(?P<x>\d{1,2})x(?P<xe>\d{1,4})(?:-(?P<xend>\d{1,4}))?|第\s*(?P<cn>[0-9一二三四五六七八九十百零〇]+)\s*[话話集])",
+    )
+}
+
+/// A conservative grammar probe for presentation fast paths. False means the full parser
+/// cannot extract a season from this name; true still requires normal semantic parsing.
+pub fn has_season_episode_label(raw: &str) -> bool {
+    video_episode_labels().is_match(&raw.nfkc().take(4096).collect::<String>())
+}
+
 fn parse_normalized(raw: &str, kind: Kind, normalized: String) -> Parsed {
     let mut result = Parsed {
         raw_name: raw.chars().take(2048).collect(),
@@ -239,11 +253,7 @@ fn parse_normalized(raw: &str, kind: Kind, normalized: String) -> Parsed {
         }
     }
     text = ids.replace_all(&text, "").into_owned();
-    static EPISODES: OnceLock<Regex> = OnceLock::new();
-    let episodes = re(
-        &EPISODES,
-        r"(?i)(?:\bS(?P<s>\d{1,2})[ ._-]*E(?P<e>\d{1,4})(?:(?:[ ._-]*E|-)(?P<end>\d{1,4}))?|\b(?P<x>\d{1,2})x(?P<xe>\d{1,4})(?:-(?P<xend>\d{1,4}))?|第\s*(?P<cn>[0-9一二三四五六七八九十百零〇]+)\s*[话話集])",
-    );
+    let episodes = video_episode_labels();
     if matches!(kind, Kind::Animation | Kind::LiveAction) {
         if let Some(c) = episodes.captures(&text) {
             result.season = c
@@ -457,9 +467,138 @@ pub fn valid_isbn(value: &str) -> bool {
     }
 }
 
+/// Additional explicit episode labels for manual watch-state identity only.
+/// Scanner/provider parsing retains `parse` unchanged; bare numbers never become episodes here.
+pub fn explicit_season_episodes(raw: &str) -> Option<(u16, Vec<u16>)> {
+    explicit_season_episodes_normalized(&raw.nfkc().take(4096).collect::<String>())
+}
+
+fn explicit_season_episodes_normalized(normalized: &str) -> Option<(u16, Vec<u16>)> {
+    static RANGE: OnceLock<Regex> = OnceLock::new();
+    let c = re(&RANGE, r"(?i)(?:^|[^\p{L}\p{N}])S(?P<s>\d{1,2})[ ._-]*E(?P<f>\d{1,4})(?:[ ._]*(?:-E?|E)(?P<l>\d{1,4}))?(?:$|[^\d])").captures(normalized)?;
+    let first = c.name("f")?.as_str().parse::<u16>().ok()?;
+    let last = c.name("l").and_then(|v| v.as_str().parse::<u16>().ok()).unwrap_or(first);
+    let episodes = if first > 0 && last >= first && last - first <= 20 {
+        (first..=last).collect()
+    } else {
+        Vec::new()
+    };
+    Some((c.name("s")?.as_str().parse().ok()?, episodes))
+}
+
+pub fn watch_episodes(raw: &str, kind: Kind) -> Parsed {
+    let mut result = parse(raw, kind);
+    if !matches!(kind, Kind::Animation | Kind::LiveAction) {
+        return result;
+    }
+    let normalized: String = raw.nfkc().take(4096).collect();
+    static CUT: OnceLock<Regex> = OnceLock::new();
+    for marker in re(&CUT, r"(?i)(?:^|[^\p{L}\p{N}])(?:extended(?:[ ._-]*cut)?|director['’]?s?[ ._-]*cut|theatrical[ ._-]*cut|unrated|uncut)(?:$|[^\p{L}\p{N}])").find_iter(&normalized) {
+        let key = format!("watch-cut:{}", title_key(marker.as_str()));
+        if !result.edition.contains(&key) { result.edition.push(key); }
+    }
+    if let Some((season, episodes)) = explicit_season_episodes_normalized(&normalized) {
+        result.season = Some(season);
+        result.episodes = episodes;
+        return result;
+    }
+    if !result.episodes.is_empty() {
+        return result;
+    }
+    static LABEL: OnceLock<Regex> = OnceLock::new();
+    let Some(capture) = re(
+        &LABEL,
+        r"(?i)(?:^|[^\p{L}\p{N}])(?:e(?:p(?:isode)?)?|ova)[ ._-]*(?P<first>\d{1,4})(?:[ ._]*[-–~][ ._]*(?:e(?:p(?:isode)?)?[ ._-]*)?(?P<last>\d{1,4}))?(?:$|[^\d])",
+    )
+    .captures(&normalized) else {
+        return result;
+    };
+    let Some(first) = capture
+        .name("first")
+        .and_then(|n| n.as_str().parse::<u16>().ok())
+        .filter(|n| *n > 0)
+    else {
+        return result;
+    };
+    let last = capture
+        .name("last")
+        .and_then(|n| n.as_str().parse::<u16>().ok())
+        .unwrap_or(first);
+    if last < first || last - first > 20 {
+        return result;
+    }
+    result.episodes = (first..=last).collect();
+    result.source_evidence.push(format!(
+        "watch-label:{}",
+        capture.get(0).expect("episode capture").as_str().trim()
+    ));
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn season_probe_is_conservative_for_existing_video_grammar() {
+        for name in ["Show S00E01.mkv", "Show 0x01.mkv", "Ｓｈｏｗ ０ｘ０１.mkv", "Show S01E01.mkv", "Show 第十二集.mkv"] {
+            assert!(has_season_episode_label(name), "{name}");
+        }
+        for name in ["Show [01] [1080p].mkv", "Show EP01.mkv", "Show 2026.mkv"] {
+            assert!(!has_season_episode_label(name), "{name}");
+            assert!(watch_episodes(name, Kind::Animation).season.is_none(), "{name}");
+        }
+    }
+    #[test]
+    fn shared_explicit_episode_projection_matches_full_watch_grammar() {
+        for name in ["Show S01E01.mkv","Show S00E02.mkv","Special A S01E001.mkv","Show S02E01-E03.mkv","Ｓｈｏｗ Ｓ０１Ｅ０１.mkv","Show S01E00.mkv","Show S01E01-E99.mkv"] {
+            let (season,episodes)=explicit_season_episodes(name).unwrap();let full=watch_episodes(name,Kind::Animation);assert_eq!((Some(season),episodes),(full.season,full.episodes),"{name}");
+        }
+        assert!(explicit_season_episodes("Show [01].mkv").is_none());
+    }
+    #[test]
+    fn explicit_watch_labels_do_not_change_provider_parsing() {
+        for (raw, expected) in [
+            ("Show EP01 1080p.mkv", vec![1]),
+            ("Show Episode 02.mkv", vec![2]),
+            ("Show E03.mkv", vec![3]),
+            ("Show OVA01.mkv", vec![1]),
+            ("Show EP01-EP02.mkv", vec![1, 2]),
+            ("Show EP01-03.mkv", vec![1, 2, 3]),
+            ("Show S02E01-E02.mkv", vec![1, 2]),
+        ] {
+            assert_eq!(
+                watch_episodes(raw, Kind::Animation).episodes,
+                expected,
+                "{raw}"
+            );
+        }
+        for raw in [
+            "Movie.2024.1080p.mkv",
+            "Show 01.mkv",
+            "EP01-99.mkv",
+            "E00.mkv",
+            "SomethingEP01.mkv",
+        ] {
+            assert!(
+                watch_episodes(raw, Kind::LiveAction).episodes.is_empty(),
+                "{raw}"
+            );
+        }
+        assert!(parse("Show EP01.mkv", Kind::LiveAction).episodes.is_empty());
+        assert!(
+            watch_episodes("Show S01E01 Extended Cut.mkv", Kind::Animation)
+                .edition
+                .iter()
+                .any(|v| v.starts_with("watch-cut:"))
+        );
+        assert!(watch_episodes("Book EP01.epub", Kind::Ebook)
+            .episodes
+            .is_empty());
+        assert_eq!(
+            watch_episodes("Show S02E01.mkv", Kind::Animation).season,
+            Some(2)
+        );
+    }
     #[test]
     fn release_goldens() {
         for (raw, title, year) in [

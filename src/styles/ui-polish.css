@@ -1,0 +1,126 @@
+/* Shared presentation refinements. Caption and reader surfaces stay independent. */
+:root { --page-gutter: 28px; --page-title-size: 28px; }
+
+.context-menu .menu-divider {
+  height: 1px;
+  border: 0;
+  margin: 5px 7px;
+  background: var(--border-subtle);
+}
+.context-menu > button { height: auto; min-height: 34px; padding-block: 6px; }
+
+.poster-grid-list { row-gap: 0; }
+.media-card-list { min-height: 0; padding-block: 10px; }
+.media-card-list .media-card-open { min-height: 84px; }
+.media-card-list .media-card-copy { min-width: 0; }
+.media-card-list .card-menu {
+  top: 50%;
+  margin-top: -16px;
+  width: 32px;
+  height: 32px;
+  border-color: transparent;
+  color: var(--text-muted);
+  background: transparent;
+}
+.media-card-list .card-menu:hover,
+.media-card-list .card-menu:focus-visible { color: var(--text-strong); background: var(--surface-hover); }
+
+.favorite-folder-open { padding: 16px 80px 16px 0; gap: 4px 12px; min-height: 88px; }
+.favorite-folder-open > span { align-self: center; }
+.favorite-folder-open strong { min-width: 0; }
+.favorites-page > .page-toolbar .toolbar-actions { grid-column: 2; grid-row: 1; }
+.favorites-page > .page-toolbar .toolbar-actions .button,
+.recently-watched-page > .page-toolbar .browse-controls > .button,
+.organize-page > .page-toolbar .page-title-row > .button { min-height: 32px; padding-inline: 9px; font-size: 12px; }
+.favorite-folder-actions { top: 50%; margin-top: -17px; right: 4px; }
+.favorite-folder-actions button { width: 34px; height: 34px; }
+@media (hover: hover) and (pointer: fine) {
+  .favorite-folder-actions { opacity: 0; }
+  .favorite-folder-card:hover .favorite-folder-actions,
+  .favorite-folder-card:focus-within .favorite-folder-actions { opacity: 1; }
+}
+
+.sidebar-nav > .root-list { scrollbar-width: thin; }
+@supports selector(::-webkit-scrollbar) {
+  .sidebar-nav > .root-list { scrollbar-width: auto; scrollbar-color: auto; }
+  .sidebar-nav > .root-list::-webkit-scrollbar { width: 6px; }
+  .sidebar-nav > .root-list::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
+  .sidebar-nav > .root-list::-webkit-scrollbar-thumb { border-radius: 3px; background: var(--border-strong); }
+}
+
+:is(.browse-page, .search-page, .organize-page) > .page-toolbar {
+  padding: 24px var(--page-gutter) 14px;
+}
+:is(.browse-page, .search-page, .organize-page) > .page-toolbar h1,
+.browse-page .page-toolbar .page-title-row h1,
+.settings-page .settings-header h1 { font-size: var(--page-title-size); line-height: 1.3; }
+:is(.browse-page, .organize-page) > .page-content,
+.search-page > .search-content { padding-inline: var(--page-gutter); }
+.settings-page .settings-header { padding: 24px var(--page-gutter); }
+.settings-page .settings-layout { padding-inline: var(--page-gutter); }
+.page-heading-title { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 12px; }
+.page-heading-title > h1 { min-width: 0; overflow-wrap: anywhere; }
+.page-heading-title > .collection-count { flex: none; color: var(--text-muted); font-size: 12px; font-weight: 400; }
+.organize-page > .page-toolbar .page-title-row { padding-top: 0; }
+:is(.favorites-page, .recently-watched-page, .organize-page) > .page-toolbar .toolbar-actions .button:not(.primary):not(.is-active),
+:is(.recently-watched-page, .organize-page) > .page-toolbar .button.secondary {
+  border-color: transparent;
+  background: transparent;
+}
+:is(.recently-watched-page, .organize-page) > .page-toolbar .button.secondary:hover:not(:disabled) { background: var(--surface-hover); }
+
+.detail-toolbar > .back-button { position: relative; align-self: center; height: auto; border-right: 0; padding-right: 14px; }
+.detail-toolbar > .back-button::after { content: ""; position: absolute; right: 0; top: calc(50% - 8px); width: 1px; height: 16px; background: var(--border-normal); }
+.detail-toolbar .breadcrumb [aria-current="page"] { color: var(--text-normal); opacity: 1; }
+.detail-content > .content-section + .content-section { margin-top: 32px; }
+/* The legacy zero-margin rule is still needed in library browsing. */
+.detail-content > .content-section + .child-section { margin-top: 32px !important; }
+.detail-content .other-resource-list { border-color: var(--border-subtle); }
+.detail-content .resource-row { min-height: 54px; }
+.detail-content .resource-open { grid-template-columns: 20px minmax(0, 1fr) auto; min-height: 54px; padding: 8px 12px; gap: 12px; }
+.detail-content .resource-row .resource-icon { width: 20px; height: 24px; border: 0; border-radius: 0; color: var(--text-muted); background: transparent; }
+.detail-content .resource-icon svg { width: 17px; height: 17px; }
+.detail-content .resource-copy { gap: 4px; }
+.detail-content .resource-copy strong { font-size: 13px; }
+.detail-content .resource-copy > em { display: none; }
+.other-resource-list .resource-meta { color: var(--text-muted); font-size: 12px; white-space: nowrap; }
+
+.organize-issues { gap: 0; }
+.organize-issue { display: grid; grid-template-columns: minmax(240px, 1fr) auto; align-items: center; gap: 16px; padding-block: 4px; }
+.organize-issue-actions { max-width: 460px; justify-content: flex-end; gap: 6px; margin-top: 0; }
+.organize-issue-actions > strong { flex-basis: 100%; text-align: right; margin: 0 0 2px; }
+.organize-issue-actions > .button { min-height: 32px; padding-inline: 9px; font-size: 12px; }
+
+@media (max-width: 1100px) {
+  .organize-issue { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  .organize-issue-actions { justify-content: flex-start; max-width: none; padding: 0 0 12px 71px; }
+  .organize-issue-actions > strong { text-align: left; }
+}
+@media (max-width: 1000px) {
+  .detail-hero .detail-actions { flex-wrap: nowrap; gap: 8px; }
+  .detail-actions > .button,
+  .detail-actions .continue-reading-action > .button,
+  .detail-actions .select-trigger { min-height: 40px; padding-inline: 8px; font-size: 13px; }
+  .detail-actions > .button:not(.detail-more) { min-width: 0; flex: 0 1 auto; white-space: normal; }
+  .detail-actions > .button.primary { min-width: 88px; }
+  .detail-actions .collection-status-control { min-width: 96px; max-width: 112px; flex: 0 1 112px; }
+  .detail-actions > .detail-more { width: 40px; flex-basis: 40px; padding: 0; }
+  .detail-actions .continue-reading-action { flex: 1 1 120px; min-width: 96px; max-width: 140px; }
+  .detail-actions .continue-reading-action > .button.primary { min-width: 0; width: 100%; }
+  .detail-hero .metadata-binding .binding-copy { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+  .detail-hero .metadata-binding:has(.binding-copy > small) .binding-copy { display: contents; }
+  .detail-hero .metadata-binding:has(.binding-copy > small) .binding-logo { grid-row: 1 / 3; }
+  .detail-hero .metadata-binding .binding-copy > small { grid-column: 2 / -1; grid-row: 1; }
+  .detail-hero .metadata-binding:has(.binding-copy > small) .binding-subject-link { grid-column: 2; grid-row: 2; }
+  .detail-hero .metadata-binding:has(.binding-copy > small) .binding-actions { grid-column: 3; grid-row: 2; }
+  .detail-hero .metadata-binding .binding-actions .button { padding-inline: 8px; }
+}
+@media (max-height: 720px) {
+  .sidebar > .brand { flex: 0 0 80px; height: 80px; }
+  .sidebar .sidebar-nav { padding-top: 0; padding-bottom: 4px; }
+  .sidebar-nav > .nav-item { flex-basis: 36px; height: 36px; }
+  .sidebar .nav-library-heading { margin-top: 12px; padding-top: 10px; }
+  .sidebar .root-item { min-height: 40px; padding-block: 7px; }
+  .sidebar-project-count { padding-top: 8px; }
+  .sidebar > .sidebar-settings { height: 36px; min-height: 36px; margin-top: 4px; margin-bottom: 8px; }
+}

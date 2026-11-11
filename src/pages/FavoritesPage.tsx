@@ -75,7 +75,7 @@ export function FavoritesPage(props: FavoritesPageProps) {
           </div>
         </div>
         <div className="page-title-row">
-          <div><h1>{selectedFolder?.name ?? t("favorites.title")}</h1></div>
+          <div className="page-heading-title"><h1>{selectedFolder?.name ?? t("favorites.title")}</h1>{selectedFolder && <span className="collection-count">{t("favorites.itemCount", { count: number(visibleNodes.length) })}</span>}</div>
           {selectedFolder && <div className="browse-controls">
             <label className="search-field"><Icon name="search" /><input aria-label={t("favorites.filterAria")} onChange={(event) => props.onFilter(event.target.value)} placeholder={t("favorites.filterPlaceholder")} value={props.filter} />{props.filter && <button aria-label={t("common.clear")} onClick={() => props.onFilter("")} type="button"><Icon name="close" /></button>}</label>
             <CollectionSortControl value={props.sort} onChange={props.onSort} />
@@ -86,14 +86,13 @@ export function FavoritesPage(props: FavoritesPageProps) {
       <div className="page-content">
         {!selectedFolder && <>
           {(props.folders?.length ?? 0) > 0 && <div className="favorite-folder-grid">{props.folders!.map((folder) => <article className="favorite-folder-card" key={folder.id}>
-            <button className="favorite-folder-open" onClick={() => props.onOpenFolder(folder.id)} type="button"><span><Icon name="bookmark" /></span><strong>{folder.name}</strong><small>{t("favorites.itemCount", { count: number(folder.itemCount) })}</small></button>
+            <button className="favorite-folder-open" onClick={() => props.onOpenFolder(folder.id)} type="button"><span><Icon name="bookmark" /></span><strong title={folder.name}>{folder.name}</strong><small>{t("favorites.itemCount", { count: number(folder.itemCount) })}</small></button>
             <div className="favorite-folder-actions"><button aria-label={t("favorites.renameNamed", { name: folder.name })} onClick={() => props.onRename(folder)} title={t("favorites.rename")} type="button"><Icon name="edit" /></button><button aria-label={t("favorites.deleteNamed", { name: folder.name })} onClick={() => props.onDelete(folder)} title={t("favorites.delete")} type="button"><Icon name="trash" /></button></div>
           </article>)}</div>}
           {!props.loading && (props.folders?.length ?? 0) === 0 && <EmptyState compact icon="bookmark" title={t("favorites.emptyTitle")} description={t("favorites.emptyDescription")} action={<button className="button primary" onClick={props.onCreate} type="button"><Icon name="plus" />{t("favorites.create")}</button>} />}
         </>}
         {selectedFolder && <>
           {props.editMode && <SelectionToolbar selectedCount={props.selectedNodeIds.size} visibleCount={visibleNodes.length} busy={props.busy} onSelectAll={() => props.onSelectAll(visibleNodes.map((node) => node.id))} onClear={props.onClearSelection} onTags={props.onBatchTags} onFavorites={props.onBatchFavorites} onRemoveFromFavorite={props.onRemoveSelected} onMore={props.onBatchMenu} onRematch={props.onRematch} onExit={() => props.onEditMode(false)} />}
-          <div className="all-resources-summary"><strong>{t("favorites.itemCount", { count: number(visibleNodes.length) })}</strong></div>
           {visibleNodes.length > 0 && <PosterGrid showModifiedTime={props.sort.startsWith("modified-")} nodes={visibleNodes} viewMode={props.viewMode} onOpen={props.onOpenNode} onMenu={props.onMenu} onBangumi={props.onBangumi} onRetryCover={props.onRetryCover} coverRevision={props.coverRevision} editMode={props.editMode} selectedNodeIds={props.selectedNodeIds} onSelect={props.onToggleSelection} />}
           {!props.loading && visibleNodes.length === 0 && <EmptyState compact icon={props.filter ? "search" : "bookmark"} title={props.filter ? t("favorites.noMatch") : t("favorites.folderEmptyTitle")} description={props.filter ? t("favorites.noMatchDescription") : t("favorites.folderEmptyDescription")} />}
         </>}

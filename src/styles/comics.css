@@ -1,6 +1,6 @@
 /* Comic browsing extends the existing workspace; reader controls share semantic surfaces. */
 .media-kind-choice {display:flex;flex-wrap:wrap;gap:12px;margin-bottom:20px;}
-.media-kind-choice [aria-pressed="true"] {border-color:var(--accent-strong);background:var(--accent-soft);}
+.media-kind-choice [aria-pressed="true"] {border-color:var(--logo-red);background:var(--accent-soft);}
 .comic-root-description {display:grid;gap:16px;justify-items:start;}
 .comic-root-description p {line-height:1.7;color:var(--text-muted);}
 .comic-book-row.is-unreadable {cursor:default;}
@@ -16,6 +16,9 @@
 .comic-book-row:hover:not(.is-unreadable),.comic-book-row:focus-visible {background:var(--surface-hover);}
 .comic-book-row:focus-visible {outline:2px solid var(--focus-ring);outline-offset:-2px;}
 .comic-reader:fullscreen {inset:0;}
+.reader-session{position:fixed;inset:var(--window-caption-height) 0 0;z-index:40;}
+.reader-session:fullscreen,.reader-session:fullscreen .comic-reader{inset:0;}
+body:has(.reader-session:fullscreen) .window-titlebar{display:none;}
 body:has(.comic-reader:fullscreen) .window-titlebar {display:none;}
 .controls-visible .reader-topbar,.controls-visible .reader-bottombar,.reader-topbar:focus-within,.reader-bottombar:focus-within {opacity:1;visibility:visible;}
 .reader-viewport {flex:1;min-height:0;overflow:auto;position:relative;overscroll-behavior:contain;outline-offset:-3px;}
@@ -50,9 +53,9 @@ body:has(.comic-reader:fullscreen) .window-titlebar {display:none;}
 .document-zoom {display:flex;gap:8px;align-items:center;}
 .document-zoom input {width:110px;}
 .document-reader .reader-bottombar select {max-width:180px;}
-.comic-reader .reader-bottombar .icon-button[aria-pressed="true"] {color:var(--bookmark-active);background:color-mix(in srgb,var(--bookmark-active) 14%,var(--surface-panel));}
+.comic-reader .reader-bottombar .icon-button[aria-pressed="true"] {color:var(--on-brand);background:var(--logo-red);border-color:var(--logo-red);}
 .comic-reader .reader-bottombar .icon-button[aria-pressed="true"] svg {fill:currentColor;}
-.reader-topbar .icon-button[aria-pressed="true"],.reader-topbar .icon-button[aria-expanded="true"] {color:var(--accent-strong);background:var(--accent-soft);}
+.reader-topbar .icon-button[aria-pressed="true"],.reader-topbar .icon-button[aria-expanded="true"] {color:var(--on-brand);background:var(--logo-red);border-color:var(--logo-red);}
 .reader-bg-black .reader-viewport {background:#000;}
 .reader-bg-gray .reader-viewport {background:#202124;}
 .reader-bg-white .reader-viewport {background:#fff;}
@@ -99,10 +102,26 @@ body:has(.comic-reader:fullscreen) .window-titlebar {display:none;}
 .reader-panel-heading { font-size: 17px; }
 .reader-panel label > span { font-size: 12px; }
 .reader-panel select { min-height: 36px; padding: 0 10px; border: 1px solid var(--border-normal); border-radius: var(--radius-control); background: var(--surface-input); color: var(--text-normal); font-family: var(--font-ui); font-size: 13px; }
-.reader-panel input[type="range"] { width: 100%; accent-color: var(--accent-strong); }
+.reader-panel input[type="range"] { width: 100%; accent-color: var(--logo-red); }
 .reader-bookmark { padding: 8px 0; border-bottom: 1px solid var(--border-subtle); }
-.comic-detail .detail-stats { margin-top: 12px; color: var(--text-strong); font-size: 24px; font-weight: 550; }
 @media (max-width: 1000px) {
   .reader-topbar, .reader-bottombar { padding: 8px 12px; gap: 8px; }
   .reader-bottombar > .button { min-width: 68px; }
 }
+
+.reader-find{flex-shrink:0;z-index:3;padding:8px 20px;background:var(--surface-panel);border-bottom:1px solid var(--border-normal);color:var(--text-normal);}.reader-find-controls{display:flex;gap:8px;align-items:center;}.reader-find input{flex:1;min-width:80px;max-width:480px;}.reader-find-results{display:flex;gap:4px;overflow:auto;max-height:65px;margin-top:6px;}.reader-find-results button{min-width:180px;max-width:260px;flex-shrink:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border:1px solid var(--border-normal);border-radius:var(--radius-control);background:var(--surface-input);color:var(--text-normal);padding:6px;}.reader-find-results .is-selected{border-color:var(--logo-red);}.epub-chapter mark{background:#ffdd72;color:#242424;}.epub-chapter mark.book-search-current{background:#f3a546;outline:1px solid #9c5a00;}.pdf-page-stage{position:relative;width:fit-content;height:fit-content;margin:auto;}.pdf-page-stage canvas{display:block;}.pdf-search-mark{position:absolute;background:#ffba0080;outline:2px solid #ae6700;pointer-events:none;}
+
+/* Reader extensions reserve layout space; previews and end actions never cover artwork. */
+.reader-content-area{display:flex;flex:1;min-width:0;min-height:0;overflow:hidden;position:relative;}
+.reader-main-content{display:flex;flex-direction:column;flex:1;min-width:0;min-height:0;overflow:hidden;position:relative;}
+.reader-main-content>.reader-viewport{flex:1;min-width:0;min-height:0;}
+.reader-main-content>.reader-panel,.reader-main-content>.reader-toc-panel{top:16px;bottom:16px;}
+.reader-end-prompt{display:flex;align-items:center;gap:12px;flex-shrink:0;padding:8px 16px;border-top:1px solid var(--border-normal);background:var(--surface-panel);color:var(--text-normal);}
+.reader-end-prompt>div{display:flex;align-items:center;gap:12px;flex-wrap:wrap;flex:1;min-width:0;}
+.reader-end-prompt small{font-size:12px;color:var(--text-muted);}
+.reader-end-prompt .button{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;}
+.reader-end-prompt [role=alert],.continue-reading-action>[role=alert]{font-size:12px;color:var(--danger);}
+.continue-reading-action{display:inline-flex;flex-direction:column;gap:4px;min-width:0;max-width:100%;}
+.continue-reading-action>.button{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%;}
+.detail-book-source{max-width:260px;min-width:120px;}
+@media(max-width:1000px){.reader-end-prompt{padding:6px 12px;gap:8px}.reader-end-prompt>div{gap:6px}.reader-end-prompt small{font-size:11px}.reader-topbar>.button{padding-inline:9px;white-space:nowrap;}.reader-topbar{gap:6px;}}

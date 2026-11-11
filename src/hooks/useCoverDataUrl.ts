@@ -1,206 +1,45 @@
-import { useEffect, useLayoutEffect, useMemo, useState } from "react";
-import type { MediaNode } from "../types/media";
+import {useCallback,useEffect,useMemo,useRef,useState,useSyncExternalStore,type RefObject} from 'react';
+import type {MediaNode} from '../types/media';
 import type {ComicBook} from '../types/comic';
-import { api, desktopAvailable } from "../lib/api";
+import {desktopAvailable} from '../lib/api';
 import {usePosterThumbnailSize} from './usePosterThumbnailSize';
+import {posterResourceEpoch,posterResourceUrl,posterSelectionRevision,subscribePosterResources} from '../lib/posterResource';
 
-interface ResolvedCoverEntry {
-  url: string | null;
-  characters: number;
+let pdfImport:Promise<typeof import('../lib/pdfCoverFallback')>|undefined;
+const pdfInFlight=new Map<string,Promise<boolean>>();
+function preparePdf(key:string,nodeId:number|undefined,book:ComicBook|undefined){
+ const existing=pdfInFlight.get(key);if(existing)return existing;
+ const promise=(pdfImport??=import('../lib/pdfCoverFallback').catch(error=>{pdfImport=undefined;throw error;})).then(module=>module.pdfCoverFallback(nodeId,book)).finally(()=>pdfInFlight.delete(key));
+ pdfInFlight.set(key,promise);return promise;
 }
 
-const inFlightCoverRequests = new Map<string, Promise<string | null>>();
-const latestCoverKeyByNode = new Map<string, string>();
-const resolvedCoverUrls = new Map<string, ResolvedCoverEntry>();
-const resolvedCoverEvictionListeners = new Map<string, Set<() => void>>();
-const coverQueue: Array<() => void> = [];
-const MAX_CONCURRENT_COVER_REQUESTS = 4;
-const MAX_RESOLVED_COVER_ENTRIES = 128;
-const MAX_RESOLVED_COVER_CHARACTERS = 32 * 1024 * 1024;
-function sourceRevision(key: string) {
-  const parts = key.split(':');
-  parts.splice(1, 1); // Size is presentation; the rest still identifies the exact source revision.
-  return parts.join(':');
-}
-let activeCoverRequests = 0;
-let resolvedCoverCharacters = 0;
-
-function scheduleCoverRequest(run: () => Promise<string | null>): Promise<string | null> {
-  return new Promise((resolve, reject) => {
-    const start = () => {
-      activeCoverRequests += 1;
-      void run()
-        .then(resolve, reject)
-        .finally(() => {
-          activeCoverRequests -= 1;
-          coverQueue.shift()?.();
-        });
-    };
-    if (activeCoverRequests < MAX_CONCURRENT_COVER_REQUESTS) start();
-    else coverQueue.push(start);
-  });
-}
-
-function notifyResolvedCoverEvicted(key: string) {
-  const listeners = resolvedCoverEvictionListeners.get(key);
-  if (!listeners) return;
-  // Eviction is a one-shot event for this exact revision key. Remove the listener set first so
-  // released cards cannot keep stale setState closures alive after the source entry is gone.
-  resolvedCoverEvictionListeners.delete(key);
-  listeners.forEach((listener) => listener());
-}
-
-function subscribeResolvedCoverEviction(key: string, listener: () => void) {
-  const listeners = resolvedCoverEvictionListeners.get(key) ?? new Set<() => void>();
-  listeners.add(listener);
-  resolvedCoverEvictionListeners.set(key, listeners);
-  return () => {
-    listeners.delete(listener);
-    if (!listeners.size && resolvedCoverEvictionListeners.get(key) === listeners) {
-      resolvedCoverEvictionListeners.delete(key);
-    }
-  };
-}
-
-function removeResolvedCover(key: string, notify = true) {
-  const existing = resolvedCoverUrls.get(key);
-  if (!existing) return;
-  resolvedCoverCharacters -= existing.characters;
-  resolvedCoverUrls.delete(key);
-  if (notify) notifyResolvedCoverEvicted(key);
-}
-
-function rememberResolvedCover(key: string, url: string | null) {
-  removeResolvedCover(key, false);
-  const entry = { url, characters: url?.length ?? 0 };
-  resolvedCoverUrls.set(key, entry);
-  resolvedCoverCharacters += entry.characters;
-  while (resolvedCoverUrls.size > MAX_RESOLVED_COVER_ENTRIES
-    || resolvedCoverCharacters > MAX_RESOLVED_COVER_CHARACTERS) {
-    const oldestKey = resolvedCoverUrls.keys().next().value;
-    if (oldestKey == null) break;
-    removeResolvedCover(oldestKey);
-  }
-}
-
-function requestCover(nodeId: number|string, key: string, width: number, book?:ComicBook): Promise<string | null> {
-  const resolved = resolvedCoverUrls.get(key);
-  if (resolved) {
-    // Refresh insertion order so active covers survive the bounded LRU eviction.
-    resolvedCoverUrls.delete(key);
-    resolvedCoverUrls.set(key, resolved);
-    return Promise.resolve(resolved.url);
-  }
-  const inFlight = inFlightCoverRequests.get(key);
-  if (inFlight) return inFlight;
-
-  // A metadata/cover revision supersedes the previous data URL for this Node immediately.
-  const nodePrefix = `${nodeId}:${width}:`;
-  [...resolvedCoverUrls.keys()]
-    .filter((existingKey) => existingKey !== key && existingKey.startsWith(nodePrefix))
-    .forEach((existingKey) => removeResolvedCover(existingKey));
-
-  // Route changes must not cancel work that already entered this bounded queue. Completing it
-  // warms the cross-page LRU, matching the smooth navigation behavior of 0.5.7.
-  latestCoverKeyByNode.set(`${nodeId}:${width}`, key);
-  const request = scheduleCoverRequest(() => book ? api.getBookCoverDataUrl(book.id,book.revision,width) : api.getCoverDataUrl(nodeId as number, width))
-    .then((url) => {
-      // A superseded request may finish after a bind, retry, cache clear, or scan refresh. Its
-      // caller can settle normally, but it must not push an obsolete revision back into the LRU.
-      if (latestCoverKeyByNode.get(`${nodeId}:${width}`) === key) rememberResolvedCover(key, url);
-      return url;
-    })
-    .finally(() => {
-      inFlightCoverRequests.delete(key);
-      const nodePrefix = `${nodeId}:${width}:`;
-      if (![...inFlightCoverRequests.keys()].some((existingKey) => existingKey.startsWith(nodePrefix))) {
-        latestCoverKeyByNode.delete(`${nodeId}:${width}`);
-      }
-    });
-  inFlightCoverRequests.set(key, request);
-  return request;
-}
-
-export function useCoverDataUrl(node: MediaNode | null | undefined, revision: number, enabled = true, book?:ComicBook) {
-  const {tier, currentTier, ref: coverFrameRef} = usePosterThumbnailSize();
-  const nodeId = node?.id ?? (book ? `book-${book.id}` : undefined);
-  const coverPath = node?.coverCachePath ?? node?.binding?.coverCachePath;
-  const nodeUpdatedAt = node?.updatedAt ?? "";
-  const bindingUpdatedAt = node?.binding?.updatedAt ?? "";
-  const subjectId = node?.binding?.providerSubjectId ?? "";
-  const coverError = node?.binding?.coverDownloadError ?? "";
-  const clientCoverRevision = node?.clientCoverRevision ?? 0;
-  const cachedCoverExpected = Boolean(coverPath);
-  const localCoverRevision = !coverPath ? `${node?.lastSeenAt ?? ""}:${node?.latestFileModifiedAt ?? ""}` : "";
-  const hasCachedCover = Boolean(book) || Boolean(coverPath) || ["COMIC","EBOOK","DOUJIN","ARTBOOK"].includes(node?.mediaKind ?? "") && (node?.totalComicBookCount ?? 0) > 0;
-  const cacheKey = useMemo(() => node
-    ? `${node.id}:${tier}:${subjectId}:${coverPath ?? ""}:${coverError}:${nodeUpdatedAt}:${bindingUpdatedAt}:${clientCoverRevision}:${revision}:${localCoverRevision}`
-    : book ? `book-${book.id}:${tier}:${book.revision}:${revision}` : "",
-  [bindingUpdatedAt, clientCoverRevision, coverError, coverPath, localCoverRevision, node, nodeUpdatedAt, revision, subjectId, tier,book?.id,book?.revision]);
-  const [state, setState] = useState<{ key: string; url: string | null; failed: boolean; loading: boolean }>({
-    key: "",
-    url: null,
-    failed: false,
-    loading: false,
-  });
-
-  // Off-screen cards may keep an exact cached preview mounted so route restoration never flashes
-  // a placeholder. Once that exact source entry reaches the 128/32 MiB LRU boundary, notify only
-  // its mounted consumers so released cards can drop their final data-URL reference as well.
-  const [evictedCacheKey, setEvictedCacheKey] = useState("");
-  useLayoutEffect(() => {
-    if (enabled || !hasCachedCover || !cacheKey) return;
-    if (!resolvedCoverUrls.has(cacheKey)) {
-      setEvictedCacheKey(cacheKey);
-      return;
-    }
-    return subscribeResolvedCoverEviction(cacheKey, () => {
-      setEvictedCacheKey(cacheKey);
-    });
-  }, [cacheKey, enabled, hasCachedCover]);
-
-  useEffect(() => {
-    if (currentTier.current !== tier) return;
-    if (!enabled || !desktopAvailable || nodeId == null || !hasCachedCover) {
-      setState({ key: cacheKey, url: null, failed: false, loading: false });
-      return;
-    }
-    let active = true;
-    const resolved = resolvedCoverUrls.get(cacheKey);
-    if (resolved) {
-      resolvedCoverUrls.delete(cacheKey);
-      resolvedCoverUrls.set(cacheKey, resolved);
-      setState({ key: cacheKey, url: resolved.url, failed: cachedCoverExpected && !resolved.url, loading: false });
-      return;
-    }
-    setState(previous => previous.url && sourceRevision(previous.key) === sourceRevision(cacheKey)
-      ? {...previous, loading: true}
-      : { key: cacheKey, url: null, failed: false, loading: true });
-    void requestCover(nodeId, cacheKey, tier, book)
-      .then((url) => {
-        if (active) setState({ key: cacheKey, url, failed: cachedCoverExpected && !url, loading: false });
-      })
-      .catch(() => active && setState({ key: cacheKey, url: null, failed: true, loading: false }));
-    return () => { active = false; };
-  }, [cacheKey, cachedCoverExpected, currentTier, enabled, hasCachedCover, nodeId, tier]);
-
-  // An exact revision-key hit is safe to show synchronously even while deferred. It never starts
-  // new IPC work; it only prevents a route remount from flashing the placeholder for one frame.
-  const resolved = desktopAvailable && nodeId != null && hasCachedCover && evictedCacheKey !== cacheKey
-    ? resolvedCoverUrls.get(cacheKey)
-    : undefined;
-  const current = resolved
-    ? { key: cacheKey, url: resolved.url, failed: cachedCoverExpected && !resolved.url, loading: false }
-    : state.key === cacheKey || state.url && sourceRevision(state.key) === sourceRevision(cacheKey)
-      ? state
-      : null;
-  return {
-    coverFrameRef,
-    coverCacheKey: current?.url ? current.key : cacheKey,
-    coverUrl: current?.url ?? null,
-    coverFailed: current?.failed ?? false,
-    // A deferred card still has a valid cached cover; treat it as waiting rather than failed so
-    // an off-screen poster never flashes the retry state before IntersectionObserver starts it.
-    coverLoading: hasCachedCover && !resolved && (!enabled || state.key !== cacheKey || state.loading),
-  };
+/** Kept as a source-compatible hook name; display uses a native binary image URL, not data IPC.
+ * Every indexed ready cover gets its stable src after layout, including offscreen cards. The
+ * browser schedules/decode images; native bounded raster/file reuse handles WebView cache misses.
+ * Scrolling never clears src or a React byte cache.
+ * enabled affects only the expensive missing-PDF preparation, never prepared image delivery.
+ */
+export function useCoverDataUrl(node:MediaNode|null|undefined,revision:number,enabled=true,book?:ComicBook,_priority?:RefObject<boolean>){
+ const path=node?.coverSource==='MANUAL'?node.coverCachePath:(node?.tmdbBinding?.active?node.tmdbBinding.coverCachePath:null)??node?.coverCachePath??node?.binding?.coverCachePath;
+ const expected=Boolean(path);
+ const hasSource=Boolean(book)||expected||['COMIC','EBOOK','DOUJIN','ARTBOOK'].includes(node?.mediaKind??'')&&(node?.totalComicBookCount??0)>0;
+ const {tier,measured,currentTier,ref:coverFrameRef}=usePosterThumbnailSize(hasSource);
+ const epoch=useSyncExternalStore(subscribePosterResources,()=>`${posterResourceEpoch()}:${posterSelectionRevision(node?String(node.id):`book-${book?.id}`)}`);
+ const localRevision=!path?`${node?.updatedAt??''}:${node?.lastSeenAt??''}:${node?.latestFileModifiedAt??''}`:'';
+ const identity=node?`node:${node.id}:${path??''}:${node.binding?.providerSubjectId??''}:${node.binding?.providerImageUrl??''}:${node.binding?.updatedAt??''}:${node.tmdbBinding?.movie.id??''}:${node.tmdbBinding?.movie.posterPath??''}:${node.clientCoverRevision??0}:${localRevision}`:book?`book:${book.id}:${book.revision}`:'';
+ const key=`${identity}:${revision}:${epoch}:${tier}`;
+ const url=useMemo(()=>desktopAvailable&&hasSource&&measured&&currentTier.current===tier?(node?posterResourceUrl('node',node.id,tier,key):book?posterResourceUrl('book',book.id,tier,key,book.revision):null):null,[node?.id,book?.id,book?.revision,currentTier,hasSource,key,tier,measured]);
+ const current=useRef(key);current.current=key;
+ const [failure,setFailure]=useState('');const [pending,setPending]=useState('');const [retry,setRetry]=useState('');
+ const attempted=useRef('');const mounted=useRef(true);
+ useEffect(()=>{mounted.current=true;return()=>{mounted.current=false;};},[]);
+ const fallbackEligible=book?book.documentFormat==='PDF':hasSource&&['COMIC','EBOOK','DOUJIN','ARTBOOK'].includes(node?.mediaKind??'');
+ const onCoverError=useCallback(()=>{if(current.current===key)setFailure(key);},[key]);
+ useEffect(()=>{
+  if(!enabled||failure!==key||!fallbackEligible||attempted.current===key)return;
+  attempted.current=key;setPending(key);
+  void preparePdf(identity,node?.id,book).then(ready=>{if(mounted.current&&current.current===key&&ready){setRetry(key);setFailure('');}}).catch(()=>{}).finally(()=>{if(mounted.current&&current.current===key)setPending('');});
+ },[book?.id,book?.revision,enabled,failure,fallbackEligible,identity,key,node?.id]);
+ const failed=failure===key;
+ return {coverFrameRef,coverCacheKey:`${key}:${tier}`,coverUrl:failed?null:url?(retry===key?url.replace(/v=([a-f0-9]+)/,(_match,value:string)=>`v=${value}1`):url):null,coverFailed:failed&&pending!==key,coverLoading:pending===key,onCoverError};
 }

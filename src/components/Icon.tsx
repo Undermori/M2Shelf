@@ -1,21 +1,24 @@
 import type { ReactNode, SVGProps } from "react";
 
 export type IconName =
-  | "archive" | "arrow-left" | "bangumi" | "check" | "chevron" | "clock"
+  | "archive" | "arrow-left" | "bangumi" | "check" | "chevron" | "clock" | "shelf"
   | "close" | "database" | "download" | "edit" | "external" | "file" | "folder"
   | "folder-open" | "grid" | "image" | "info" | "list" | "more"
-  | "play" | "plus" | "refresh" | "search" | "settings" | "shield"
+  | "book" | "play" | "plus" | "refresh" | "search" | "settings" | "shield"
   | "stop" | "trash" | "warning" | "work" | "audio" | "subtitle" | "font"
-  | "globe" | "tag" | "bookmark" | "eye-off";
+  | "filter" | "globe" | "tag" | "bookmark" | "eye-off";
 
 interface IconProps extends SVGProps<SVGSVGElement> { name: IconName }
 
 const paths: Record<IconName, ReactNode> = {
+  filter: <><path d="M3 5h18M6 12h12M9 19h6"/></>,
+  shelf: <><path d="M4 19h16M4 19v2M20 19v2M6 5v11M10 5v11M14 6l4 10"/></>,
   "eye-off": <><path d="m3 3 18 18M10.5 5.2 12 5c5.5 0 9 7 9 7a19 19 0 0 1-3.2 4M6.2 6.2C4.2 8 3 12 3 12s3.5 7 9 7a9 9 0 0 0 4-1"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/></>,
   archive: <><path d="M4 7.5h16v12H4z"/><path d="M3 4.5h18v3H3zM9 12h6"/></>,
   audio: <><path d="M9 18V6l9-2v12"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="15.5" cy="16" r="2.5"/></>,
   "arrow-left": <path d="m15 18-6-6 6-6M9 12h11"/>,
   bangumi: <><circle cx="12" cy="12" r="9"/><path d="M8 9.5h.01M16 9.5h.01M8.5 15c2.3 1.6 4.7 1.6 7 0"/></>,
+  book: <><path d="M12 5C9 3 5 3 3 4v15c3-1 6-1 9 1 3-2 6-2 9-1V4c-2-1-6-1-9 1Z"/><path d="M12 5v15"/></>,
   bookmark: <path d="M6 3.5h12v17l-6-4-6 4v-17Z"/>,
   check: <path d="m5 12 4 4L19 6"/>,
   chevron: <path d="m9 5 7 7-7 7"/>,

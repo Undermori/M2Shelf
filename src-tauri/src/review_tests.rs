@@ -80,6 +80,162 @@ fn subject(id: i64) -> BangumiSubject {
     }
 }
 
+fn assert_fast_presentation_matches_full_index(db: &Database) {
+    let connection = db.connect().unwrap();
+    let ids = connection
+        .prepare("SELECT id FROM nodes ORDER BY id")
+        .unwrap()
+        .query_map([], |row| row.get::<_, i64>(0))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    for id in &ids {
+        let expected = crate::works::reference_detail(db, *id, false);
+        let actual = crate::works::presentation_detail(db, *id, false).map(|response| {
+            if let Some(inline) = response.episode_watch {
+                assert_eq!(
+                    serde_json::to_value(inline).unwrap(),
+                    serde_json::to_value(db.episode_watch_snapshot(*id, false).unwrap()).unwrap(),
+                    "inline physical watch snapshot {id}"
+                );
+            }
+            response.detail
+        });
+        assert_eq!(actual.is_ok(), expected.is_ok(), "node visibility {id}");
+        if let (Ok(actual), Ok(expected)) = (actual, expected) {
+            assert_eq!(
+                serde_json::to_value(actual).unwrap(),
+                serde_json::to_value(expected).unwrap(),
+                "physical detail {id}"
+            );
+        }
+        let expected = crate::works::reference_detail(db, *id, true);
+        let actual = crate::works::presentation_detail(db, *id, true).map(|response| {
+            if let Some(inline) = response.episode_watch {
+                assert_eq!(
+                    serde_json::to_value(inline).unwrap(),
+                    serde_json::to_value(
+                        db.episode_watch_snapshot(response.detail.node.id, true)
+                            .unwrap()
+                    )
+                    .unwrap(),
+                    "inline aggregate watch snapshot {id}"
+                );
+            }
+            response.detail
+        });
+        assert_eq!(actual.is_ok(), expected.is_ok(), "work visibility {id}");
+        if let (Ok(actual), Ok(expected)) = (actual, expected) {
+            assert_eq!(
+                serde_json::to_value(actual).unwrap(),
+                serde_json::to_value(expected).unwrap(),
+                "aggregate detail and mutation target {id}"
+            );
+        }
+    }
+    db.read_snapshot(|connection| {
+        let full = crate::logical_works::LogicalWorkIndex::load(connection)?;
+        let lean = crate::logical_works::LogicalWorkIndex::load_for_detail(connection)?;
+        assert_eq!(full.owners, lean.owners);
+        assert_eq!(full.children, lean.children);
+        assert_eq!(full.warnings, lean.warnings);
+        let mut expected = full.sources(connection)?;
+        expected.sort_by_key(|n| n.id);
+        let mut actual = lean.sources_for_ids(connection, &ids)?;
+        actual.sort_by_key(|n| n.id);
+        assert_eq!(
+            serde_json::to_value(&actual).unwrap(),
+            serde_json::to_value(&expected).unwrap(),
+            "owned activity and counts"
+        );
+        let catalogue = db.list_all_resources()?;
+        let mut expected_groups = crate::works::groups_from_index(connection, &full)?;
+        let mut progress = crate::card_progress::Hydrator::new(connection, Some(full));
+        for group in &mut expected_groups {
+            progress.node(&mut group.node, true)?;
+            progress.nodes(&mut group.sources, false)?;
+        }
+        assert_eq!(
+            serde_json::to_value(&catalogue.works).unwrap(),
+            serde_json::to_value(expected_groups).unwrap(),
+            "catalogue grouping and target snapshots"
+        );
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn fast_details_preserve_discs_supplements_independent_editions_and_mutation_snapshots() {
+    let (_temp, db, _) = fixture(
+        &[
+            "Example Show/Disc1/Example Show - 01.mkv",
+            "Example Show/Disc2/Example Show - 02.mkv",
+            "Example Show/SPs/PV/trailer.mkv",
+            "Example Show/SPs/Independent/03.mkv",
+            "Example Show/notes/readme.txt",
+            "Different Show/01.mkv",
+            "Edition/Disc1/Other Title - 01.mkv",
+            "Edition/Disc2/Conflicting Title - 01.mkv",
+            "Blu-ray Show/Disc1/BDMV/index.bdmv",
+            "Blu-ray Show/Disc1/BDMV/STREAM/00001.m2ts",
+            "Blu-ray Show/Disc2/BDMV/index.bdmv",
+            "Blu-ray Show/Disc2/BDMV/STREAM/00002.m2ts",
+        ],
+        LibraryRecognitionMode::Folder,
+    );
+    assert_fast_presentation_matches_full_index(&db);
+    let connection = db.connect().unwrap();
+    let find = |name: &str| {
+        connection
+            .query_row("SELECT id FROM nodes WHERE folder_name=?1", [name], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap()
+    };
+    let independent = find("Independent");
+    let other = find("Different Show");
+    db.set_node_type(independent, crate::models::NodeType::Work)
+        .unwrap();
+    db.save_binding_if_absent(independent, &subject(42))
+        .unwrap();
+    db.save_binding_if_absent(other, &subject(42)).unwrap();
+    db.set_display_name(other, Some("Custom title".into()))
+        .unwrap();
+    db.record_node_watched(independent).unwrap();
+    assert_fast_presentation_matches_full_index(&db);
+    db.set_node_type(find("SPs"), crate::models::NodeType::Ignored)
+        .unwrap();
+    assert_fast_presentation_matches_full_index(&db);
+}
+
+#[test]
+fn fast_file_details_preserve_episode_grouping_and_reject_changed_targets() {
+    let (_temp, db, _) = fixture(
+        &[
+            "Example Show/Example Show S01E01.mkv",
+            "Example Show/Example Show S01E02.mkv",
+            "Example Show/Example Show S02E01.mkv",
+            "Other/Second Work.mkv",
+        ],
+        LibraryRecognitionMode::VideoFile,
+    );
+    assert_fast_presentation_matches_full_index(&db);
+    let catalogue = db.list_all_resources().unwrap();
+    let group = catalogue
+        .works
+        .iter()
+        .find(|work| work.sources.len() == 2)
+        .unwrap();
+    let detail = crate::works::work_detail(&db, group.node.id).unwrap();
+    let target = detail.work_target.unwrap();
+    db.validate_work_target(&target).unwrap();
+    db.set_display_name(group.sources[0].id, Some("New manual title".into()))
+        .unwrap();
+    assert!(db.validate_work_target(&target).is_err());
+    assert_fast_presentation_matches_full_index(&db);
+}
+
 #[test]
 fn numbered_volumes_are_one_work_with_flat_nested_videos_and_original_file_ids() {
     let (_temp, db, _) = fixture(
@@ -572,6 +728,7 @@ fn ordinary_work_detail_uses_owned_count_and_activity_times() {
             .unwrap();
     }
     let mut detail = crate::models::NodeDetail {
+        video_sections: Vec::new(),
         comic_books: None,
         node: db.get_node(parent).unwrap(),
         children: db.list_children(parent).unwrap(),

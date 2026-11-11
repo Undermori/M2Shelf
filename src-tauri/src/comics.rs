@@ -8,7 +8,7 @@ use chrono::{DateTime, SecondsFormat, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     fs::{self, File},
     io::{Read, Seek, SeekFrom},
     path::{Path, PathBuf},
@@ -1089,17 +1089,74 @@ pub fn owned_books(connection: &Connection, node_id: i64) -> AppResult<Vec<Comic
     )
 }
 
+// Both detail ownership and batched progress use this exact anchor/binding/manual boundary.
+fn owned_nodes_cte(selection: &str) -> String {
+    format!("WITH RECURSIVE owned(anchor,id,parent_node_id) AS (
+        SELECT id,id,parent_node_id FROM nodes WHERE {selection}
+        UNION ALL SELECT o.anchor,n.id,n.parent_node_id FROM nodes n JOIN owned o ON n.parent_node_id=o.id
+        WHERE n.node_type<>'IGNORED' AND n.manual_type_override=0 AND (
+          NOT EXISTS(SELECT 1 FROM metadata_bindings b WHERE b.node_id=n.id) OR
+          EXISTS(SELECT 1 FROM metadata_bindings b JOIN metadata_bindings p ON p.node_id=o.anchor
+            WHERE b.node_id=n.id AND b.provider_subject_id=p.provider_subject_id AND b.provider_subject_type=p.provider_subject_type)))")
+}
+
+/// Same displayed book set as populate_detail, grouped for a collection in bounded SQL chunks.
+pub(crate) fn progress_counts_for_nodes_conn(
+    connection: &Connection,
+    node_ids: &[i64],
+) -> AppResult<HashMap<i64, (usize, usize, bool)>> {
+    let mut result = HashMap::new();
+    for ids in node_ids.chunks(500) {
+        let placeholders = vec!["?"; ids.len()].join(",");
+        let cte = owned_nodes_cte(&format!("id IN ({placeholders})"));
+        let query=format!("{cte} SELECT o.anchor,COUNT(b.id),COALESCE(SUM(CASE WHEN b.page_count>0 AND p.last_page_index+1>=b.page_count THEN 1 ELSE 0 END),0),COALESCE(MAX(p.last_page_index IS NOT NULL),0),COALESCE(MAX(b.page_count),0),COALESCE(MAX(p.last_page_index+1),0) FROM owned o LEFT JOIN comic_books b ON b.node_id=o.id AND lower(b.source_path) NOT LIKE '%.zip' LEFT JOIN comic_reading_progress p ON p.comic_book_id=b.id GROUP BY o.anchor");
+        let mut statement = connection
+            .prepare_cached(&query)
+            .map_err(|e| e.to_string())?;
+        let rows = statement
+            .query_map(rusqlite::params_from_iter(ids), |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, usize>(1)?,
+                    r.get::<_, usize>(2)?,
+                    r.get::<_, bool>(3)?,
+                    r.get::<_, i64>(4)?,
+                    r.get::<_, i64>(5)?,
+                ))
+            })
+            .map_err(|e| e.to_string())?;
+        for row in rows {
+            let (id, books, completed, started, pages, page) = row.map_err(|e| e.to_string())?;
+            let value = if books == 1 {
+                let total = pages.max(0) as usize;
+                ((page.max(0) as usize).min(total), total, page > 0)
+            } else {
+                (completed, books, started)
+            };
+            result.insert(id, value);
+        }
+    }
+    Ok(result)
+}
+pub(crate) fn progress_counts_conn(
+    connection: &Connection,
+    node_id: i64,
+) -> AppResult<(usize, usize, bool)> {
+    Ok(progress_counts_for_nodes_conn(connection, &[node_id])?
+        .remove(&node_id)
+        .unwrap_or((0, 0, false)))
+}
+
 fn owned_nodes(
     connection: &Connection,
     node_id: i64,
 ) -> AppResult<std::collections::HashMap<i64, Option<i64>>> {
-    let mut statement = connection.prepare("WITH RECURSIVE owned(id,parent_node_id) AS (
-        SELECT id,parent_node_id FROM nodes WHERE id=?1 UNION ALL SELECT n.id,n.parent_node_id FROM nodes n JOIN owned o ON n.parent_node_id=o.id
-        WHERE n.node_type<>'IGNORED' AND n.manual_type_override=0 AND (
-          NOT EXISTS(SELECT 1 FROM metadata_bindings b WHERE b.node_id=n.id) OR
-          EXISTS(SELECT 1 FROM metadata_bindings b JOIN metadata_bindings p ON p.node_id=?1
-            WHERE b.node_id=n.id AND b.provider_subject_id=p.provider_subject_id AND b.provider_subject_type=p.provider_subject_type)))
-        SELECT id,parent_node_id FROM owned").map_err(|e|e.to_string())?;
+    let mut statement = connection
+        .prepare(&format!(
+            "{} SELECT id,parent_node_id FROM owned",
+            owned_nodes_cte("id=?1")
+        ))
+        .map_err(|e| e.to_string())?;
     let ids = statement
         .query_map([node_id], |r| {
             Ok((r.get::<_, i64>(0)?, r.get::<_, Option<i64>>(1)?))
@@ -1906,6 +1963,42 @@ mod tests {
         assert!(LibraryMediaKind::Comic.accepts_subject(1));
         assert!(!LibraryMediaKind::Comic.accepts_subject(2));
         assert!(!LibraryMediaKind::Video.accepts_subject(1));
+    }
+    #[test]
+    fn progress_and_bookmarks_survive_concurrent_application_writes() {
+        let (_temp, db, root) = fixture();
+        fs::write(Path::new(&root.path).join("1.png"), image()).unwrap();
+        assert_eq!(scan(&db, &root).progress().errors, 0);
+        let book = books(&db.connect().unwrap(), root_node(&db, root.id))
+            .unwrap()
+            .remove(0);
+        let opened = comic_reader::open(&db, book.id).unwrap();
+        let background = db.clone();
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let worker_barrier = barrier.clone();
+        let worker = std::thread::spawn(move || {
+            let c = background.connect().unwrap();
+            worker_barrier.wait();
+            for value in 0..100 {
+                c.execute("INSERT INTO settings(key,value) VALUES('reader-write-race',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value", [value.to_string()]).unwrap();
+                std::thread::yield_now();
+            }
+        });
+        barrier.wait();
+        for _ in 0..50 {
+            comic_reader::progress_at_revision(&db, book.id, 0, Some(&opened.book.revision))
+                .unwrap();
+            comic_reader::bookmark_at_revision(&db, book.id, 0, true, Some(&opened.book.revision))
+                .unwrap();
+        }
+        worker.join().unwrap();
+        let retained = comic_reader::open(&db, book.id).unwrap();
+        assert_eq!(retained.book.progress.unwrap().last_page_index, 0);
+        assert_eq!(retained.bookmarks, vec![0]);
+        assert_eq!(
+            fs::read(Path::new(&root.path).join("1.png")).unwrap(),
+            image()
+        );
     }
     #[test]
     fn folders_archives_natural_order_progress_bookmarks_and_sources_survive_rescan() {

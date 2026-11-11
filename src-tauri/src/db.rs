@@ -1,6 +1,6 @@
 use std::{
     cmp::Ordering,
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fs,
     path::{Component, Path, PathBuf},
     time::Duration,
@@ -221,6 +221,33 @@ impl Database {
                 27_i64,
                 include_str!("../migrations/0027_scraper_metadata.sql"),
             ),
+            (
+                28_i64,
+                include_str!("../migrations/0028_manual_display_name.sql"),
+            ),
+            (29_i64, include_str!("../migrations/0029_scan_changes.sql")),
+            (
+                30_i64,
+                include_str!("../migrations/0030_organize_issues.sql"),
+            ),
+            (
+                31_i64,
+                include_str!("../migrations/0031_recent_activity.sql"),
+            ),
+            (
+                32_i64,
+                include_str!("../migrations/0032_collection_states.sql"),
+            ),
+            (33_i64, include_str!("../migrations/0033_private_notes.sql")),
+            (34_i64, include_str!("../migrations/0034_episode_watch.sql")),
+            (
+                35_i64,
+                include_str!("../migrations/0035_library_all_resources_visibility.sql"),
+            ),
+            (
+                36_i64,
+                include_str!("../migrations/0036_tmdb_tv_series_scope.sql"),
+            ),
         ];
         let reclassification_needed: bool = connection
             .query_row(
@@ -245,7 +272,7 @@ impl Database {
                     connection.execute_batch(sql).map_err(db_error)?;
                     // Reclassification uses the current DTO projection. Run only once all
                     // additive columns exist, including when upgrading a pre-14 database.
-                    if version == 24 && reclassification_needed {
+                    if version == 28 && reclassification_needed {
                         crate::logical_works::LogicalWorkIndex::reclassify(&connection, None)?;
                     }
                     connection
@@ -288,7 +315,8 @@ impl Database {
                     CASE WHEN r.media_kind='COMIC' THEN
                       (SELECT COUNT(*) FROM comic_books b JOIN nodes n ON n.id=b.node_id WHERE n.library_root_id=r.id AND b.source_resource_id IS NULL)
                     ELSE (SELECT COUNT(*) FROM media_files f JOIN nodes n ON n.id=f.node_id WHERE n.library_root_id=r.id) END,
-                    CASE WHEN r.artbook_library=1 THEN 'ARTBOOK' WHEN r.doujin_library=1 THEN 'DOUJIN' WHEN r.media_kind='COMIC' THEN r.book_library_kind WHEN r.video_subject_scope<>'MIXED' THEN r.video_subject_scope ELSE r.media_kind END, r.auto_bangumi, r.book_organization_strategy
+                    CASE WHEN r.artbook_library=1 THEN 'ARTBOOK' WHEN r.doujin_library=1 THEN 'DOUJIN' WHEN r.media_kind='COMIC' THEN r.book_library_kind WHEN r.video_subject_scope<>'MIXED' THEN r.video_subject_scope ELSE r.media_kind END, r.auto_bangumi, r.book_organization_strategy,
+                    EXISTS(SELECT 1 FROM library_all_resources_visibility v WHERE v.library_root_id=r.id AND v.hidden=1)
                  FROM library_roots r ORDER BY r.display_name COLLATE NOCASE, r.path COLLATE NOCASE",
             )
             .map_err(db_error)?;
@@ -298,6 +326,7 @@ impl Database {
                     media_kind: LibraryMediaKind::from_db(&row.get::<_, String>(8)?),
                     auto_bangumi: row.get(9)?,
                     book_organization_strategy: row.get(10)?,
+                    hidden_from_all: row.get(11)?,
                     scan_health: None,
                     id: row.get(0)?,
                     path: row.get(1)?,
@@ -321,6 +350,18 @@ impl Database {
         let connection = self.connect()?;
         let mut root = get_root_conn(&connection, root_id)?;
         root.scan_health = read_scan_health_conn(&connection, root.id)?;
+        Ok(root)
+    }
+
+    pub fn set_root_hidden_from_all(&self, root_id: i64, hidden: bool) -> AppResult<LibraryRoot> {
+        let mut connection = self.connect()?;
+        let tx = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(db_error)?;
+        get_root_conn(&tx, root_id)?;
+        tx.execute("INSERT INTO library_all_resources_visibility(library_root_id,hidden) VALUES(?1,?2) ON CONFLICT(library_root_id) DO UPDATE SET hidden=excluded.hidden", params![root_id, hidden]).map_err(db_error)?;
+        let root = get_root_conn(&tx, root_id)?;
+        tx.commit().map_err(db_error)?;
         Ok(root)
     }
 
@@ -620,7 +661,7 @@ impl Database {
         let connection = self.connect()?;
         let cover_path = connection
             .query_row(
-                "SELECT CASE WHEN n.cover_source='MANUAL' THEN n.cover_cache_path ELSE COALESCE((SELECT t.cover_cache_path FROM tmdb_movie_bindings t WHERE t.node_id=n.id AND t.active=1),n.cover_cache_path) END FROM nodes n WHERE n.id=?1",
+                "SELECT CASE WHEN n.cover_source='MANUAL' THEN n.cover_cache_path ELSE COALESCE((SELECT m.cover_cache_path FROM comic_books b JOIN book_manual_covers m ON m.book_id=b.id WHERE b.node_id=n.id AND (SELECT COUNT(*) FROM comic_books x WHERE x.node_id=n.id)=1),(SELECT t.cover_cache_path FROM tmdb_movie_bindings t WHERE t.node_id=n.id AND t.active=1),n.cover_cache_path) END FROM nodes n WHERE n.id=?1",
                 [node_id],
                 |row| row.get::<_, Option<String>>(0),
             )
@@ -700,6 +741,12 @@ impl Database {
     /// reachable through their parent and are deliberately not flattened into this collection.
     pub fn list_all_resources(&self) -> AppResult<AllResourcesResult> {
         self.read_snapshot(|connection| {
+            let hidden = hidden_node_ids_conn(connection)?;
+            let hidden_roots = {
+                let mut query = connection.prepare("SELECT library_root_id FROM library_all_resources_visibility WHERE hidden=1").map_err(db_error)?;
+                let rows = query.query_map([], |row| row.get::<_, i64>(0)).map_err(db_error)?;
+                rows.collect::<Result<HashSet<_>,_>>().map_err(db_error)?
+            };
             let mut statement = connection
                 .prepare(&format!(
                     "{} WHERE n.node_type <> 'IGNORED' AND (n.total_video_count > 0 OR n.total_comic_book_count > 0)
@@ -715,7 +762,7 @@ impl Database {
                 .map_err(db_error)?
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(db_error)?;
-            nodes.retain(|n| ensure_node_visible_conn(connection, n.id).is_ok());
+            nodes.retain(|n| !hidden.contains(&n.id) && !hidden_roots.contains(&n.library_root_id));
             hydrate_nodes_metadata_conn(connection, &mut nodes)?;
             nodes.sort_by(|left, right| {
                 natural_cmp(&left.display_name, &right.display_name)
@@ -726,6 +773,7 @@ impl Database {
             let mut roots_statement = connection.prepare("SELECT id FROM library_roots WHERE media_kind='COMIC'").map_err(db_error)?;
             let root_ids = roots_statement.query_map([], |r| r.get::<_, i64>(0)).map_err(db_error)?.collect::<Result<Vec<_>,_>>().map_err(db_error)?;
             for root_id in root_ids {
+                if hidden_roots.contains(&root_id) { continue; }
                 let root = get_root_conn(connection, root_id)?;
                 let catalogue = if root.book_organization_strategy == "SMART_MIXED" {
                     nodes.retain(|n| n.library_root_id != root_id);
@@ -739,24 +787,28 @@ impl Database {
                 };
                 book_libraries.push(AllBookLibrary { root, catalogue });
             }
-            let index = crate::logical_works::LogicalWorkIndex::load(connection)?;
+            let index = crate::logical_works::LogicalWorkIndex::load_for_catalogue(connection)?;
             let mut comic_statement = connection.prepare(&format!("{} WHERE n.parent_node_id IS NOT NULL AND n.direct_comic_book_count>0 AND n.node_type IN ('WORK','AUTO_WORK','MIXED') AND n.library_root_id NOT IN (SELECT id FROM library_roots WHERE book_organization_strategy='SMART_MIXED')", node_select())).map_err(db_error)?;
             let mut comic_nodes = comic_statement.query_map([], node_from_row).map_err(db_error)?.collect::<Result<Vec<_>,_>>().map_err(db_error)?;
-            comic_nodes.retain(|n| ensure_node_visible_conn(connection,n.id).is_ok());
+            comic_nodes.retain(|n| !hidden.contains(&n.id) && !hidden_roots.contains(&n.library_root_id));
             hydrate_nodes_metadata_conn(connection, &mut comic_nodes)?;
-            Ok(AllResourcesResult {
+            let mut recognition_warnings = index.warnings.iter().filter_map(|id| index.nodes.get(id)).filter(|node| !hidden_roots.contains(&node.library_root_id)).cloned().collect::<Vec<_>>();
+            hydrate_file_modified_times_conn(connection, &mut recognition_warnings)?;
+            let mut result=AllResourcesResult {
                 total_count: nodes.len() as i64 + book_libraries.iter().map(|b| b.catalogue.top_level_count(&b.root) as i64).sum::<i64>(),
                 book_libraries,
                 comic_nodes,
-                recognition_warnings: index
-                    .warnings
-                    .iter()
-                    .filter_map(|id| index.nodes.get(id))
-                    .cloned()
-                    .collect(),
+                recognition_warnings,
                 nodes,
-                works: crate::works::groups_from_index(connection, &index)?,
-            })
+                works: crate::works::groups_visible_in_all(connection, &index, &hidden_roots)?,
+            };
+            let mut progress=crate::card_progress::Hydrator::new(connection,Some(index));
+            progress.nodes(&mut result.nodes,false)?;
+            progress.nodes(&mut result.comic_nodes,false)?;
+            progress.nodes(&mut result.recognition_warnings,false)?;
+            progress.work_groups(&mut result.works)?;
+            for library in &mut result.book_libraries {progress.catalogue(&mut library.catalogue)?;}
+            Ok(result)
         })
     }
 
@@ -771,7 +823,8 @@ impl Database {
     /// Records a successfully launched video against its owning Node. Repeated playback keeps
     /// one history row and advances both its timestamp and count atomically.
     pub fn record_node_watched(&self, node_id: i64) -> AppResult<()> {
-        let connection = self.connect()?;
+        let mut connection = self.connect()?;
+        let connection = connection.transaction().map_err(db_error)?;
         connection
             .execute(
                 "INSERT INTO watch_history(node_id,last_watched_at,watch_count)
@@ -782,7 +835,8 @@ impl Database {
                 [node_id],
             )
             .map_err(db_error)?;
-        Ok(())
+        crate::collection::record_recent(&connection, crate::collection::Target::Node(node_id))?;
+        connection.commit().map_err(db_error)
     }
 
     /// Returns video Nodes and individual books across every Library Root, newest first. History for deleted Nodes
@@ -793,12 +847,7 @@ impl Database {
         let records = {
             let mut statement = connection
                 .prepare(
-                    "WITH activity(node_id,stamp,book_id) AS (
-                       SELECT node_id,last_watched_at,NULL FROM watch_history
-                       UNION ALL SELECT b.node_id,p.last_read_at,b.id FROM comic_reading_progress p JOIN comic_books b ON b.id=p.comic_book_id
-                     ), ranked AS (SELECT *,ROW_NUMBER() OVER(PARTITION BY node_id,book_id ORDER BY stamp DESC) AS rank FROM activity)
-                     SELECT a.node_id,a.stamp,a.book_id FROM ranked a JOIN nodes n ON n.id=a.node_id
-                     WHERE a.rank=1 AND n.node_type<>'IGNORED' ORDER BY a.stamp DESC,a.node_id DESC,a.book_id DESC",
+                    "SELECT COALESCE(a.node_id,b.node_id),a.opened_at,a.book_id FROM recent_activity a LEFT JOIN comic_books b ON b.id=a.book_id JOIN nodes n ON n.id=COALESCE(a.node_id,b.node_id) WHERE n.node_type<>'IGNORED' ORDER BY julianday(a.opened_at) DESC,a.entry_seq DESC LIMIT 30",
                 )
                 .map_err(db_error)?;
             let rows = statement
@@ -815,7 +864,64 @@ impl Database {
             rows
         };
 
-        records
+        if records.is_empty() { return Ok(Vec::new()); }
+        let hidden=hidden_node_ids_conn(connection)?;
+        let records=records.into_iter().filter(|(id,_,_)|!hidden.contains(id)).collect::<Vec<_>>();
+        let ids=records.iter().map(|(id,_,_)|*id).collect::<std::collections::BTreeSet<_>>().into_iter().collect::<Vec<_>>();
+        let mut nodes=load_node_rows_by_ids_conn(connection,&ids)?;
+        hydrate_nodes_metadata_conn(connection,&mut nodes)?;
+        // Reuse the existing Root-scoped presentation path, including its pure
+        // identity cache. Watched values still come from this read transaction.
+        nodes.sort_by_key(|node|(node.library_root_id,node.id));
+        let mut start=0;
+        while start<nodes.len() {
+            let root=nodes[start].library_root_id;
+            let end=start+nodes[start..].iter().take_while(|node|node.library_root_id==root).count();
+            crate::card_progress::Hydrator::new(connection,None).library_nodes(root,&mut nodes[start..end])?;
+            start=end;
+        }
+        let nodes=nodes.into_iter().map(|node|(node.id,node)).collect::<HashMap<_,_>>();
+        let ids=records.iter().filter_map(|(_,_,id)|*id).collect::<std::collections::BTreeSet<_>>().into_iter().collect::<Vec<_>>();
+        let mut books=HashMap::new();
+        if !ids.is_empty() {
+            let mut statement=connection.prepare(&format!("{} WHERE b.id IN ({})",crate::comics::book_select(),sql_placeholders(ids.len()))).map_err(db_error)?;
+            for book in statement.query_map(rusqlite::params_from_iter(ids),crate::comics::book_from_row).map_err(db_error)? {
+                let book=book.map_err(db_error)?;books.insert(book.id,book);
+            }
+        }
+        // Keep the exact original newest-first order, tie-break and separate
+        // book identities, even when multiple records share one parent Node.
+        records.into_iter().map(|(node_id,watched_at,comic_book_id)|Ok(RecentlyWatchedEntry {
+            comic_book:comic_book_id.map(|id|books.get(&id).cloned().ok_or_else(||"最近打开的书籍不存在。".to_owned())).transpose()?,
+            comic_book_id,node:nodes.get(&node_id).cloned().ok_or_else(||"目录节点不存在。".to_owned())?,watched_at,
+        })).collect()
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn list_recently_watched_reference(&self) -> AppResult<Vec<RecentlyWatchedEntry>> {
+        self.read_snapshot(|connection| {
+        let records = {
+            let mut statement = connection
+                .prepare(
+                    "SELECT COALESCE(a.node_id,b.node_id),a.opened_at,a.book_id FROM recent_activity a LEFT JOIN comic_books b ON b.id=a.book_id JOIN nodes n ON n.id=COALESCE(a.node_id,b.node_id) WHERE n.node_type<>'IGNORED' ORDER BY julianday(a.opened_at) DESC,a.entry_seq DESC LIMIT 30",
+                )
+                .map_err(db_error)?;
+            let rows = statement
+                .query_map([], |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<i64>>(2)?,
+                    ))
+                })
+                .map_err(db_error)?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(db_error)?;
+            rows
+        };
+
+        let mut entries=records
             .into_iter()
             .filter(|(node_id, _, _)| ensure_node_visible_conn(connection, *node_id).is_ok())
             .map(|(node_id, watched_at, comic_book_id)| {
@@ -826,15 +932,33 @@ impl Database {
                     watched_at,
                 })
             })
-            .collect()
+            .collect::<AppResult<Vec<_>>>()?;
+        let mut progress=crate::card_progress::Hydrator::new(connection,None);
+        for entry in &mut entries {progress.node(&mut entry.node,false)?;}
+        Ok(entries)
         })
     }
 
     pub fn search(&self, query: &str, root_id: Option<i64>) -> AppResult<Vec<SearchHit>> {
+        self.search_filtered(
+            query,
+            root_id,
+            &crate::search_filters::SearchFilters::default(),
+        )
+    }
+
+    pub fn search_filtered(
+        &self,
+        query: &str,
+        root_id: Option<i64>,
+        filters: &crate::search_filters::SearchFilters,
+    ) -> AppResult<Vec<SearchHit>> {
+        filters.validate()?;
         let query = query.trim();
-        if query.is_empty() {
+        if query.is_empty() && filters.scan_root_id.is_none() {
             return Ok(Vec::new());
         }
+        let filters_json = serde_json::to_string(filters).map_err(|e| e.to_string())?;
         if query.chars().count() > MAX_SEARCH_QUERY_CHARS {
             return Err(format!(
                 "搜索内容不能超过 {MAX_SEARCH_QUERY_CHARS} 个字符。"
@@ -847,6 +971,19 @@ impl Database {
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Deferred)
             .map_err(db_error)?;
+        if filters.cover.is_some() {
+            crate::search_filters::prepare_covers(&transaction, self)?;
+        } else {
+            transaction
+                .execute_batch(
+                    "CREATE TEMP TABLE search_available_covers(node_id INTEGER,book_id INTEGER)",
+                )
+                .map_err(db_error)?;
+        }
+        crate::search_filters::prepare_collection(
+            &transaction,
+            filters.collection_status.is_some(),
+        )?;
         let pattern = format!("%{}%", escape_like(query));
         let root_filter = root_id.unwrap_or(-1);
         let mut hits = Vec::new();
@@ -857,6 +994,7 @@ impl Database {
                     "{} WHERE n.node_type <> 'IGNORED' AND NOT EXISTS (SELECT 1 FROM library_roots hidden_root WHERE hidden_root.id=n.library_root_id AND n.parent_node_id IS NULL AND n.absolute_path=hidden_root.path COLLATE NOCASE)
                      AND (?2 < 0 OR n.library_root_id=?2)
                      AND (n.display_name LIKE ?1 ESCAPE '\\' OR n.folder_name LIKE ?1 ESCAPE '\\'
+                          OR EXISTS (SELECT 1 FROM private_notes pn WHERE pn.node_id=n.id AND pn.body LIKE ?1 ESCAPE '\\')
                           OR EXISTS (
                               SELECT 1 FROM node_tags nt JOIN tags t ON t.id=nt.tag_id
                               WHERE nt.node_id=n.id AND t.name LIKE ?1 ESCAPE '\\'
@@ -871,21 +1009,24 @@ impl Database {
                                      OR b.provider_title_ko LIKE ?1 ESCAPE '\\'
                                      OR EXISTS (SELECT 1 FROM json_each(b.provider_aliases_json) alias WHERE alias.value LIKE ?1 ESCAPE '\\'))
                           ))
-                     LIMIT 200",
-                    node_select()
+                     {} LIMIT 200",
+                    node_select(), crate::search_filters::condition(false,false)
                 ))
                 .map_err(db_error)?;
             let rows = node_statement
-                .query_map(params![pattern, root_filter], node_from_row)
+                .query_map(params![pattern, root_filter, filters_json], node_from_row)
                 .map_err(db_error)?
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(db_error)?;
             rows
         };
         let node_hit_ids = nodes.iter().map(|node| node.id).collect::<Vec<_>>();
-        let mut book_statement=transaction.prepare(&format!("{} JOIN nodes n ON n.id=b.node_id WHERE n.node_type<>'IGNORED' AND (?2<0 OR n.library_root_id=?2) AND b.display_name LIKE ?1 ESCAPE '\\' LIMIT 200",crate::comics::book_select())).map_err(db_error)?;
+        let mut book_statement=transaction.prepare(&format!("{} JOIN nodes n ON n.id=b.node_id WHERE n.node_type<>'IGNORED' AND (?2<0 OR n.library_root_id=?2) AND (b.display_name LIKE ?1 ESCAPE '\\' OR EXISTS(SELECT 1 FROM private_notes pn WHERE pn.book_id=b.id AND pn.body LIKE ?1 ESCAPE '\\') OR json_extract(?3,'$.scanRootId') IS NOT NULL) {} LIMIT 200",crate::comics::book_select(),crate::search_filters::condition(true,false))).map_err(db_error)?;
         let books = book_statement
-            .query_map(params![pattern, root_filter], crate::comics::book_from_row)
+            .query_map(
+                params![pattern, root_filter, filters_json],
+                crate::comics::book_from_row,
+            )
             .map_err(db_error)?
             .collect::<Result<Vec<_>, _>>()
             .map_err(db_error)?;
@@ -896,12 +1037,12 @@ impl Database {
                     "SELECT {} FROM media_files f
                      JOIN nodes n ON n.id=f.node_id
                      WHERE n.node_type <> 'IGNORED' AND (?2 < 0 OR n.library_root_id=?2)
-                     AND f.file_name LIKE ?1 ESCAPE '\\' LIMIT 200",
-                    media_columns("f")
+                     AND json_extract(?3,'$.scanRootId') IS NULL AND f.file_name LIKE ?1 ESCAPE '\\' {} LIMIT 200",
+                    media_columns("f"),crate::search_filters::condition(false,true)
                 ))
                 .map_err(db_error)?;
             let rows = file_statement
-                .query_map(params![pattern, root_filter], media_from_row)
+                .query_map(params![pattern, root_filter, filters_json], media_from_row)
                 .map_err(db_error)?
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(db_error)?;
@@ -941,6 +1082,7 @@ impl Database {
                 continue;
             }
             hits.push(SearchHit {
+                note_excerpt: None,
                 comic_book: None,
                 kind: SearchHitKind::Node,
                 node,
@@ -953,6 +1095,7 @@ impl Database {
                 .cloned()
                 .ok_or_else(|| db_error(rusqlite::Error::QueryReturnedNoRows))?;
             hits.push(SearchHit {
+                note_excerpt: None,
                 comic_book: None,
                 kind: SearchHitKind::MediaFile,
                 node,
@@ -968,11 +1111,20 @@ impl Database {
                 .cloned()
                 .ok_or_else(|| db_error(rusqlite::Error::QueryReturnedNoRows))?;
             hits.push(SearchHit {
+                note_excerpt: None,
                 kind: SearchHitKind::ComicBook,
                 node,
                 media_file: None,
                 comic_book: Some(book),
             });
+        }
+        for hit in &mut hits {
+            let (node, book) = if let Some(book) = &hit.comic_book {
+                (None, Some(book.id))
+            } else {
+                (Some(hit.node.id), None)
+            };
+            hit.note_excerpt=transaction.query_row("SELECT substr(body,MAX(1,instr(lower(body),lower(?3))-35),150) FROM private_notes WHERE (node_id=?1 OR book_id=?2) AND body LIKE ?4 ESCAPE '\\'",params![node,book,query,pattern],|r|r.get(0)).optional().map_err(db_error)?;
         }
         hits.sort_by(|left, right| {
             natural_cmp(
@@ -999,6 +1151,10 @@ impl Database {
             })
         });
         hits.truncate(300);
+        let mut progress = crate::card_progress::Hydrator::new(&transaction, None);
+        for hit in &mut hits {
+            progress.node(&mut hit.node, false)?;
+        }
         drop(book_statement);
         transaction.commit().map_err(db_error)?;
         Ok(hits)
@@ -1350,6 +1506,9 @@ impl Database {
         display_name: Option<String>,
     ) -> AppResult<MediaNode> {
         let node = self.get_node(node_id)?;
+        let manual = display_name
+            .as_ref()
+            .is_some_and(|name| !name.trim().is_empty());
         let value = display_name
             .map(|name| name.trim().to_string())
             .filter(|name| !name.is_empty())
@@ -1362,8 +1521,8 @@ impl Database {
         let connection = self.connect()?;
         connection
             .execute(
-                "UPDATE nodes SET display_name=?1, updated_at=CURRENT_TIMESTAMP WHERE id=?2",
-                params![value, node_id],
+                "UPDATE nodes SET display_name=?1, manual_display_name=?3, updated_at=CURRENT_TIMESTAMP WHERE id=?2",
+                params![value, node_id, manual],
             )
             .map_err(db_error)?;
         drop(connection);
@@ -1612,27 +1771,30 @@ impl Database {
     }
 
     pub fn list_favorite_folder_nodes(&self, folder_id: i64) -> AppResult<Vec<MediaNode>> {
-        let connection = self.connect()?;
-        get_favorite_folder_conn(&connection, folder_id)?;
-        let node_ids = {
-            let mut statement = connection
-                .prepare(
-                    "SELECT node_id FROM node_favorite_folders
+        self.read_snapshot(|connection| {
+            get_favorite_folder_conn(connection, folder_id)?;
+            let node_ids = {
+                let mut statement = connection
+                    .prepare(
+                        "SELECT node_id FROM node_favorite_folders
                      WHERE folder_id=?1
                      ORDER BY added_at DESC,node_id DESC",
-                )
-                .map_err(db_error)?;
-            let rows = statement
-                .query_map([folder_id], |row| row.get::<_, i64>(0))
-                .map_err(db_error)?
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(db_error)?;
-            rows
-        };
-        node_ids
-            .into_iter()
-            .map(|node_id| get_node_conn(&connection, node_id))
-            .collect()
+                    )
+                    .map_err(db_error)?;
+                let rows = statement
+                    .query_map([folder_id], |row| row.get::<_, i64>(0))
+                    .map_err(db_error)?
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(db_error)?;
+                rows
+            };
+            let mut nodes = node_ids
+                .into_iter()
+                .map(|node_id| get_node_conn(connection, node_id))
+                .collect::<AppResult<Vec<_>>>()?;
+            crate::card_progress::hydrate_nodes_conn(connection, &mut nodes)?;
+            Ok(nodes)
+        })
     }
 
     pub fn batch_add_nodes_to_favorite(
@@ -2840,10 +3002,32 @@ fn read_scan_health_conn(
     connection: &Connection,
     root_id: i64,
 ) -> AppResult<Option<crate::models::ScanHealth>> {
-    connection.query_row("SELECT last_auto_attempt_at,last_success_at,outcome,error_count,detail FROM library_scan_health WHERE library_root_id=?1",[root_id],|row|Ok(crate::models::ScanHealth {
+    let changes = crate::scan_changes::read(connection, root_id)?;
+    let mut health=connection.query_row("SELECT last_auto_attempt_at,last_success_at,outcome,error_count,detail FROM library_scan_health WHERE library_root_id=?1",[root_id],|row|Ok(crate::models::ScanHealth {
+        changes: None,
         warnings_ignored: connection.query_row("SELECT value='true' FROM settings WHERE key=?1", [format!("library_scan_warnings_ignored:{root_id}")], |r| r.get(0)).optional()?.unwrap_or(false),
         last_auto_attempt_at:row.get(0)?,last_success_at:row.get(1)?,outcome:row.get(2)?,error_count:row.get(3)?,detail:row.get(4)?,
-    })).optional().map_err(db_error)
+    })).optional().map_err(db_error)?;
+    if let (None, Some(change)) = (&health, &changes) {
+        health = Some(crate::models::ScanHealth {
+            changes: None,
+            warnings_ignored: false,
+            last_auto_attempt_at: None,
+            last_success_at: None,
+            outcome: if change.complete {
+                "SUCCESS"
+            } else {
+                "PARTIAL"
+            }
+            .into(),
+            error_count: change.errors,
+            detail: None,
+        });
+    }
+    if let Some(health) = health.as_mut() {
+        health.changes = changes;
+    }
+    Ok(health)
 }
 
 fn get_root_conn(connection: &Connection, root_id: i64) -> AppResult<LibraryRoot> {
@@ -2862,7 +3046,8 @@ fn get_root_conn(connection: &Connection, root_id: i64) -> AppResult<LibraryRoot
              CASE WHEN r.media_kind='COMIC' THEN
                 (SELECT COUNT(*) FROM comic_books b JOIN nodes n ON n.id=b.node_id WHERE n.library_root_id=r.id AND b.source_resource_id IS NULL)
              ELSE (SELECT COUNT(*) FROM media_files f JOIN nodes n ON n.id=f.node_id WHERE n.library_root_id=r.id) END,
-             CASE WHEN r.artbook_library=1 THEN 'ARTBOOK' WHEN r.doujin_library=1 THEN 'DOUJIN' WHEN r.media_kind='COMIC' THEN r.book_library_kind WHEN r.video_subject_scope<>'MIXED' THEN r.video_subject_scope ELSE r.media_kind END, r.auto_bangumi, r.book_organization_strategy
+             CASE WHEN r.artbook_library=1 THEN 'ARTBOOK' WHEN r.doujin_library=1 THEN 'DOUJIN' WHEN r.media_kind='COMIC' THEN r.book_library_kind WHEN r.video_subject_scope<>'MIXED' THEN r.video_subject_scope ELSE r.media_kind END, r.auto_bangumi, r.book_organization_strategy,
+                    EXISTS(SELECT 1 FROM library_all_resources_visibility v WHERE v.library_root_id=r.id AND v.hidden=1)
              FROM library_roots r WHERE r.id=?1",
             [root_id],
             |row| {
@@ -2870,6 +3055,7 @@ fn get_root_conn(connection: &Connection, root_id: i64) -> AppResult<LibraryRoot
                     media_kind: LibraryMediaKind::from_db(&row.get::<_, String>(8)?),
                     auto_bangumi: row.get(9)?,
                     book_organization_strategy: row.get(10)?,
+                    hidden_from_all: row.get(11)?,
                     scan_health: None,
                     id: row.get(0)?,
                     path: row.get(1)?,
@@ -2948,6 +3134,23 @@ pub(crate) fn ensure_node_visible_conn(connection: &Connection, node_id: i64) ->
     Ok(())
 }
 
+/// Batch visibility for rows already selected from this snapshot. UNION bounds cycles in
+/// malformed legacy trees and an ignored ancestor hides all of its descendants.
+pub(crate) fn hidden_node_ids_conn(connection: &Connection) -> AppResult<HashSet<i64>> {
+    connection
+        .prepare(
+            "WITH RECURSIVE hidden(id) AS (
+            SELECT id FROM nodes WHERE node_type='IGNORED'
+            UNION SELECT n.id FROM nodes n JOIN hidden h ON n.parent_node_id=h.id
+        ) SELECT id FROM hidden",
+        )
+        .map_err(db_error)?
+        .query_map([], |row| row.get(0))
+        .map_err(db_error)?
+        .collect::<Result<HashSet<_>, _>>()
+        .map_err(db_error)
+}
+
 pub(crate) fn get_node_conn(connection: &Connection, node_id: i64) -> AppResult<MediaNode> {
     let mut node = connection
         .query_row(
@@ -2970,7 +3173,7 @@ pub(crate) fn node_select() -> &'static str {
      n.node_type,n.manual_type_override,n.cover_source,n.cover_cache_path,n.direct_video_count,
      n.child_media_branch_count,n.total_video_count,n.created_at,n.updated_at,n.last_seen_at,
      (SELECT CASE WHEN r.artbook_library=1 THEN 'ARTBOOK' WHEN r.doujin_library=1 THEN 'DOUJIN' WHEN r.media_kind='COMIC' THEN r.book_library_kind WHEN r.video_subject_scope<>'MIXED' THEN r.video_subject_scope ELSE r.media_kind END FROM library_roots r WHERE r.id=n.library_root_id),
-     n.direct_comic_book_count,n.child_comic_branch_count,n.total_comic_book_count FROM nodes n"
+     n.direct_comic_book_count,n.child_comic_branch_count,n.total_comic_book_count,n.manual_display_name FROM nodes n"
 }
 
 /// Automatic matching treats a non-manually-classified SP/OVA/Extras child as part of a parent
@@ -3052,6 +3255,7 @@ fn filter_missing_bound_cover_candidates(
 
 pub(crate) fn node_from_row(row: &Row<'_>) -> rusqlite::Result<MediaNode> {
     Ok(MediaNode {
+        card_progress: None,
         tmdb_binding: None,
         media_kind: LibraryMediaKind::from_db(&row.get::<_, String>(16)?),
         direct_comic_book_count: row.get(17)?,
@@ -3065,6 +3269,7 @@ pub(crate) fn node_from_row(row: &Row<'_>) -> rusqlite::Result<MediaNode> {
         absolute_path: row.get(3)?,
         folder_name: row.get(4)?,
         display_name: row.get(5)?,
+        manual_display_name: row.get(20)?,
         node_type: NodeType::from_db(&row.get::<_, String>(6)?),
         manual_type_override: row.get(7)?,
         cover_source: CoverSource::from_db(&row.get::<_, String>(8)?),
@@ -3082,7 +3287,7 @@ pub(crate) fn node_from_row(row: &Row<'_>) -> rusqlite::Result<MediaNode> {
 
 /// Use indexed source timestamps, never Node.updated_at (which also changes on metadata edits).
 /// Traverse relationships in bounded batches; hidden descendants do not affect visible parents.
-fn hydrate_file_modified_times_conn(
+pub(crate) fn hydrate_file_modified_times_conn(
     connection: &Connection,
     nodes: &mut [MediaNode],
 ) -> AppResult<()> {
@@ -3191,7 +3396,7 @@ fn list_nodes_conn(
     Ok(nodes)
 }
 
-fn load_node_rows_by_ids_conn(
+pub(crate) fn load_node_rows_by_ids_conn(
     connection: &Connection,
     node_ids: &[i64],
 ) -> AppResult<Vec<MediaNode>> {
@@ -3227,6 +3432,18 @@ pub(crate) fn hydrate_nodes_metadata_conn(
         return Ok(());
     }
     hydrate_file_modified_times_conn(connection, nodes)?;
+    hydrate_node_labels_conn(connection, nodes)
+}
+
+/// Ownership needs bindings/tags, but not a recursive activity query for every graph node.
+/// Presentation loaders hydrate timestamps only for rows that will actually be returned.
+pub(crate) fn hydrate_node_labels_conn(
+    connection: &Connection,
+    nodes: &mut [MediaNode],
+) -> AppResult<()> {
+    if nodes.is_empty() {
+        return Ok(());
+    }
     for node in nodes.iter_mut() {
         node.binding = None;
         node.user_tags.clear();
@@ -3496,6 +3713,29 @@ pub(crate) fn list_media_conn(connection: &Connection, node_id: i64) -> AppResul
     Ok(files)
 }
 
+pub(crate) fn list_media_for_nodes_conn(
+    connection: &Connection,
+    node_ids: &[i64],
+) -> AppResult<Vec<MediaFile>> {
+    let mut files = Vec::new();
+    for chunk in node_ids.chunks(NODE_METADATA_CHUNK_SIZE) {
+        let sql = format!(
+            "SELECT {} FROM media_files f WHERE f.node_id IN ({})",
+            media_columns("f"),
+            sql_placeholders(chunk.len())
+        );
+        let mut statement = connection.prepare(&sql).map_err(db_error)?;
+        files.extend(
+            statement
+                .query_map(rusqlite::params_from_iter(chunk), media_from_row)
+                .map_err(db_error)?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(db_error)?,
+        );
+    }
+    Ok(files)
+}
+
 fn resource_columns(alias: &str) -> String {
     format!(
         "{alias}.id,{alias}.node_id,{alias}.absolute_path,{alias}.file_name,{alias}.extension,{alias}.file_size,
@@ -3609,7 +3849,7 @@ fn escape_like(value: &str) -> String {
         .replace('_', "\\_")
 }
 
-fn canonical_library_root(path: &Path) -> AppResult<PathBuf> {
+pub(crate) fn canonical_library_root(path: &Path) -> AppResult<PathBuf> {
     if !path.is_absolute() {
         return Err("资源库目录必须是绝对路径。".into());
     }
@@ -3707,7 +3947,7 @@ fn normalize_library_root_lexically(path: &Path) -> PathBuf {
     normalized
 }
 
-fn display_path(path: &Path) -> String {
+pub(crate) fn display_path(path: &Path) -> String {
     let value = path.to_string_lossy();
     #[cfg(target_os = "windows")]
     {
@@ -3831,6 +4071,180 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
+    #[test]
+    fn all_visibility_is_persistent_presentation_only_and_keeps_complete_work_targets() {
+        let t = test_temp_dir();
+        let db = Database::new(t.path().join("visibility.db"));
+        db.migrate().unwrap();
+        let c = db.connect().unwrap();
+        for id in 1..=4 {
+            let path = t.path().join(format!("Root{id}"));
+            std::fs::create_dir(&path).unwrap();
+            c.execute("INSERT INTO library_roots(id,path,display_name,media_kind,book_organization_strategy) VALUES(?1,?2,?3,?4,?5)",params![id,path.to_string_lossy(),format!("Root{id}"),if id>2 {"COMIC"} else {"VIDEO"},if id==4 {"SMART_MIXED"} else {"LEGACY"}]).unwrap();
+            c.execute("INSERT INTO nodes(id,library_root_id,absolute_path,folder_name,display_name,node_type,total_video_count,total_comic_book_count) VALUES(?1,?1,?2,'Root','Root','CONTAINER',?3,?4)",params![id,path.to_string_lossy(),i64::from(id<=2),i64::from(id>2)]).unwrap();
+            let node_id = id + 10;
+            c.execute("INSERT INTO nodes(id,library_root_id,parent_node_id,absolute_path,folder_name,display_name,node_type,manual_type_override,direct_video_count,total_video_count,direct_comic_book_count,total_comic_book_count) VALUES(?1,?2,?2,?3,'Example','Example','WORK',1,?4,?4,?5,?5)",params![node_id,id,path.join("Example").to_string_lossy(),i64::from(id<=2),i64::from(id>2)]).unwrap();
+            if id <= 2 {
+                c.execute("INSERT INTO media_files(node_id,absolute_path,file_name,extension,file_size,modified_at) VALUES(?1,?2,'Episode.mkv','mkv',1,'2026-10-26')",params![node_id,path.join("Example/Episode.mkv").to_string_lossy()]).unwrap();
+                c.execute("INSERT INTO metadata_bindings(node_id,provider,provider_subject_id,provider_subject_type,provider_title) VALUES(?1,'BANGUMI',42,2,'Example')",[node_id]).unwrap();
+            } else {
+                c.execute("INSERT INTO comic_books(node_id,source_path,source_kind,display_name,modified_at,page_count) VALUES(?1,?2,'IMAGE_FOLDER','Example','2026-10-26',2)",params![node_id,path.join("Example").to_string_lossy()]).unwrap();
+            }
+        }
+        drop(c);
+        assert!(db.list_roots().unwrap().iter().all(|r| !r.hidden_from_all));
+        let before = db.list_all_resources().unwrap();
+        let target = before
+            .works
+            .iter()
+            .find(|w| w.sources.len() == 2)
+            .unwrap()
+            .target
+            .clone();
+        db.record_node_watched(11).unwrap();
+        assert!(
+            db.set_root_hidden_from_all(1, true)
+                .unwrap()
+                .hidden_from_all
+        );
+        db.set_root_hidden_from_all(3, true).unwrap();
+        db.set_root_hidden_from_all(4, true).unwrap();
+        let after = db.list_all_resources().unwrap();
+        assert!(after.nodes.iter().all(|n| n.library_root_id == 2));
+        assert!(after.comic_nodes.is_empty());
+        assert!(after.book_libraries.is_empty());
+        assert!(after
+            .recognition_warnings
+            .iter()
+            .all(|n| n.library_root_id == 2));
+        let group = after
+            .works
+            .iter()
+            .find(|w| w.node.library_root_id == 2)
+            .unwrap();
+        assert_eq!(group.sources.len(), 1);
+        assert_eq!(group.node.total_video_count, 1);
+        assert_eq!(group.target.source_node_ids, target.source_node_ids);
+        assert_eq!(group.target.snapshot, target.snapshot);
+        assert!(!db.search("Example", Some(1)).unwrap().is_empty());
+        assert!(!db.list_recently_watched().unwrap().is_empty());
+        assert_eq!(
+            crate::works::node_detail(&db, 11)
+                .unwrap()
+                .media_files
+                .len(),
+            1
+        );
+        let reopened = Database::new(t.path().join("visibility.db"));
+        reopened.migrate().unwrap();
+        assert!(reopened.get_root(1).unwrap().hidden_from_all);
+        reopened.set_root_hidden_from_all(2, true).unwrap();
+        let empty = reopened.list_all_resources().unwrap();
+        assert_eq!(empty.total_count, 0);
+        assert!(empty.works.is_empty());
+        for id in 1..=4 {
+            reopened.set_root_hidden_from_all(id, false).unwrap();
+        }
+        assert_eq!(
+            reopened.list_all_resources().unwrap().total_count,
+            before.total_count
+        );
+        reopened.set_root_hidden_from_all(1, true).unwrap();
+        reopened.remove_root(1).unwrap();
+        assert_eq!(
+            reopened
+                .connect()
+                .unwrap()
+                .query_row(
+                    "SELECT COUNT(*) FROM library_all_resources_visibility WHERE library_root_id=1",
+                    [],
+                    |r| r.get::<_, i64>(0)
+                )
+                .unwrap(),
+            0
+        );
+        assert!(reopened.set_root_hidden_from_all(999, true).is_err());
+    }
+
+    #[test]
+    fn manual_names_upgrade_persist_and_survive_index_refresh_without_changing_sources() {
+        let temp = TempDir::new().unwrap();
+        let source = temp.path().join("Source");
+        std::fs::create_dir(&source).unwrap();
+        let media = source.join("Episode.mkv");
+        std::fs::write(&media, b"immutable synthetic media").unwrap();
+        let database = Database::new(temp.path().join("index.db"));
+        database.migrate().unwrap();
+        let root = database.add_root(&source, None).unwrap();
+        let connection = database.connect().unwrap();
+        let id = crate::scanner::upsert_node(
+            &connection,
+            root.id,
+            None,
+            &source.to_string_lossy(),
+            "Source",
+            "before",
+        )
+        .unwrap();
+        connection.execute("UPDATE nodes SET display_name='Old custom title',node_type='WORK',cover_source='MANUAL',cover_cache_path='synthetic-cover' WHERE id=?1", [id]).unwrap();
+        connection.execute("INSERT INTO metadata_bindings(node_id,provider,provider_subject_id,provider_title,provider_title_cn) VALUES(?1,'BANGUMI',42,'Original','官方')", [id]).unwrap();
+        // Recreate the previous version's real table shape, then run the ordinary migration path.
+        connection.execute_batch("ALTER TABLE nodes DROP COLUMN manual_display_name; DELETE FROM mediashelf_schema_migrations WHERE version=28;").unwrap();
+        drop(connection);
+        database.migrate().unwrap();
+        let upgraded = database.get_node(id).unwrap();
+        assert!(upgraded.manual_display_name);
+        assert_eq!(upgraded.display_name, "Old custom title");
+        assert_eq!(upgraded.binding.as_ref().unwrap().provider_subject_id, 42);
+        assert_eq!(
+            upgraded.cover_cache_path.as_deref(),
+            Some("synthetic-cover")
+        );
+        let renamed = database
+            .set_display_name(id, Some("Source".into()))
+            .unwrap();
+        assert!(renamed.manual_display_name); // Explicit intent still wins when equal to the disk name.
+        let literal = "My release [1080p]";
+        database.set_display_name(id, Some(literal.into())).unwrap();
+        let connection = database.connect().unwrap();
+        crate::scanner::upsert_node(
+            &connection,
+            root.id,
+            None,
+            &source.to_string_lossy(),
+            "Source",
+            "after",
+        )
+        .unwrap();
+        drop(connection);
+        database.migrate().unwrap();
+        let reopened = Database::new(temp.path().join("index.db"))
+            .get_node(id)
+            .unwrap();
+        assert_eq!(reopened.display_name, literal);
+        assert!(reopened.manual_display_name);
+        assert_eq!(reopened.binding.as_ref().unwrap().provider_subject_id, 42);
+        assert_eq!(
+            crate::works::group_works(vec![reopened.clone()])[0]
+                .node
+                .display_name,
+            literal
+        );
+        let mut unbound = reopened;
+        unbound.binding = None;
+        assert_eq!(
+            crate::works::group_works(vec![unbound])[0]
+                .node
+                .display_name,
+            literal
+        );
+        assert_eq!(std::fs::read(media).unwrap(), b"immutable synthetic media");
+        assert_eq!(std::fs::read_dir(source).unwrap().count(), 1);
+        let reset = database.set_display_name(id, None).unwrap();
+        assert!(!reset.manual_display_name);
+        assert_eq!(reset.display_name, "Source");
+    }
+
     fn test_bangumi_subject(
         subject_id: i64,
         subject_type: i64,
@@ -3892,6 +4306,7 @@ mod tests {
             node.binding = get_binding_conn(&connection, node.id).unwrap();
             node.user_tags = list_node_tags_conn(&connection, node.id).unwrap();
             hits.push(SearchHit {
+                note_excerpt: None,
                 comic_book: None,
                 kind: SearchHitKind::Node,
                 node,
@@ -3924,6 +4339,7 @@ mod tests {
             node.binding = get_binding_conn(&connection, node.id).unwrap();
             node.user_tags = list_node_tags_conn(&connection, node.id).unwrap();
             hits.push(SearchHit {
+                note_excerpt: None,
                 comic_book: None,
                 kind: SearchHitKind::MediaFile,
                 node,
@@ -4088,6 +4504,16 @@ mod tests {
             for hit in &mut expected {
                 hit.node.latest_file_modified_at = Some("2026-08-24T00:00:00.000Z".into());
             }
+            // Progress is an additive read-only presentation field; keep all old DTO equality.
+            database
+                .read_snapshot(|connection| {
+                    let mut progress = crate::card_progress::Hydrator::new(connection, None);
+                    for hit in &mut expected {
+                        progress.node(&mut hit.node, false)?;
+                    }
+                    Ok(())
+                })
+                .unwrap();
             let actual = database.search(query, root_filter).unwrap();
             assert_eq!(
                 serde_json::to_value(&actual).unwrap(),
@@ -4631,7 +5057,7 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(versions, 27);
+        assert_eq!(versions, 36);
         connection
             .prepare("SELECT library_root_id,snapshot_json FROM library_scan_snapshots")
             .unwrap();
@@ -5054,6 +5480,7 @@ mod tests {
                 [ignored_id],
             )
             .unwrap();
+        connection.execute("UPDATE recent_activity SET opened_at=(SELECT last_watched_at FROM watch_history w WHERE w.node_id=recent_activity.node_id) WHERE kind='NODE'",[]).unwrap();
         let older_count: i64 = connection
             .query_row(
                 "SELECT watch_count FROM watch_history WHERE node_id=?1",

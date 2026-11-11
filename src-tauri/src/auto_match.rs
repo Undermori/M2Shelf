@@ -2815,6 +2815,7 @@ mod tests {
 
     fn ineligible_progress_node(id: i64) -> MediaNode {
         MediaNode {
+            card_progress: None,
             tmdb_binding: None,
             media_kind: crate::models::LibraryMediaKind::Video,
             direct_comic_book_count: 0,
@@ -2828,6 +2829,7 @@ mod tests {
             absolute_path: format!("C:\\media\\node-{id}"),
             folder_name: format!("node-{id}"),
             display_name: format!("node-{id}"),
+            manual_display_name: false,
             node_type: NodeType::Mixed,
             manual_type_override: false,
             cover_source: CoverSource::Placeholder,

@@ -28,3 +28,9 @@ describe('new library recognition choice',()=>{
   for(const [name,mode] of [[/按文件夹识别/,'FOLDER'],[/按视频文件识别/,'VIDEO_FILE']] as const){fireEvent.click(screen.getByRole('button',{name}));expect(screen.queryByRole('alert')).toBeNull();expect(choose).toHaveBeenCalledTimes(mode==='FOLDER'?0:1);fireEvent.click(screen.getByRole('button',{name:'创建资源库'}));expect(choose).toHaveBeenLastCalledWith(mode,kind,true);}
  });
 });
+
+it('shows the full literal path and preserves kind/mode while the path editor is suspended',()=>{
+ const choose=vi.fn(),edit=vi.fn(),path='X:/Synthetic/中文 [路径]/本子';const props={path,busy:false,onChoose:choose,onClose:vi.fn(),onEditPath:edit};const view=render(<I18nProvider><LibraryRecognitionModeDialog {...props}/></I18nProvider>);
+ expect(screen.getByText(path).getAttribute('title')).toBe(path);expect(screen.queryByRole('button',{name:'文件夹路径'})).toBeNull();fireEvent.click(screen.getByRole('button',{name:'同人本'}));fireEvent.click(screen.getByRole('button',{name:/智能混合识别/}));fireEvent.click(screen.getByRole('button',{name:'更改…'}));expect(edit).toHaveBeenCalledOnce();
+ view.rerender(<I18nProvider><LibraryRecognitionModeDialog {...props} suspended/></I18nProvider>);expect(screen.queryByRole('dialog')).toBeNull();view.rerender(<I18nProvider><LibraryRecognitionModeDialog {...props} path="X:/Another"/></I18nProvider>);fireEvent.click(screen.getByRole('button',{name:'创建资源库'}));expect(choose).toHaveBeenCalledWith('FOLDER','DOUJIN',false,'SMART_MIXED');
+});

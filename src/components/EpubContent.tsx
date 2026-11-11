@@ -11,7 +11,7 @@ const tags = new Set(["p", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "pr
 export const isLocalBookImage = (value: string) => /^data:image\/(?:png|jpeg|gif|webp|avif|bmp);base64,/.test(value);
 
 /** Only application-selected text elements and validated local raster images reach React. */
-export function EpubContent({ blocks, zoom, height, settings, columnWidth, source, onLayout }: { blocks: EpubBlock[]; zoom: number; height: number; settings?: TextReaderSettings; columnWidth?: number;source?:{bookId:number;chapter:number;revision:string};onLayout?:()=>void }) {
+export function EpubContent({ blocks, zoom, height, settings, columnWidth, source, onLayout,highlight }: { blocks: EpubBlock[]; zoom: number; height: number; settings?: TextReaderSettings; columnWidth?: number;source?:{bookId:number;chapter:number;revision:string};onLayout?:()=>void;highlight?:{blockIndex:number;start:number;end:number;current?:boolean}[] }) {
   const { t } = useI18n();
   const visible=useMemo(()=>new Set<number>(),[blocks]);
   const [cache,setCache]=useState<ComicPageCache|null>(null);
@@ -29,14 +29,17 @@ export function EpubContent({ blocks, zoom, height, settings, columnWidth, sourc
       if (block.kind === "image") return isLocalBookImage(block.data_url)
         ? <img data-book-block={index} key={index} src={block.data_url} alt={t("ebook.illustration")} onLoad={onLayout}/> : null;
       const tag = tags.has(block.tag ?? "") ? block.tag! : "p";
+      const ranges=highlight?.filter(h=>h.blockIndex===index)??[];
+      const marked=(text:string,base=0):ReactNode=>{if(!ranges.length)return text;const points=new Set([0,text.length]);for(const r of ranges){points.add(Math.max(0,Math.min(text.length,r.start-base)));points.add(Math.max(0,Math.min(text.length,r.end-base)));}const offsets=[...points].sort((a,b)=>a-b);return offsets.slice(0,-1).map((start,i)=>{const end=offsets[i+1],match=ranges.find(r=>r.start<base+end&&r.end>base+start);return match?<mark className={match.current?'book-search-current':'book-search-match'} key={start}>{text.slice(start,end)}</mark>:text.slice(start,end);});};
+      let runOffset=0;
       const content = block.runs?.length ? block.runs.map((run, key) => {
-        let child: ReactNode = run.text;
+        let child: ReactNode = marked(run.text,runOffset);runOffset+=run.text.length;
         if (run.bold) child = <strong>{child}</strong>;
         if (run.italic) child = <em>{child}</em>;
         if (run.superscript) child = <sup>{child}</sup>;
         if (run.subscript) child = <sub>{child}</sub>;
         return <span key={key}>{child}</span>;
-      }) : block.text;
+      }) : marked(block.text);
       return createElement(tag === "li" ? "p" : tag, { key: index, 'data-book-block':index, className: tag === "li" ? "epub-list-item" : undefined }, content);
     })}
   </article>;

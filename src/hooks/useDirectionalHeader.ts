@@ -1,10 +1,12 @@
 import {useEffect,type RefObject} from 'react';
 
 /** Direction hysteresis on the real scrollport; transforms never change layout height. */
-export function useDirectionalHeader(ref:RefObject<HTMLDivElement|null>,destination:string) {
+export function useDirectionalHeader(ref:RefObject<HTMLDivElement|null>,destination:string,initialScrollTop=0) {
  useEffect(()=>{
   const element=ref.current;if(!element)return;
-  let previous=element.scrollTop,up=0,down=0;
+  // A real scroll event supplies a laid-out position. Reading scrollTop while a
+  // new large destination commits would force its entire layout before paint.
+  let previous=initialScrollTop,up=0,down=0;
   element.classList.remove('navigation-hidden');
   const scroll=()=>{
    const current=element.scrollTop;const delta=current-previous;previous=current;

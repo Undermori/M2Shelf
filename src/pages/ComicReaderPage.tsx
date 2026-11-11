@@ -1,3 +1,12 @@
+import {useReadingSequence} from '../hooks/useReadingSequence';
+import {ReaderPageThumbnails} from '../components/ReaderPageThumbnails';
+import {createComicThumbnailSource} from '../lib/pageThumbnails';
+import {ReaderEndPrompt} from '../components/ReaderEndPrompt';
+import {useNextVolume} from '../hooks/useNextVolume';
+import type {ComicBook} from '../types/comic';
+import type {ReaderSessionPreferences} from '../types/readerFeatures';
+import {CoverButton} from '../components/CoverSelector';
+import {PrivateNote} from '../components/PrivateNote';
 import {Select} from '../components/Select';
 import {ReaderShell,ReaderHeader,ReaderFooter} from '../components/ReaderShell';
 import {useCallback,useEffect,useLayoutEffect,useMemo,useRef,useState} from 'react';
@@ -11,20 +20,22 @@ import {Icon} from '../components/Icon';
 import {DocumentReaderPage} from './DocumentReaderPage';
 import type {ReaderMenuActions} from '../types/readerMenu';
 
-export function ComicReaderPage({bookId,initialPage,onBack,onProgress,onMenuActions}:{bookId:number;initialPage?:number;onBack:()=>void;onProgress:()=>void;onMenuActions?:(actions:ReaderMenuActions|null)=>void}){
+export function ComicReaderPage({bookId,initialPage,onBack,onProgress,onMenuActions,onNextBook,preferences,readingList}:{bookId:number;readingList?:readonly ComicBook[];initialPage?:number;onBack:()=>void;onProgress:()=>void;onMenuActions?:(actions:ReaderMenuActions|null)=>void;onNextBook?:(book:ComicBook,preferences:ReaderSessionPreferences)=>void;preferences?:ReaderSessionPreferences}){
  const {t}=useI18n();const [opened,setOpened]=useState<ComicOpenResult|null>(null);const [page,setPage]=useState(0);
- const [settings,setSettings]=useState<ComicReaderSettings>(defaultComicReaderSettings);const [fit,setFit]=useState<'PAGE'|'WIDTH'|'NATIVE'>('PAGE');const [zoom,setZoom]=useState(1);const [background,setBackground]=useState('GRAY');
+ const [settings,setSettings]=useState<ComicReaderSettings>(defaultComicReaderSettings);const [fit,setFit]=useState<'PAGE'|'WIDTH'|'NATIVE'>(preferences?.fit??'PAGE');const [zoom,setZoom]=useState(preferences?.zoom??1);const [background,setBackground]=useState(preferences?.background??'GRAY');
  const [revision,setRevision]=useState(0);const [error,setError]=useState('');const [panel,setPanel]=useState<'SETTINGS'|null>(null);const [bookmarks,setBookmarks]=useState<number[]>([]);const [bookmarkBusy,setBookmarkBusy]=useState(false);
+ const [overview,setOverview]=useState(false),[endSeen,setEndSeen]=useState(false),[endDismissed,setEndDismissed]=useState(false);
  const [viewport,setViewport]=useState({width:900,height:640,top:0});const [retry,setRetry]=useState(0);
  const viewportRef=useRef<HTMLDivElement>(null);const rootRef=useRef<HTMLElement>(null);const cacheRef=useRef<ComicPageCache|null>(null);const generation=useRef(0);const desiredScroll=useRef<number|null>(null);const anchor=useRef({index:0,offset:0});
  const visiblePages=useRef(new Set<number>());
  const pendingProgress=useRef<number|null>(null);const saveTimer=useRef<number|null>(null);const saveChain=useRef<Promise<void>>(Promise.resolve());const alive=useRef(true);const progressCallback=useRef(onProgress);progressCallback.current=onProgress;
+ const saveFailed=useRef(false);
  const flush=useCallback(()=>{
    if(saveTimer.current!==null){window.clearTimeout(saveTimer.current);saveTimer.current=null;}
-   const value=pendingProgress.current;if(value===null)return saveChain.current;pendingProgress.current=null;
+   const value=pendingProgress.current;if(value===null)return saveChain.current.then(()=>!saveFailed.current);pendingProgress.current=null;
    // Serialize progress writes; a delayed earlier write cannot overwrite a later position.
-   saveChain.current=saveChain.current.catch(()=>undefined).then(()=>api.updateComicProgress(bookId,value,opened?.book.revision)).then(()=>progressCallback.current()).catch(e=>{if(alive.current)setError(errorMessage(e));});
-   return saveChain.current;
+   saveChain.current=saveChain.current.catch(()=>undefined).then(()=>api.updateComicProgress(bookId,value,opened?.book.revision)).then(()=>{saveFailed.current=false;progressCallback.current();}).catch(e=>{saveFailed.current=true;if(pendingProgress.current===null)pendingProgress.current=value;if(alive.current)setError(errorMessage(e));});
+   return saveChain.current.then(()=>!saveFailed.current);
  },[bookId,opened?.book.revision]);
  useEffect(()=>{alive.current=true;return()=>{alive.current=false;void flush();};},[flush]);
  useEffect(()=>{
@@ -32,7 +43,7 @@ export function ComicReaderPage({bookId,initialPage,onBack,onProgress,onMenuActi
    void Promise.all([api.openComicBook(bookId),api.getSettings()]).then(([result,app])=>{
      if(!active||token!==generation.current)return;
      const start=Math.max(0,Math.min(result.pages.length-1,initialPage??result.book.progress?.lastPageIndex??0));
-     setOpened(result);setPage(start);setBookmarks(result.bookmarks);setSettings(app.comicReader??defaultComicReaderSettings);desiredScroll.current=start;anchor.current={index:start,offset:0};
+     setOpened(result);setPage(start);setBookmarks(result.bookmarks);setSettings(preferences?.comicSettings??app.comicReader??defaultComicReaderSettings);desiredScroll.current=start;anchor.current={index:start,offset:0};
      if(!result.book.documentFormat)cacheRef.current=new ComicPageCache(bookId,result.pages,()=>{if(active&&token===generation.current)setRevision(v=>v+1);},(id,index)=>api.readComicPage(id,index,result.book.revision));setRevision(v=>v+1);
    }).catch(e=>{if(active)setError(errorMessage(e));});
    return()=>{active=false;++generation.current;cacheRef.current?.dispose();cacheRef.current=null;};
@@ -76,19 +87,32 @@ export function ComicReaderPage({bookId,initialPage,onBack,onProgress,onMenuActi
    const frame=requestAnimationFrame(()=>{pendingProgress.current=index;if(saveTimer.current===null)saveTimer.current=window.setTimeout(()=>void flush(),700);});
    return()=>cancelAnimationFrame(frame);
  },[cache,page,paged,revision,viewport.top,viewport.height,atOffset,flush]);
- const jump=useCallback((index:number)=>{setError('');const target=Math.max(0,Math.min(count-1,index));setPage(target);if(!paged){desiredScroll.current=target;const top=offsets[target];if(viewportRef.current)viewportRef.current.scrollTop=top;anchor.current={index:target,offset:0};setViewport(v=>({...v,top}));}},[count,offsets,paged]);
+ const reachedEnd=!!count&&!!cache?.peek(count-1)&&(paged?currentSpread.includes(count-1):viewport.top+viewport.height>=(offsets[count]??Infinity)-24);
+ useEffect(()=>{if(reachedEnd)setEndSeen(true);},[reachedEnd]);
+ const sequence=useReadingSequence(opened?.book.documentFormat?null:opened?.book??null,readingList);
+ const nextVolume=useNextVolume(sequence.hasContext||opened?.book.documentFormat?null:opened?.book??null,reachedEnd);
+ const canSequenceNext=!!onNextBook&&sequence.hasContext&&!!sequence.next&&!sequence.busy;
+ const canTurnNext=!!count&&(paged?spreadIndex<spreads.length-1:!reachedEnd)||canSequenceNext;
+ const destination=sequence.hasContext?sequence.next:nextVolume.result?.next;
+ const transition=sequence.hasContext?sequence:nextVolume;
+ const thumbnailSource=useMemo(()=>opened&&!opened.book.documentFormat?createComicThumbnailSource({bookId,revision:opened.book.revision,read:(id,index,revision)=>api.readComicPage(id,index,revision),sizes:cache?.sizes}):undefined,[bookId,opened?.book.revision,opened?.book.documentFormat,cache]);
+ const switchVolume=()=>{if(!onNextBook||!opened||bookmarkBusy)return;setEndDismissed(false);void transition.advance(async()=>{if(cache?.peek(count-1))pendingProgress.current=count-1;return flush();},book=>onNextBook(book,{comicSettings:settings,fit,zoom,background}));};
+ const switchAction=useRef(switchVolume);switchAction.current=switchVolume;
+ const jump=useCallback((index:number)=>{setError('');const target=Math.max(0,Math.min(count-1,index));setPage(target);if(target<count-2)setEndSeen(false);if(!paged){desiredScroll.current=target;const top=offsets[target];if(viewportRef.current)viewportRef.current.scrollTop=top;anchor.current={index:target,offset:0};setViewport(v=>({...v,top}));}},[count,offsets,paged]);
  const turn=useCallback(async(delta:number)=>{
+   if(delta>0&&canSequenceNext&&reachedEnd){switchAction.current();return;}
    if(!paged){viewportRef.current?.scrollBy({top:delta*viewport.height*0.85,behavior:'smooth'});return;}
    if(!cache)return;const token=generation.current;
    try{await Promise.all([cache.load(page),cache.load(page+1)]);if(token!==generation.current)return;const current=comicSpreads(count,settings.layout==='DOUBLE',settings.widePageAlone,cache.sizes);const i=Math.max(0,current.findIndex(s=>s.includes(page)));jump(current[Math.max(0,Math.min(current.length-1,i+delta))][0]);}catch(e){if(token===generation.current)setError(errorMessage(e));}
- },[paged,viewport.height,cache,page,count,settings.layout,settings.widePageAlone,jump]);
+ },[canSequenceNext,reachedEnd,paged,viewport.height,cache,page,count,settings.layout,settings.widePageAlone,jump]);
  const toggleBookmark=useCallback(async()=>{if(bookmarkBusy||!cache?.peek(page))return;setBookmarkBusy(true);const token=generation.current;try{const result=await (bookmarks.includes(page)?api.removeComicBookmark(bookId,page,opened?.book.revision):api.addComicBookmark(bookId,page,opened?.book.revision));if(token===generation.current)setBookmarks(result);}catch(e){if(token===generation.current)setError(errorMessage(e));}finally{if(token===generation.current)setBookmarkBusy(false);}},[bookId,bookmarks,page,bookmarkBusy,cache]);
- const fullscreen=useCallback(async()=>{try{if(document.fullscreenElement)await document.exitFullscreen();else await rootRef.current?.requestFullscreen();}catch(e){setError(errorMessage(e));}},[]);
+ const fullscreen=useCallback(async()=>{try{if(document.fullscreenElement)await document.exitFullscreen();else await (rootRef.current?.closest<HTMLElement>(".reader-session")??rootRef.current)?.requestFullscreen();}catch(e){setError(errorMessage(e));}},[]);
  const exit=useCallback(async()=>{await flush();if(document.fullscreenElement)await document.exitFullscreen().catch(()=>undefined);onBack();},[flush,onBack]);
- useEffect(()=>{if(!opened||opened.book.documentFormat)return;onMenuActions?.({previous:()=>void turn(-1),next:()=>void turn(1),fullscreen:()=>void fullscreen(),bookmark:()=>void toggleBookmark(),canPrevious:!!count&&(!paged||page>0),canNext:!!count&&(!paged||spreadIndex<spreads.length-1),canBookmark:!bookmarkBusy&&!!cache?.peek(page)});},[opened,onMenuActions,turn,fullscreen,toggleBookmark,count,paged,page,spreadIndex,spreads.length,bookmarkBusy,cache,revision]);
+ useEffect(()=>{if(!opened||opened.book.documentFormat)return;onMenuActions?.({previous:()=>void turn(-1),next:()=>void turn(1),fullscreen:()=>void fullscreen(),bookmark:()=>void toggleBookmark(),canPrevious:!!count&&(!paged||page>0),canNext:canTurnNext,canBookmark:!bookmarkBusy&&!!cache?.peek(page)});},[opened,onMenuActions,turn,fullscreen,toggleBookmark,count,paged,page,spreadIndex,spreads.length,bookmarkBusy,cache,revision,canSequenceNext,canTurnNext]);
  useEffect(()=>()=>onMenuActions?.(null),[onMenuActions]);
  useEffect(()=>{const key=(event:KeyboardEvent)=>{
    if(opened?.book.documentFormat)return;
+   if(event.target instanceof HTMLElement&&event.target.closest('.reader-page-thumbnails')){if(event.key==='Escape'){event.preventDefault();event.stopImmediatePropagation();setOverview(false);}return;}
    if(event.target instanceof HTMLElement&&event.target.closest('[role=menu]'))return;
    if(event.target instanceof HTMLElement&&(event.target.isContentEditable||event.target.closest('input,textarea,select,[role=combobox],[role=listbox]')))return;
    if(event.altKey||event.ctrlKey||event.metaKey)return;
@@ -96,8 +120,8 @@ export function ComicReaderPage({bookId,initialPage,onBack,onProgress,onMenuActi
    if(event.key==='Home'||event.key==='End'){event.preventDefault();jump(event.key==='Home'?0:count-1);}
    else if(event.key.toLowerCase()==='f'){event.preventDefault();void fullscreen();}
    else if(event.key.toLowerCase()==='b'){event.preventDefault();void toggleBookmark();}
-   else if(event.key==='Escape'){event.preventDefault();event.stopImmediatePropagation();if(document.fullscreenElement)void document.exitFullscreen();else if(panel)setPanel(null);else void exit();}
- };window.addEventListener('keydown',key,true);return()=>window.removeEventListener('keydown',key,true);},[count,exit,fullscreen,jump,panel,settings.direction,toggleBookmark,turn,opened?.book.documentFormat]);
+   else if(event.key==='Escape'){event.preventDefault();event.stopImmediatePropagation();if(document.fullscreenElement)void document.exitFullscreen();else if(overview)setOverview(false);else if(panel)setPanel(null);else void exit();}
+ };window.addEventListener('keydown',key,true);return()=>window.removeEventListener('keydown',key,true);},[count,exit,fullscreen,jump,panel,settings.direction,toggleBookmark,turn,opened?.book.documentFormat,overview]);
  const touchStart=useRef<{x:number;y:number}|null>(null);
  const visual=paged&&settings.direction==='RTL'?[...shown].reverse():shown;
  const pageFrames=visual.map(index=>{
@@ -106,18 +130,20 @@ export function ComicReaderPage({bookId,initialPage,onBack,onProgress,onMenuActi
    return {index,width:size.width*scale,height:size.height*scale};
  });
  const settingSelect=(label:'comic.direction'|'comic.layout'|'comic.mode',field:'direction'|'layout'|'mode',options:[string,'comic.rtl'|'comic.ltr'|'comic.single'|'comic.double'|'comic.paged'|'comic.scroll'|'comic.webtoon'][])=> <label><span>{t(label)}</span><Select value={settings[field]} onChange={e=>{if(field==='mode')desiredScroll.current=page;setSettings(v=>({...v,[field]:e.target.value}));}}>{options.map(([value,key])=><option value={value} key={value}>{t(key)}</option>)}</Select></label>;
- if(opened?.book.documentFormat)return <DocumentReaderPage opened={opened} initialPage={initialPage} onBack={onBack} onProgress={onProgress} onMenuActions={onMenuActions}/>;
+ if(opened?.book.documentFormat)return <DocumentReaderPage opened={opened} initialPage={initialPage} onBack={onBack} onProgress={onProgress} onMenuActions={onMenuActions} preferences={preferences} readingList={readingList} onNextBook={onNextBook?(book,value)=>onNextBook(book,{...value,comicSettings:settings}):undefined}/>;
  return <ReaderShell className={`comic-reader controls-visible reader-bg-${background.toLowerCase()}`} title={opened?.book.displayName??t('comic.loading')} ref={rootRef}
- header={<ReaderHeader title={opened?.book.displayName??t('comic.loading')} onBack={()=>void exit()} onSettings={()=>setPanel(panel==='SETTINGS'?null:'SETTINGS')} settingsOpen={panel==='SETTINGS'} onFullscreen={()=>void fullscreen()}/>}
- footer={<ReaderFooter status={t('comic.progress',{page:count?page+1:0,count})} page={page} count={count} canPrevious={!!count&&page>0} canNext={!!count&&page<count-1} onPrevious={()=>void turn(-1)} onNext={()=>void turn(1)} onJump={jump} bookmarked={bookmarks.includes(page)} bookmarkDisabled={bookmarkBusy||!cache?.peek(page)} onBookmark={()=>void toggleBookmark()} bookmarks={bookmarks}/>}>
+ sidePanel={overview&&thumbnailSource&&<ReaderPageThumbnails identity={`${bookId}:${opened?.book.revision}`} count={count} currentPage={page} currentRange={paged?currentSpread:[page]} source={thumbnailSource} onJump={jump} onClose={()=>setOverview(false)} labels={{title:t('overview.title'),close:t('common.close'),page:n=>t('overview.page',{page:n}),loading:t('overview.loading'),failed:t('overview.failed'),retry:t('overview.retry'),current:t('overview.current')}}/>}
+ endPrompt={onNextBook&&destination&&(sequence.hasContext?!!sequence.error&&!endDismissed:endSeen&&!endDismissed)&&<ReaderEndPrompt title={destination.displayName} busy={transition.busy||bookmarkBusy} error={transition.error} onContinue={switchVolume} onDismiss={()=>setEndDismissed(true)}/>}
+ header={<ReaderHeader onOverview={opened&&!opened.book.documentFormat?()=>{setPanel(null);setOverview(value=>!value);}:undefined} overviewOpen={overview} title={opened?.book.displayName??t('comic.loading')} onBack={()=>void exit()} onSettings={()=>setPanel(panel==='SETTINGS'?null:'SETTINGS')} settingsOpen={panel==='SETTINGS'} onFullscreen={()=>void fullscreen()}/>}
+ footer={<ReaderFooter status={t('comic.progress',{page:count?page+1:0,count})} page={page} count={count} canPrevious={!!count&&page>0} canNext={canTurnNext} onPrevious={()=>void turn(-1)} onNext={()=>void turn(1)} onJump={jump} bookmarked={bookmarks.includes(page)} bookmarkDisabled={bookmarkBusy||!cache?.peek(page)} onBookmark={()=>void toggleBookmark()} bookmarks={bookmarks}/>}>
 
- <div className={`reader-viewport ${paged?'is-paged':'is-scroll'} fit-${fit.toLowerCase()}`} ref={viewportRef} tabIndex={0} onScroll={e=>{const top=e.currentTarget.scrollTop;anchor.current={index:atOffset(top),offset:top-offsets[atOffset(top)]};setViewport(v=>({...v,top}));if(!paged)setPage(atOffset(top+Math.min(120,viewport.height*0.25)));}} onTouchStart={e=>{const p=e.touches[0];touchStart.current={x:p.clientX,y:p.clientY};}} onTouchEnd={e=>{const start=touchStart.current;touchStart.current=null;if(!paged||!start)return;const p=e.changedTouches[0],dx=p.clientX-start.x,dy=p.clientY-start.y;if(Math.abs(dx)>60&&Math.abs(dx)>Math.abs(dy)*1.5)void turn((dx<0?1:-1)*(settings.direction==='RTL'?-1:1));}}>
+ <div className={`reader-viewport ${paged?'is-paged':'is-scroll'} fit-${fit.toLowerCase()}`} ref={viewportRef} tabIndex={0} onWheel={event=>{const v=event.currentTarget;if(event.deltaY>0&&canSequenceNext&&reachedEnd&&v.scrollTop>=v.scrollHeight-v.clientHeight-3)switchAction.current();}} onScroll={e=>{const top=e.currentTarget.scrollTop;anchor.current={index:atOffset(top),offset:top-offsets[atOffset(top)]};setViewport(v=>({...v,top}));if(!paged){setPage(atOffset(top+Math.min(120,viewport.height*0.25)));if(top+e.currentTarget.clientHeight<(offsets[count]??0)-100)setEndSeen(false);}}} onTouchStart={e=>{const p=e.touches[0];touchStart.current={x:p.clientX,y:p.clientY};}} onTouchEnd={e=>{const start=touchStart.current;touchStart.current=null;if(!paged||!start)return;const p=e.changedTouches[0],dx=p.clientX-start.x,dy=p.clientY-start.y;if(Math.abs(dx)>60&&Math.abs(dx)>Math.abs(dy)*1.5)void turn((dx<0?1:-1)*(settings.direction==='RTL'?-1:1));}}>
  {!opened&&!error&&<p className="reader-loading">{t('comic.loading')}</p>}
  {paged?<div className={`reader-spread spread-${visual.length}`} style={{width:Math.max(viewport.width,pageFrames.reduce((sum,frame)=>sum+frame.width,0)),height:Math.max(viewport.height,...pageFrames.map(frame=>frame.height))}}>{pageFrames.map(({index,width,height})=>{const entry=cache?.peek(index);return <figure key={index} style={{width,height}}>{entry?<img src={entry.url} alt={t('comic.progress',{page:index+1,count})} style={{width,height}}/>:<span>{t('comic.loading')}</span>}</figure>;})}</div>:<div className={`reader-scroll-pages ${settings.mode==='WEBTOON'?'is-webtoon':''}`} style={{height:offsets[count]??0,minWidth:fit==='NATIVE'?Math.max(viewport.width,...shown.map(i=>(cache?.sizes.get(i)?.width??0)*zoom)):viewport.width*zoom}}>{shown.map(index=>{const entry=cache?.peek(index);return <figure key={index} style={{top:offsets[index],height:offsets[index+1]-offsets[index]}}>{entry&&<img src={entry.url} alt={t('comic.progress',{page:index+1,count})} style={{height:'100%',width:fit==='NATIVE'?entry.width*zoom:undefined}}/>}</figure>;})}</div>}
  </div>
  {error&&<div className="reader-error" role="alert"><p>{error}</p><button className="button secondary" onClick={()=>{void flush();setRetry(v=>v+1);}} type="button">{t('comic.retry')}</button></div>}
 
- {panel&&<aside className="reader-panel" aria-label={t('comic.controls')}><div className="reader-panel-heading"><strong>{t('comic.controls')}</strong><button className="icon-button" aria-label={t('comic.close')} onClick={()=>setPanel(null)} type="button"><Icon name="close"/></button></div>
+ {panel&&<aside className="reader-panel" aria-label={t('comic.controls')}><div className="reader-panel-heading"><strong>{t('comic.controls')}</strong><button className="icon-button" aria-label={t('comic.close')} onClick={()=>setPanel(null)} type="button"><Icon name="close"/></button></div><PrivateNote target={{kind:'BOOK',id:bookId}}/><CoverButton target={{kind:'BOOK',id:bookId}}/>
  <>
  {settingSelect('comic.direction','direction',[['RTL','comic.rtl'],['LTR','comic.ltr']])}{settingSelect('comic.layout','layout',[['SINGLE','comic.single'],['DOUBLE','comic.double']])}{settingSelect('comic.mode','mode',[['PAGED','comic.paged'],['SCROLL','comic.scroll'],['WEBTOON','comic.webtoon']])}
  <label><span>{t('comic.fit')}</span><Select value={fit} onChange={e=>setFit(e.target.value as typeof fit)}><option value="PAGE">{t('comic.fitPage')}</option><option value="WIDTH">{t('comic.fitWidth')}</option><option value="NATIVE">{t('comic.native')}</option></Select></label>

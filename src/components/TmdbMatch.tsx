@@ -11,5 +11,5 @@ export function tmdbResult(movie:TmdbMovie,snapshot:string):MatchResult {
 }
 export function tmdbErrorKey(value:unknown) {
  const code=String(value instanceof M2ShelfError?value.causeValue:value).match(/TMDB_[A-Z_]+(?:\d+)?/)?.[0];
- return code==='TMDB_HTTP_401'||code==='TMDB_HTTP_403'?'tmdb.authError':code==='TMDB_HTTP_404'?'tmdb.missingError':code==='TMDB_HTTP_429'?'tmdb.rateError':code==='TMDB_TARGET_STALE'?'tmdb.staleError':'tmdb.error';
+ return code==='TMDB_REQUIRES_MOVIE_WORK'||code==='TMDB_REQUIRES_TV_SERIES'?'tmdb.scopeError':code==='TMDB_HTTP_401'||code==='TMDB_HTTP_403'?'tmdb.authError':code==='TMDB_HTTP_404'?'tmdb.missingError':code==='TMDB_HTTP_429'?'tmdb.rateError':code==='TMDB_TARGET_STALE'?'tmdb.staleError':'tmdb.error';
 }

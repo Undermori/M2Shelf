@@ -11,6 +11,31 @@ beforeEach(()=>{vi.resetAllMocks();mock.prefill.mockResolvedValue({originalName:
 afterEach(cleanup);
 function provider(value:string){fireEvent.click(screen.getByRole('combobox',{name:'数据来源'}));fireEvent.click(screen.getByRole('option',{name:value}));}
 describe('one typed provider matching modal',()=>{
+ it('offers TMDb on a real TV series and binds in the TV namespace without changing its Bangumi row',async()=>{
+  const series={...node,nodeType:'CONTAINER' as const,directVideoCount:0,totalVideoCount:63};
+  mock.search.mockResolvedValue({snapshot:'series-84',movies:[{mediaType:'TV',id:22,title:'The Series',originalTitle:'Series',releaseDate:'2015-01-01',overview:'',posterPath:null}]});
+  const changed=vi.fn();render(<I18nProvider><BangumiModal node={series} onClose={vi.fn()} onBound={vi.fn()} onStale={vi.fn()} onMetadataChanged={changed}/></I18nProvider>);
+  await screen.findByText('Movie (2020).mkv');provider('TMDb');
+  await waitFor(()=>expect((screen.getByRole('button',{name:'搜索'}) as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(screen.getByRole('button',{name:'搜索'}));await screen.findByText('The Series');
+  expect(mock.search).toHaveBeenCalledWith(84,'Movie',null,'zh-CN','TV');
+  fireEvent.click(screen.getByRole('button',{name:'选择'}));await waitFor(()=>expect(changed).toHaveBeenCalledOnce());
+  expect(mock.tmdbBind).toHaveBeenCalledWith(84,22,'zh-CN','series-84','TV');expect(mock.bind).not.toHaveBeenCalled();
+ });
+ it('allows explicit TV search for works whose indexed title is ambiguous',async()=>{
+  render(<I18nProvider><BangumiModal node={node} onClose={vi.fn()} onBound={vi.fn()} onStale={vi.fn()}/></I18nProvider>);
+  await screen.findByText('Movie (2020).mkv');provider('TMDb');
+  await waitFor(()=>expect((screen.getByRole('button',{name:'搜索'}) as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(screen.getByRole('combobox',{name:'TMDb 类型'}));fireEvent.click(screen.getByRole('option',{name:'剧集'}));
+  fireEvent.click(screen.getByRole('button',{name:'搜索'}));await waitFor(()=>expect(mock.search).toHaveBeenCalledWith(84,'Movie',null,'zh-CN','TV'));
+ });
+ it('opens an existing TMDb TV binding with its provider and type selected',async()=>{
+  const bound={...node,tmdbBinding:{active:true,coverCachePath:null,coverError:null,movie:{mediaType:'TV' as const,id:22,title:'The Series',originalTitle:'Series',releaseDate:null,overview:'',posterPath:null}}};
+  render(<I18nProvider><BangumiModal node={bound} onClose={vi.fn()} onBound={vi.fn()} onStale={vi.fn()}/></I18nProvider>);
+  await screen.findByRole('heading',{name:'从 TMDb 选择作品'});expect(screen.getByRole('combobox',{name:'TMDb 类型'}).textContent).toBe('剧集');
+  expect(mock.search).not.toHaveBeenCalled();expect(mock.bangumi).not.toHaveBeenCalled();
+ });
+
  it('keeps title choices but never exposes legacy diagnostic fields in either provider',async()=>{
   mock.prefill.mockResolvedValue({originalName:node.folderName,extractedName:'Movie',candidates:[],structured:{display_title:'Movie',subtype:'Movie',year:2020,season:null,volume:null,chapter:null,edition:[],release_tags:[],source_evidence:[],warnings:[]},lastMatch:{provider:'TMDB',outcome:'multiple-candidates'}});
   render(<I18nProvider><BangumiModal node={node} onClose={vi.fn()} onBound={vi.fn()} onStale={vi.fn()}/></I18nProvider>);
@@ -25,7 +50,7 @@ describe('one typed provider matching modal',()=>{
   render(<I18nProvider><BangumiModal node={node} onClose={vi.fn()} onBound={vi.fn()} onStale={vi.fn()}/></I18nProvider>);
   await screen.findByText('Movie (2020).mkv');provider('TMDb');await waitFor(()=>expect((screen.getByRole('button',{name:'搜索'}) as HTMLButtonElement).disabled).toBe(false));
   fireEvent.change(screen.getByRole('textbox'),{target:{value:'My exact edited title 2046'}});fireEvent.click(screen.getByRole('button',{name:'搜索'}));
-  await waitFor(()=>expect(mock.search).toHaveBeenCalledWith(84,'My exact edited title 2046',null,'zh-CN'));expect(mock.bangumi).not.toHaveBeenCalled();
+  await waitFor(()=>expect(mock.search).toHaveBeenCalledWith(84,'My exact edited title 2046',null,'zh-CN',undefined));expect(mock.bangumi).not.toHaveBeenCalled();
  });
  it('preserves the original Bangumi subject object on direct selection',async()=>{
   const bound=vi.fn(),close=vi.fn();render(<I18nProvider><BangumiModal node={node} onClose={close} onBound={bound} onStale={vi.fn()}/></I18nProvider>);

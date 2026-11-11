@@ -29,3 +29,12 @@ describe('shared matching result operations',()=>{
   fireEvent.click(screen.getByRole('button',{name:'选择'}));expect(choose).toHaveBeenCalledExactlyOnceWith(result);expect(screen.getByText(/TMDb #7/)).toBeTruthy();
  });
 });
+
+it('does not mark a same-number TV result as the existing movie binding',()=>{
+ const movie={mediaType:'TV' as const,id:7,title:'TV show',originalTitle:'TV show',releaseDate:null,overview:'',posterPath:null};
+ const result:MatchResult={provider:'TMDB',id:7,title:movie.title,originalTitle:movie.originalTitle,date:null,poster:null,snapshot:'tv-snapshot',movie};
+ const view=render(<I18nProvider><MatchingResults results={[result]} loading={false} searched error={false} bindingId={null} currentBindingId={7} currentTmdbType="MOVIE" provider="TMDB" onChoose={vi.fn()}/></I18nProvider>);
+ expect(document.querySelector('.is-bound')).toBeNull();
+ view.rerender(<I18nProvider><MatchingResults results={[result]} loading={false} searched error={false} bindingId={null} currentBindingId={7} currentTmdbType="TV" provider="TMDB" onChoose={vi.fn()}/></I18nProvider>);
+ expect(document.querySelector('.is-bound')?.getAttribute('aria-current')).toBe('true');
+});

@@ -224,6 +224,8 @@ impl LibraryRecognitionMode {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LibraryRoot {
+    #[serde(default)]
+    pub hidden_from_all: bool,
     pub book_organization_strategy: String,
     pub auto_bangumi: bool,
     pub media_kind: LibraryMediaKind,
@@ -243,6 +245,8 @@ pub struct LibraryRoot {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ScanHealth {
+    #[serde(default)]
+    pub changes: Option<crate::scan_changes::ScanChanges>,
     #[serde(default)]
     pub warnings_ignored: bool,
     pub last_auto_attempt_at: Option<String>,
@@ -315,6 +319,9 @@ pub struct BatchMutationResult {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MediaNode {
+    /// Read-only collection projection; never persisted or used as a mutation identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub card_progress: Option<crate::card_progress::Summary>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tmdb_binding: Option<crate::tmdb::Binding>,
     #[serde(default)]
@@ -336,6 +343,8 @@ pub struct MediaNode {
     pub absolute_path: String,
     pub folder_name: String,
     pub display_name: String,
+    #[serde(default)]
+    pub manual_display_name: bool,
     pub node_type: NodeType,
     pub manual_type_override: bool,
     pub cover_source: CoverSource,
@@ -517,6 +526,7 @@ pub struct RecentlyWatchedEntry {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NodeDetail {
+    pub video_sections: Vec<crate::video_presentation::VideoSectionEntry>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub comic_books: Option<Vec<crate::comics::ComicBook>>,
     pub node: MediaNode,
@@ -551,6 +561,7 @@ pub enum SearchHitKind {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchHit {
+    pub note_excerpt: Option<String>,
     pub comic_book: Option<crate::comics::ComicBook>,
     pub kind: SearchHitKind,
     pub node: MediaNode,

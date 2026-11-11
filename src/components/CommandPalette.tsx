@@ -1,0 +1,16 @@
+import {useEffect,useRef,useState} from 'react';
+import {api} from '../lib/api';
+import {nodeDisplayTitle} from '../lib/format';
+import {useI18n} from '../lib/i18n';
+import type {SearchHit} from '../types/media';
+import {FeatureModal} from './FeatureModal';
+export interface QuickAction {id:string;label:string;run:()=>void}
+export function CommandPalette({enabled,actions,onHit}:{enabled:boolean;actions:QuickAction[];onHit:(hit:SearchHit)=>void}){
+ const{t}=useI18n();const[open,setOpen]=useState(false),[query,setQuery]=useState(''),[hits,setHits]=useState<SearchHit[]>([]),[index,setIndex]=useState(0),[busy,setBusy]=useState(false);const request=useRef(0);
+ useEffect(()=>{const key=(e:KeyboardEvent)=>{if(!enabled||e.defaultPrevented||e.isComposing||!(e.ctrlKey&&!e.altKey&&!e.metaKey&&e.key.toLowerCase()==='k')||document.querySelector('[aria-modal="true"]')||e.target instanceof HTMLElement&&e.target.closest('input,textarea,[contenteditable=true]'))return;e.preventDefault();setQuery('');setHits([]);setIndex(0);setOpen(true);};window.addEventListener('keydown',key);return()=>window.removeEventListener('keydown',key);},[enabled]);
+ useEffect(()=>{const generation=++request.current;setHits([]);setIndex(0);setBusy(false);if(!open||!query.trim())return;const timer=setTimeout(()=>{setBusy(true);void api.search(query.trim().slice(0,200)).then(rows=>{if(request.current===generation){const seen=new Set<string>();setHits(rows.filter(h=>{const k=h.comicBook?`BOOK:${h.comicBook.id}`:`NODE:${h.node.id}`;if(seen.has(k))return false;seen.add(k);return true;}).slice(0,12));}}).catch(()=>{if(request.current===generation)setHits([]);}).finally(()=>{if(request.current===generation)setBusy(false);});},220);return()=>{clearTimeout(timer);request.current++;};},[query,open]);
+ if(!open||!enabled)return null;
+ const entries=[...actions.filter(a=>!query||a.label.toLocaleLowerCase().includes(query.toLocaleLowerCase())).slice(0,10).map(a=>({key:a.id,label:a.label,run:a.run})),...hits.map(h=>({key:`hit:${h.kind}:${h.comicBook?.id??h.node.id}`,label:h.comicBook?.displayName??nodeDisplayTitle(h.node),run:()=>onHit(h)}))];
+ const execute=(i:number)=>{const action=entries[i];if(action){setOpen(false);request.current++;action.run();}};
+ return <FeatureModal title={t('palette.title')} onClose={()=>setOpen(false)} className="command-palette"><input autoFocus aria-label={t('palette.placeholder')} placeholder={t('palette.placeholder')} value={query} maxLength={200} onChange={e=>setQuery(e.target.value)} role="combobox" aria-expanded="true" aria-controls="quick-results" aria-activedescendant={entries[index]?`quick-${index}`:undefined} onKeyDown={e=>{if(e.nativeEvent.isComposing)return;if(['ArrowDown','ArrowUp','Enter'].includes(e.key)){e.preventDefault();if(e.key==='Enter')execute(index);else setIndex(v=>(v+(e.key==='ArrowDown'?1:-1)+Math.max(entries.length,1))%Math.max(entries.length,1));}}}/><div id="quick-results" role="listbox">{entries.map((a,i)=><button id={`quick-${i}`} role="option" aria-selected={index===i} className={index===i?'is-selected':''} key={a.key} type="button" tabIndex={-1} onPointerMove={()=>setIndex(i)} onClick={()=>execute(i)}>{a.label}</button>)}{!entries.length&&<p role="status">{t(busy?'comic.loading':'palette.empty')}</p>}</div></FeatureModal>;
+}

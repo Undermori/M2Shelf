@@ -28,10 +28,11 @@ function Poster({id}: {id: number}) {
 beforeEach(() => {Observer.instances = []; vi.stubGlobal('IntersectionObserver', Observer);});
 afterEach(() => {cleanup(); vi.unstubAllGlobals();});
 
-it('batches a large poster grid in two observers rooted in its actual scroll container', () => {
+it('shares visibility, preheat and retention observers across a large grid in its real scroll container', () => {
   const {container, unmount} = render(<div className="content-scroll">{Array.from({length: 180}, (_, id) => <Poster key={id} id={id}/>)}</div>);
-  expect(Observer.instances).toHaveLength(2);
-  const [activation, retention] = Observer.instances;
+  expect(Observer.instances).toHaveLength(3);
+  const [visible, activation, retention] = Observer.instances;
+  expect(visible.options).toEqual({root:container.firstChild,rootMargin:'0px 0px'});
   expect(activation.options).toEqual({root: container.firstChild, rootMargin: '1000px 0px'});
   expect(retention.options.rootMargin).toBe('1800px 0px');
   expect(activation.targets.size).toBe(180);
@@ -41,14 +42,18 @@ it('batches a large poster grid in two observers rooted in its actual scroll con
   unmount();
   expect(activation.disconnect).toHaveBeenCalledOnce();
   expect(retention.disconnect).toHaveBeenCalledOnce();
+  expect(visible.disconnect).toHaveBeenCalledOnce();
   // A queued native delivery after unmount must have no live subscribers.
   act(() => activation.deliver([...activation.targets], true));
 });
 
 it('keeps nearby posters during soft overage and evicts only an offscreen poster, then reactivates it', () => {
   render(<div className="content-scroll">{Array.from({length: 65}, (_, id) => <Poster key={id} id={id}/>)}</div>);
-  const [activation, retention] = Observer.instances;
+  const [,activation, retention] = Observer.instances;
   act(() => activation.deliver([...activation.targets], true));
+  act(() => retention.deliver([...retention.targets], true));
+  expect(screen.getByTestId('poster-0').getAttribute('data-active')).toBe('true');
+  act(() => activation.deliver([screen.getByTestId('poster-0')], false));
   expect(screen.getByTestId('poster-0').getAttribute('data-active')).toBe('true');
   act(() => retention.deliver([screen.getByTestId('poster-0')], false));
   expect(screen.getByTestId('poster-0').getAttribute('data-active')).toBe('false');

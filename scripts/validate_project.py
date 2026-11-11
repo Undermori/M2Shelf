@@ -124,6 +124,15 @@ def check_migrations() -> None:
         "0025_smart_mixed.sql",
         "0026_text_reader_positions.sql",
         "0027_scraper_metadata.sql",
+        "0028_manual_display_name.sql",
+        "0029_scan_changes.sql",
+        "0030_organize_issues.sql",
+        "0031_recent_activity.sql",
+        "0032_collection_states.sql",
+        "0033_private_notes.sql",
+        "0034_episode_watch.sql",
+        "0035_library_all_resources_visibility.sql",
+        "0036_tmdb_tv_series_scope.sql",
     ]
     if [path.name for path in migration_paths] != expected:
         fail(f"expected exactly migrations {expected}, got {[p.name for p in migration_paths]}")
@@ -173,6 +182,7 @@ def check_migrations() -> None:
                     "parent_node_id",
                     "node_type",
                     "manual_type_override",
+                    "manual_display_name",
                     "cover_source",
                     "cover_cache_path",
                     "direct_video_count",
@@ -675,6 +685,9 @@ def check_source_safety() -> None:
         # Rust-owned, path-bound request.  The structural checks below keep these two
         # exceptions from becoming a general source-media mutation escape hatch.
         "portable_update.rs",
+        # User-requested collection export and restart restore. Plain application-owned
+        # staging paths, library exclusion and transactional rollback are checked below.
+        "collection_backup.rs",
     }
     for name, source in production.items():
         hits = destructive.findall(source)
@@ -682,6 +695,15 @@ def check_source_safety() -> None:
             continue
         if name not in filesystem_mutation_modules:
             fail(f"filesystem mutation outside app cache/bootstrap modules: {name}: {hits}")
+
+    backup_source = production.get("collection_backup.rs", "")
+    if not all(token in backup_source for token in (
+        "fn plain(", "fn outside(", "BACKUP_UNSAFE_PATH", "fn validate_stage(",
+        "rusqlite::backup::Backup::new", "PRAGMA foreign_key_check", "PRAGMA integrity_check(1)",
+        "fn preserve_local(", 'journal.phase = "Committing"', 'journal.phase = "Completed"',
+        "rollback_hash", "GetDiskFreeSpaceExW", "MOVEFILE_WRITE_THROUGH",
+    )) or "remove_dir_all" in strip_rust_tests(backup_source):
+        fail("collection backup lacks bounded staging, media exclusion or rollback guards")
 
     cache_source = production.get("cache.rs", "")
     if "remove_file" in cache_source:
@@ -2316,7 +2338,6 @@ def check_ui_windows_interaction_contract() -> None:
         for token in (
             "const rootsLoadGeneration = useRef(0)",
             "const allResourcesLoadGeneration = useRef(0)",
-            "const recentlyWatchedLoadGeneration = useRef(0)",
             "const favoriteFoldersLoadGeneration = useRef(0)",
             "const favoriteNodesLoadGeneration = useRef(0)",
             "const currentRefreshGeneration = useRef(0)",
@@ -2325,7 +2346,6 @@ def check_ui_windows_interaction_contract() -> None:
             "state.pending.delete(request.token)",
             "const invalidateFavoritesLoads = useCallback",
             "requestGeneration === allResourcesLoadGeneration.current",
-            "requestGeneration === recentlyWatchedLoadGeneration.current",
             "requestGeneration === favoriteFoldersLoadGeneration.current",
             "requestGeneration === favoriteNodesLoadGeneration.current",
             "const isCurrentRefresh = () =>",
@@ -2333,6 +2353,14 @@ def check_ui_windows_interaction_contract() -> None:
             'page === "all" ? Promise.resolve(null) : loadAllResources()',
         )
     )
+    recent_store = read("src/lib/recentActivity.ts")
+    loader_ordering_ok = loader_ordering_ok and all(token in recent_store for token in (
+        "private epoch=0", "epoch===this.epoch", "this.flight?.epoch===this.epoch",
+        "while(!this.state.fresh||this.state.entries===null)", "refresh=()=>{this.invalidate();return this.load();}",
+    )) and all(token in app for token in (
+        "!mainWindowShown", "recentActivity.ensureFresh().then(commit)",
+        "requestGeneration !== navigationGeneration.current", "recentActivity.invalidate()",
+    ))
     duplicate_all_refresh_absent = all(
         fragment not in app
         for fragment in (
@@ -2360,7 +2388,7 @@ def check_ui_windows_interaction_contract() -> None:
             "api.listFavoriteFolderNodes(selectedFavoriteFolderId)" in app,
             "validSearchRootId" in app,
             'liveNavigation.page === "search" && liveNavigation.searchRootId === root.id' in app,
-            "[initialQuery, rootId]" in search_page,
+            "[initialQuery, rootId, filtersKey]" in search_page,
             "searchRequest" in search_page,
             "withoutRemovedRoot" in app,
             "withoutRemovedFavoriteFolder" in app,
@@ -2551,8 +2579,8 @@ def check_ui_windows_interaction_contract() -> None:
             "memo(MediaCardComponent)" in media_card,
             "clientCoverRevision" in frontend_models,
             "clientCoverRevision" in cover_hook,
-            "subjectId" in cover_hook,
-            "coverPath" in cover_hook,
+            "providerSubjectId" in cover_hook,
+            "coverCachePath" in cover_hook,
         )
     )
     if not bound_title_sort_and_local_patch_ok:
@@ -2566,76 +2594,71 @@ def check_ui_windows_interaction_contract() -> None:
     cover_context_region = rust_database[
         rust_database.find("pub fn cover_read_context") : rust_database.find("pub(crate) fn poster_node_count")
     ]
-    startup_cover_loading_ok = all(
-        (
-            "cover_read_context" in cover_command_region,
-            "get_node" not in cover_command_region,
-            "list_roots" not in cover_command_region,
-            "pub fn cover_read_context" in rust_database,
-            "SELECT CASE WHEN n.cover_source='MANUAL' THEN n.cover_cache_path" in cover_context_region,
-            "SELECT t.cover_cache_path FROM tmdb_movie_bindings t WHERE t.node_id=n.id AND t.active=1" in cover_context_region,
-            "END FROM nodes n WHERE n.id=?1" in cover_context_region,
-            "SELECT path FROM library_roots" in cover_context_region,
-            "get_node(" not in cover_context_region,
-            "list_roots(" not in cover_context_region,
-            "MAX_CONCURRENT_COVER_REQUESTS = 4" in cover_hook,
-            "MAX_RESOLVED_COVER_ENTRIES = 128" in cover_hook,
-            "MAX_RESOLVED_COVER_CHARACTERS = 32 * 1024 * 1024" in cover_hook,
-            "inFlightCoverRequests" in cover_hook,
-            "resolvedCoverUrls" in cover_hook,
-            "rememberResolvedCover" in cover_hook,
-            "coverRequests.size > 600" not in cover_hook,
-            "scheduleCoverRequest" in cover_hook,
-            "Route changes must not cancel work" in cover_hook,
-            "warms the cross-page LRU" in cover_hook,
-            "resolvedCoverEvictionListeners" in cover_hook,
-            "subscribeResolvedCoverEviction" in cover_hook,
-            "notifyResolvedCoverEvicted" in cover_hook,
-            "resolvedCoverEvictionListeners.delete(key)" in cover_hook,
-            "resolvedCoverEvictionListeners.get(key) === listeners" in cover_hook,
-            "latestCoverKeyByNode" in cover_hook,
-            'if (latestCoverKeyByNode.get(`${nodeId}:${width}`) === key) rememberResolvedCover(key, url)' in cover_hook,
-            "spawn_blocking" in cover_command_region,
-            "poster_cache::cover_data_url" in cover_command_region,
-            "usePosterThumbnailSize" in cover_hook,
-            "[256, 384, 512, 768]" in read("src/hooks/usePosterThumbnailSize.ts"),
-            "MAX_DISK_BYTES" in read("src-tauri/src/poster_cache.rs"),
-            "FilterType::Lanczos3" in read("src-tauri/src/poster_cache.rs"),
-            "M2THUMB1" in read("src-tauri/src/poster_cache.rs"),
-            "read_book_cover" in read("src-tauri/src/poster_cache.rs"),
-            "schedule_warmup" in rust_commands,
-            "resolvedCoverUrls.get(cacheKey)" in cover_hook,
-            "useLayoutEffect(() =>" in cover_hook,
-            "if (enabled || !hasCachedCover || !cacheKey) return" in cover_hook,
-            "evictedCacheKey !== cacheKey" in cover_hook,
-            "cancelIfQueued" not in cover_hook,
-            "subscribers" not in cover_hook,
-            "usePosterViewportLifecycle" in media_card,
-            "IntersectionObserver" in poster_viewport_hook,
-            'target.closest(".content-scroll")' in poster_viewport_hook,
-            "MAX_RETAINED_POSTERS = 64" in poster_viewport_hook,
-            "retainedPosters = new Map" in poster_viewport_hook,
-            "trimRetainedPosters" in poster_viewport_hook,
-            "!entry[1].nearViewport" in poster_viewport_hook,
-            "activationMarginPx: 1_000" in media_card,
-            "retentionEnabled: hasCachedCover" in media_card,
-            "retentionMarginPx: 1_800" in media_card,
-            "updateRetainedPosterProximity" in poster_viewport_hook,
-            'decoding="async"' in poster_image,
-            'loading="eager"' in poster_image,
-            "<canvas" not in poster_image,
-            "createImageBitmap" not in poster_image,
-            'loading="lazy"' not in media_card,
-            "observePosterViewport" in poster_viewport_hook,
-            "new IntersectionObserver" in read("src/lib/posterViewportObserver.ts"),
-            "observerRoots" in read("src/lib/posterViewportObserver.ts"),
-            "!enabled || state.key !== cacheKey || state.loading" in cover_hook,
-        )
-    )
+    poster_resource = read("src-tauri/src/poster_resource.rs")
+    poster_urls = read("src/lib/posterResource.ts")
+    startup_cover_loading_ok = all((
+        "pub fn cover_read_context" in rust_database,
+        "SELECT path FROM library_roots" in cover_context_region,
+        "get_node(" not in cover_context_region,
+        "list_roots(" not in cover_context_region,
+        'register_asynchronous_uri_scheme_protocol("m2poster"' in poster_resource,
+        'context.webview_label() != "main"' in poster_resource,
+        'spawn_blocking' in poster_resource,
+        'Cache-Control' in poster_resource and 'immutable' in poster_resource and 'no-store' in poster_resource,
+        'X-Content-Type-Options' in poster_resource,
+        'poster_cache::WIDTHS.contains' in poster_resource,
+        'cache::is_equal_or_within_checked' in poster_resource,
+        'original(database' in poster_resource,
+        'posterResourceUrl' in cover_hook,
+        'getCoverDataUrl' not in cover_hook,
+        'resolvedCoverUrls' not in cover_hook,
+        'scheduleCoverRequest' not in cover_hook,
+        'preparePosterImage' not in cover_hook,
+        'http://m2poster.localhost' in poster_urls,
+        'crypto.randomUUID()' in poster_urls,
+        'invalidatePosterResources' in poster_urls,
+        'usePosterThumbnailSize' in cover_hook,
+        '[256, 384, 512, 768]' in read("src/hooks/usePosterThumbnailSize.ts"),
+        'MAX_DISK_BYTES' in read("src-tauri/src/poster_cache.rs"),
+        'FilterType::Lanczos3' in read("src-tauri/src/poster_cache.rs"),
+        'M2THUMB1' in read("src-tauri/src/poster_cache.rs"),
+        'read_book_cover' in read("src-tauri/src/poster_cache.rs"),
+        'schedule_warmup' in rust_commands,
+        'usePosterViewportLifecycle' in media_card,
+        'target.closest(".content-scroll")' in poster_viewport_hook,
+        'decoding="sync"' in poster_image,
+        'loading="lazy"' in poster_image,
+        'MAX_ENCODED_BYTES: usize = 32 * 1024 * 1024' in poster_resource,
+        'MAX_RESOURCE_ENTRIES: usize = 4096' in poster_resource,
+        'RESOURCE_EPOCH' in poster_resource,
+        'PreparedPosterReader::new' in poster_resource,
+        '<canvas' not in poster_image,
+        'createImageBitmap' not in poster_image,
+    ))
     if not startup_cover_loading_ok:
-        fail("startup cover loading can regress to eager full-Node/root-stat IPC or deferred-cover failure state")
+        fail("posters must use restricted binary resources with stable browser URLs and existing bounded thumbnail/source safety")
     else:
-        passed("cross-page poster preview cache, bounded lazy cover IPC, and lightweight safety context")
+        passed("restricted binary poster resources, native bounded reuse and browser image scheduling")
+
+    card_store = read("src/lib/cardProgress.ts")
+    card_projection = read("src-tauri/src/card_progress.rs")
+    inline_card_progress_ok = all((
+        "pub card_progress: Option<crate::card_progress::Summary>" in rust_models,
+        re.search(r"Hydrator::new\(connection,\s*Some\(index\)\)", rust_database) is not None,
+        "progress_counts_for_nodes_conn" in read("src-tauri/src/comics.rs"),
+        "progress_detail_for_node_conn" in card_projection,
+        "populate_owned_video_files(index, &mut detail, &sources)" in read("src-tauri/src/works.rs"),
+        "seedCardProgressResponse(result,progressSnapshot)" in read("src/lib/api.ts"),
+        "beginSnapshot" in card_store and "commitSnapshot" in card_store,
+        "initialGeneration<this.generation" in card_store,
+        "node.cardProgress" in card_store,
+        "this.active.get(key)?.value" in card_store,
+        "requests.len() > 16" in card_projection,
+    ))
+    if inline_card_progress_ok:
+        passed("card status is hydrated before first paint, with bounded legacy refresh and stale-response fencing")
+    else:
+        fail("card status must accompany collection snapshots rather than appear after a post-mount queue")
 
     scan_listener_region = app[
         app.find("const handleScanProgress") : app.find("const selectRoot")
@@ -3171,10 +3194,15 @@ def check_ui_windows_interaction_contract() -> None:
             "createImageBitmap" not in poster_image,
             "ResizeObserver" not in poster_image,
             "addEventListener" not in poster_image,
-            'decoding="async"' in poster_image,
-            'loading="eager"' in poster_image,
+            'decoding="sync"' in poster_image,
+            'loading="lazy"' in poster_image,
             'visibility: ready ? "visible" : "hidden"' in poster_image,
-            'key={cacheKey}' in poster_image,
+            'key={src}' not in poster_image,
+            'useLayoutEffect' in poster_image,
+            'preparedPosterGeometry' in poster_image,
+            'posterResourceUrl' in read("src/hooks/useCoverDataUrl.ts"),
+            'prepared.size>128' in read("src/lib/poster.ts"),
+            'preparePosterImage' not in read("src/lib/poster.ts"),
             'FilterType::Lanczos3' in read("src-tauri/src/poster_cache.rs"),
             'WIDTHS: [u32; 4] = [256, 384, 512, 768]' in read("src-tauri/src/poster_cache.rs"),
             'M2THUMB1' in read("src-tauri/src/poster_cache.rs"),

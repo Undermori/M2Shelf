@@ -606,7 +606,7 @@ fn windows_verbatim_unc_and_literal_unicode_paths_are_lexically_scoped() {
 }
 #[test]
 fn missing_or_future_schema_fails_closed() {
-    for version in [0, if cfg!(feature = "production") { 27 } else { 25 }] {
+    for version in [0, if cfg!(feature = "production") { 36 } else { 25 }] {
         let (f, p) = factory("schema", LibraryKind::Comic, "FOLDER");
         if version == 0 {
             f.connection

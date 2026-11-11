@@ -83,18 +83,161 @@ fn digest(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
 
+// Additive PDF.js input only. Keys, atomic files, tier generation and quotas stay shared.
+pub(crate) fn pdf_source_key(database: &Database, id: i64, revision: &str) -> AppResult<String> {
+    let name = comic_reader::cover_identity(database, id, revision)?.ok_or("COMIC_NO_PAGES")?;
+    Ok(digest(
+        format!(
+            "{VERSION}:{}:{id}:{revision}:{name}",
+            database.path().to_string_lossy()
+        )
+        .as_bytes(),
+    ))
+}
+pub(crate) fn pdf_tiers_ready(
+    database: &Database,
+    cache_root: &Path,
+    key: &str,
+) -> AppResult<bool> {
+    let directory = directory(database, cache_root)?;
+    Ok(WIDTHS
+        .iter()
+        .all(|width| read_thumbnail(&path_for(&directory, key, *width), *width).is_some()))
+}
+
+pub(crate) fn accept_pdf_raster(
+    database: &Database,
+    cache_root: &Path,
+    key: &str,
+    bytes: &[u8],
+    epoch: u64,
+) -> AppResult<()> {
+    let operation = cache::begin_cover_cache_operation();
+    if crate::pdf_cover::epoch() != epoch {
+        return Err("PDF_COVER_EXPIRED".into());
+    }
+    let _generation = GENERATION.lock().unwrap_or_else(|p| p.into_inner());
+    if crate::pdf_cover::epoch() != epoch {
+        return Err("PDF_COVER_EXPIRED".into());
+    }
+    let directory = directory(database, cache_root)?;
+    // A fallback must not evict other ready artwork merely to prepare its four tiers.
+    let mut budget = DiskBudget::read(&directory)?;
+    if !generate_limited(
+        &operation,
+        &directory,
+        key,
+        bytes,
+        &WIDTHS,
+        Some(&mut budget),
+    )? {
+        return Err("PDF_COVER_DEFERRED".into());
+    }
+    Ok(())
+}
+
+/// Search observes only application cache files. Never decodes books or prepares derivatives.
+pub(crate) fn populate_known_covers(
+    database: &Database,
+    c: &rusqlite::Connection,
+    cache_root: &Path,
+) -> AppResult<()> {
+    use rusqlite::params;
+    let roots = database.library_paths()?;
+    let mut s=c.prepare("SELECT n.id,CASE WHEN n.cover_source='MANUAL' THEN n.cover_cache_path ELSE COALESCE(t.cover_cache_path,n.cover_cache_path) END FROM nodes n LEFT JOIN metadata_bindings b ON b.node_id=n.id LEFT JOIN tmdb_movie_bindings t ON t.node_id=n.id AND t.active=1 WHERE n.node_type<>'IGNORED'").map_err(|e|e.to_string())?;
+    let rows = s
+        .query_map([], |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, Option<String>>(1)?))
+        })
+        .map_err(|e| e.to_string())?;
+    for row in rows {
+        let (id, path) = row.map_err(|e| e.to_string())?;
+        let Some(path) = path else {
+            continue;
+        };
+        let path = PathBuf::from(path);
+        if roots
+            .iter()
+            .any(|root| cache::is_equal_or_within(&path, root))
+        {
+            continue;
+        }
+        if cache::read_cover_payload(&path).is_ok() {
+            c.execute("INSERT INTO search_available_covers VALUES(?1,0)", [id])
+                .map_err(|e| e.to_string())?;
+        }
+    }
+    let mut manual=c.prepare("SELECT b.node_id,m.book_id,m.cover_cache_path FROM book_manual_covers m JOIN comic_books b ON b.id=m.book_id").map_err(|e|e.to_string())?;
+    for row in manual
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, i64>(1)?,
+                r.get::<_, String>(2)?,
+            ))
+        })
+        .map_err(|e| e.to_string())?
+    {
+        let (node, book, path) = row.map_err(|e| e.to_string())?;
+        let p = Path::new(&path);
+        if !roots.iter().any(|root| cache::is_equal_or_within(p, root))
+            && cache::read_cover_payload(p).is_ok()
+        {
+            c.execute(
+                "INSERT INTO search_available_covers VALUES(?1,?2)",
+                params![node, book],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+    }
+    // Inspect the same checked v2 derivative files from previous successful local reads.
+    if cache::validate_cache_location(cache_root, roots).is_err() {
+        return Ok(());
+    }
+    let directory = cache_root.join("posters");
+    if plain_directory(&directory).is_err() {
+        return Ok(());
+    }
+    let mut s=c.prepare("SELECT b.node_id,b.id,b.revision,p.page_name FROM comic_books b JOIN comic_pages p ON p.comic_book_id=b.id AND p.page_index=0 WHERE b.index_error IS NULL").map_err(|e|e.to_string())?;
+    let rows = s
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, i64>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, String>(3)?,
+            ))
+        })
+        .map_err(|e| e.to_string())?;
+    for row in rows {
+        let (node, id, revision, name) = row.map_err(|e| e.to_string())?;
+        let key = digest(
+            format!(
+                "{VERSION}:{}:{id}:{revision}:{name}",
+                database.path().to_string_lossy()
+            )
+            .as_bytes(),
+        );
+        if WIDTHS
+            .iter()
+            .any(|w| read_thumbnail(&path_for(&directory, &key, *w), *w).is_some())
+        {
+            c.execute(
+                "INSERT INTO search_available_covers VALUES(?1,?2)",
+                params![node, id],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
+}
+
 impl Source {
     fn read(&self, database: &Database) -> AppResult<Option<Vec<u8>>> {
         match self {
             Self::Cached(path) => cache::read_cover_payload(path).map(Some),
             Self::Page(id, revision) => comic_reader::read_book_cover(database, *id, revision),
         }
-    }
-    fn data_url(&self, bytes: &[u8]) -> String {
-        let mime = image::guess_format(bytes)
-            .map(|format| format.to_mime_type())
-            .unwrap_or("image/jpeg");
-        format!("data:{mime};base64,{}", STANDARD.encode(bytes))
     }
 }
 
@@ -419,19 +562,214 @@ fn owned_files(directory: &Path) -> AppResult<Vec<(PathBuf, u64, SystemTime)>> {
     Ok(files)
 }
 
-/// Fast hits read only a small disk derivative. A missing/corrupt derivative rebuilds once under
-/// the shared generation gate; failures retain the validated original preview.
+/// Validated raster response shared by legacy data IPC and the native image resource protocol.
+pub(crate) struct PosterPayload {
+    pub bytes: Vec<u8>,
+    pub mime: &'static str,
+    pub prepared: Option<PreparedPosterFile>,
+}
+
+/// A read-only lease for one already validated app-owned derivative, never a media path.
+#[derive(Clone)]
+pub(crate) struct PreparedPosterFile {
+    root: PathBuf,
+    canonical_root: PathBuf,
+    path: PathBuf,
+    width: u32,
+}
+impl PreparedPosterFile {
+    pub(crate) fn read(&self) -> Option<PosterPayload> {
+        plain_directory(&self.root).ok()?;
+        if self.root.canonicalize().ok()? != self.canonical_root {
+            return None;
+        }
+        plain_directory(self.path.parent()?).ok()?;
+        if !cache::is_equal_or_within_checked(&self.path, &self.canonical_root).ok()? {
+            return None;
+        }
+        let mut payload = PosterPayload::new(read_thumbnail(&self.path, self.width)?).ok()?;
+        payload.prepared = Some(self.clone());
+        Some(payload)
+    }
+}
+
+/// One bounded transport worker reuses its SQLite connection and validated cache scope.
+/// This only locates existing derivatives; a miss still uses the normal generation path.
+pub(crate) struct PreparedPosterReader {
+    connection: rusqlite::Connection,
+    root: PathBuf,
+    canonical_root: PathBuf,
+    directory: PathBuf,
+    libraries: Vec<PathBuf>,
+    database_path: PathBuf,
+}
+impl PreparedPosterReader {
+    pub(crate) fn new(database: &Database, default: &Path) -> AppResult<Self> {
+        let _operation = cache::begin_cover_cache_operation();
+        let connection = database.connect()?;
+        use rusqlite::OptionalExtension;
+        let configured: Option<String> = connection
+            .query_row(
+                "SELECT value FROM settings WHERE key='cover_cache_directory'",
+                [],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
+        let root = configured
+            .filter(|v| !v.trim().is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| default.into());
+        let libraries = database.library_paths()?;
+        let directory = directory(database, &root)?;
+        let canonical_root = root.canonicalize().map_err(|e| e.to_string())?;
+        Ok(Self {
+            connection,
+            root,
+            canonical_root,
+            directory,
+            libraries,
+            database_path: database.path().into(),
+        })
+    }
+    fn page_key(&self, id: i64, revision: &str, name: &str) -> String {
+        digest(
+            format!(
+                "{VERSION}:{}:{id}:{revision}:{name}",
+                self.database_path.to_string_lossy()
+            )
+            .as_bytes(),
+        )
+    }
+    pub(crate) fn read(
+        &mut self,
+        node: Option<i64>,
+        book: Option<(i64, &str)>,
+        width: u32,
+    ) -> AppResult<Option<PosterPayload>> {
+        use rusqlite::OptionalExtension;
+        if !WIDTHS.contains(&width) {
+            return Err("POSTER_SIZE".into());
+        }
+        let tx = self.connection.transaction().map_err(|e| e.to_string())?;
+        let (node_id, manual, revision) = if let Some(node) = node {
+            let path: Option<String> = tx.query_row(
+                "SELECT CASE WHEN n.cover_source='MANUAL' THEN n.cover_cache_path ELSE COALESCE((SELECT m.cover_cache_path FROM comic_books b JOIN book_manual_covers m ON m.book_id=b.id WHERE b.node_id=n.id AND (SELECT COUNT(*) FROM comic_books x WHERE x.node_id=n.id)=1),(SELECT t.cover_cache_path FROM tmdb_movie_bindings t WHERE t.node_id=n.id AND t.active=1),n.cover_cache_path) END FROM nodes n WHERE n.id=?1",
+                [node], |r|r.get(0),
+            ).map_err(|e|e.to_string())?;
+            (node, path, None)
+        } else if let Some((book, expected)) = book {
+            comic_reader::cover_identity_conn(&tx, book, expected)?;
+            let (node, revision, path): (i64,String,Option<String>) = tx.query_row(
+                "SELECT b.node_id,b.revision,m.cover_cache_path FROM comic_books b LEFT JOIN book_manual_covers m ON m.book_id=b.id WHERE b.id=?1",[book],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?)),
+            ).map_err(|e|e.to_string())?;
+            if revision != expected {
+                return Err("COMIC_PAGE_CHANGED".into());
+            }
+            (node, path, Some(revision))
+        } else {
+            return Err("POSTER_TARGET".into());
+        };
+        crate::db::ensure_node_visible_conn(&tx, node_id)?;
+        let page: Option<(i64, String, String)> = if manual.is_some() {
+            None
+        } else if let Some((book, _)) = book {
+            tx.query_row("SELECT b.id,b.revision,p.page_name FROM comic_books b JOIN comic_pages p ON p.comic_book_id=b.id AND p.page_index=0 WHERE b.id=?1 AND b.index_error IS NULL",[book],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional().map_err(|e|e.to_string())?
+        } else {
+            tx.query_row("WITH RECURSIVE visible(id) AS (SELECT n.id FROM nodes n JOIN library_roots r ON r.id=n.library_root_id WHERE n.id=?1 AND n.node_type<>'IGNORED' AND r.media_kind IN ('COMIC','EBOOK','DOUJIN','ARTBOOK') UNION ALL SELECT n.id FROM nodes n JOIN visible v ON n.parent_node_id=v.id WHERE n.node_type<>'IGNORED') SELECT b.id,b.revision,p.page_name FROM comic_books b JOIN visible v ON v.id=b.node_id JOIN comic_pages p ON p.comic_book_id=b.id AND p.page_index=0 WHERE b.source_resource_id IS NULL AND b.index_error IS NULL AND (b.source_kind='IMAGE_FOLDER' OR lower(b.source_path) LIKE '%.cbz' OR COALESCE(b.reader_format,b.document_format) IN ('PDF','EPUB','MOBI','AZW3')) ORDER BY b.source_path COLLATE NOCASE,b.id LIMIT 1",[node_id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional().map_err(|e|e.to_string())?
+        };
+        tx.commit().map_err(|e| e.to_string())?;
+        let key = if let Some(path) = manual {
+            let path = PathBuf::from(path);
+            // The current cache root was checked against every media root when this worker
+            // was created. Root/cache changes revoke the worker. Canonicalize this file so a
+            // changed symlink cannot inherit that scope; old cache locations use the full gate.
+            if !cache::is_equal_or_within_checked(&path, &self.canonical_root)? {
+                for root in &self.libraries {
+                    if cache::is_equal_or_within_checked(&path, root)? {
+                        return Err("POSTER_SOURCE_SCOPE".into());
+                    }
+                }
+            }
+            let metadata = fs::metadata(&path).map_err(|e| e.to_string())?;
+            if !metadata.is_file() || metadata.len() > 15 * 1024 * 1024 {
+                return Err("POSTER_SOURCE_SIZE".into());
+            }
+            if revision.is_some() {
+                digest(
+                    format!(
+                        "{VERSION}:{}:{}:{:?}",
+                        path.display(),
+                        metadata.len(),
+                        metadata.modified()
+                    )
+                    .as_bytes(),
+                )
+            } else {
+                let canonical = path.canonicalize().map_err(|e| e.to_string())?;
+                let stamp = metadata
+                    .modified()
+                    .map_err(|e| e.to_string())?
+                    .duration_since(UNIX_EPOCH)
+                    .map_err(|e| e.to_string())?
+                    .as_nanos();
+                digest(
+                    format!(
+                        "{VERSION}:{}:{}:{stamp}",
+                        canonical.to_string_lossy(),
+                        metadata.len()
+                    )
+                    .as_bytes(),
+                )
+            }
+        } else if let Some((id, revision, name)) = page {
+            self.page_key(id, &revision, &name)
+        } else {
+            return Ok(None);
+        };
+        // Recheck the actual directory/file at every disk access; cached scope never bypasses
+        // canonical containment, reparse, checksum, signature, byte or dimension checks.
+        Ok(PreparedPosterFile {
+            root: self.root.clone(),
+            canonical_root: self.canonical_root.clone(),
+            path: path_for(&self.directory, &key, width),
+            width,
+        }
+        .read())
+    }
+}
+impl PosterPayload {
+    pub(crate) fn new(bytes: Vec<u8>) -> AppResult<Self> {
+        if bytes.len() > 15 * 1024 * 1024 {
+            return Err("POSTER_TOO_LARGE".into());
+        }
+        cache::cover_payload_dimensions(&bytes)?;
+        let mime = match image::guess_format(&bytes).map_err(|_| "POSTER_FORMAT")? {
+            image::ImageFormat::Jpeg => "image/jpeg",
+            image::ImageFormat::Png => "image/png",
+            image::ImageFormat::WebP => "image/webp",
+            _ => return Err("POSTER_FORMAT".into()),
+        };
+        Ok(Self {
+            bytes,
+            mime,
+            prepared: None,
+        })
+    }
+    fn data_url(self) -> String {
+        format!("data:{};base64,{}", self.mime, STANDARD.encode(self.bytes))
+    }
+}
+
+// Compatibility for bounded explicit callers/tests. Main posters use raw resource bytes.
 pub(crate) fn cover_data_url(
     database: &Database,
     cache_root: &Path,
     node_id: i64,
     width: u32,
 ) -> AppResult<Option<String>> {
-    thumbnail_data_url(database, cache_root, width, || source(database, node_id))
+    cover_payload(database, cache_root, node_id, width).map(|p| p.map(PosterPayload::data_url))
 }
-
-/// A logical card without an exclusive Node still uses the original indexed book identity,
-/// the same persistent derivatives and reader validation. Never manufacture a Node or path.
 pub(crate) fn book_cover_data_url(
     database: &Database,
     cache_root: &Path,
@@ -439,7 +777,55 @@ pub(crate) fn book_cover_data_url(
     revision: &str,
     width: u32,
 ) -> AppResult<Option<String>> {
-    thumbnail_data_url(database, cache_root, width, || {
+    book_cover_payload(database, cache_root, book_id, revision, width)
+        .map(|p| p.map(PosterPayload::data_url))
+}
+
+/// Fast hits read only a small disk derivative. A missing/corrupt derivative rebuilds once under
+/// the shared generation gate; failures retain the validated original preview.
+pub(crate) fn cover_payload(
+    database: &Database,
+    cache_root: &Path,
+    node_id: i64,
+    width: u32,
+) -> AppResult<Option<PosterPayload>> {
+    thumbnail_payload(database, cache_root, width, || source(database, node_id))
+}
+
+/// A logical card without an exclusive Node still uses the original indexed book identity,
+/// the same persistent derivatives and reader validation. Never manufacture a Node or path.
+pub(crate) fn book_cover_payload(
+    database: &Database,
+    cache_root: &Path,
+    book_id: i64,
+    revision: &str,
+    width: u32,
+) -> AppResult<Option<PosterPayload>> {
+    thumbnail_payload(database, cache_root, width, || {
+        if let Some(path) = crate::cover_selection::book_manual(database, book_id)? {
+            let current: String = database
+                .connect()?
+                .query_row(
+                    "SELECT revision FROM comic_books WHERE id=?1",
+                    [book_id],
+                    |r| r.get(0),
+                )
+                .map_err(|e| e.to_string())?;
+            if current != revision {
+                return Err("COMIC_PAGE_CHANGED".into());
+            }
+            let m = fs::metadata(&path).map_err(|e| e.to_string())?;
+            let key = digest(
+                format!(
+                    "{VERSION}:{}:{}:{:?}",
+                    path.display(),
+                    m.len(),
+                    m.modified()
+                )
+                .as_bytes(),
+            );
+            return Ok(Some((Source::Cached(path), key)));
+        }
         let opened = comic_reader::cover_identity(database, book_id, revision)?;
         Ok(opened.map(|name| {
             (
@@ -456,12 +842,12 @@ pub(crate) fn book_cover_data_url(
     })
 }
 
-fn thumbnail_data_url(
+fn thumbnail_payload(
     database: &Database,
     cache_root: &Path,
     width: u32,
     resolve: impl Fn() -> AppResult<Option<(Source, String)>>,
-) -> AppResult<Option<String>> {
+) -> AppResult<Option<PosterPayload>> {
     if !WIDTHS.contains(&width) {
         return Err("缩略图尺寸无效。".into());
     }
@@ -477,13 +863,18 @@ fn thumbnail_data_url(
         thumbnail = read_thumbnail(&destination, width);
         if thumbnail.is_none() {
             let Some(bytes) = source.read(database)? else {
+                // Only a foreground miss authorizes PDF preparation. Background warmup
+                // must not evict those short-lived observations with unrelated books.
+                if let Source::Page(id, revision) = &source {
+                    crate::pdf_cover::record_missing(database, *id, revision);
+                }
                 return Ok(None);
             };
             if resolve()?.map(|s| s.1) != Some(key.clone()) {
                 return Err("封面已变化，请重新加载。".into());
             }
             if generate(&_operation, &directory, &key, &bytes, &[width]).is_err() {
-                return Ok(Some(source.data_url(&bytes)));
+                return PosterPayload::new(bytes).map(Some);
             }
             thumbnail = read_thumbnail(&destination, width);
         }
@@ -491,7 +882,18 @@ fn thumbnail_data_url(
     if thumbnail.is_some() {
         touch_recent(&destination);
     }
-    Ok(thumbnail.map(|bytes| source.data_url(&bytes)))
+    thumbnail
+        .map(|bytes| {
+            let mut payload = PosterPayload::new(bytes)?;
+            payload.prepared = Some(PreparedPosterFile {
+                root: cache_root.into(),
+                canonical_root: cache_root.canonicalize().map_err(|e| e.to_string())?,
+                path: destination,
+                width,
+            });
+            Ok(payload)
+        })
+        .transpose()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -965,6 +1367,89 @@ mod tests {
             .set_node_cover(node, CoverSource::Manual, Some(&original))
             .unwrap();
         (temp, database, cache_root, node, original)
+    }
+
+    #[test]
+    fn prepared_reader_matches_persistent_tiers_and_rejects_changed_or_hidden_sources() {
+        let (_temp, database, root, node, original) = fixture(300, 450);
+        let expected = cover_payload(&database, &root, node, 256).unwrap().unwrap();
+        let mut reader = PreparedPosterReader::new(&database, &root).unwrap();
+        assert_eq!(
+            reader.read(Some(node), None, 256).unwrap().unwrap().bytes,
+            expected.bytes
+        );
+        let connection = database.connect().unwrap();
+        connection
+            .execute("UPDATE nodes SET node_type='IGNORED' WHERE id=?1", [node])
+            .unwrap();
+        assert!(reader.read(Some(node), None, 256).is_err());
+        connection
+            .execute("UPDATE nodes SET node_type='WORK' WHERE id=?1", [node])
+            .unwrap();
+        image::RgbImage::from_pixel(20, 30, image::Rgb([250, 1, 2]))
+            .save(&original)
+            .unwrap();
+        assert!(reader.read(Some(node), None, 256).unwrap().is_none());
+        let updated = cover_payload(&database, &root, node, 256).unwrap().unwrap();
+        assert_ne!(expected.bytes, updated.bytes);
+        assert_eq!(
+            reader.read(Some(node), None, 256).unwrap().unwrap().bytes,
+            updated.bytes
+        );
+    }
+
+    #[test]
+    fn prepared_reader_reuses_indexed_book_key_and_current_book_revision() {
+        let (temp, database, root, _video_node, original) = fixture(60, 90);
+        let media = temp.path().join("books");
+        fs::create_dir(&media).unwrap();
+        let comic_root = database
+            .add_root_with_kind(
+                &media,
+                None,
+                crate::models::LibraryMediaKind::Comic,
+                crate::models::LibraryRecognitionMode::Folder,
+            )
+            .unwrap();
+        let c = database.connect().unwrap();
+        c.execute("INSERT INTO nodes(library_root_id,absolute_path,folder_name,display_name,node_type) VALUES(?1,?2,'Book','Book','WORK')",rusqlite::params![comic_root.id,media.join("Book").to_string_lossy()]).unwrap();
+        let node = c.last_insert_rowid();
+        c.execute("INSERT INTO comic_books(node_id,source_path,source_kind,display_name,modified_at,page_count,revision) SELECT id,absolute_path,'IMAGE_FOLDER','Book','stamp',1,'revision-one' FROM nodes WHERE id=?1",[node]).unwrap();
+        let book = c.last_insert_rowid();
+        c.execute("INSERT INTO comic_pages(comic_book_id,page_index,page_name,source_locator,file_size,modified_at) VALUES(?1,0,'page.png','page.png',1,'stamp')",[book]).unwrap();
+        let (_, key) = source(&database, node).unwrap().unwrap();
+        let operation = cache::begin_cover_cache_operation();
+        generate(
+            &operation,
+            &root.join("posters"),
+            &key,
+            &fs::read(original).unwrap(),
+            &[256],
+        )
+        .unwrap();
+        let expected = read_thumbnail(&path_for(&root.join("posters"), &key, 256), 256).unwrap();
+        let mut reader = PreparedPosterReader::new(&database, &root).unwrap();
+        assert_eq!(
+            reader.read(Some(node), None, 256).unwrap().unwrap().bytes,
+            expected
+        );
+        assert_eq!(
+            reader
+                .read(None, Some((book, "revision-one")), 256)
+                .unwrap()
+                .unwrap()
+                .bytes,
+            expected
+        );
+        c.execute(
+            "UPDATE comic_books SET revision='revision-two' WHERE id=?1",
+            [book],
+        )
+        .unwrap();
+        assert!(reader
+            .read(None, Some((book, "revision-one")), 256)
+            .is_err());
+        assert!(reader.read(Some(node), None, 256).unwrap().is_none());
     }
 
     #[test]

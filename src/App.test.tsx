@@ -10,11 +10,11 @@ const mocks = vi.hoisted(() => ({
   api: {
     bootstrap: vi.fn(), getSettings: vi.fn(), listRoots: vi.fn(),
     getCollectionSortPreferences: vi.fn(), updateCollectionSortPreference: vi.fn(), scanStatus: vi.fn(), allResources: vi.fn(),
-    listRecentlyWatched: vi.fn(), listFavoriteFolders: vi.fn(), showMainWindow: vi.fn(),
+    listRecentlyWatched: vi.fn(), listFavoriteFolders: vi.fn(), showMainWindow: vi.fn(),onMpvPlayback:vi.fn(),
     testMpv: vi.fn(), tmdbCredentialStatus: vi.fn(), addRoot: vi.fn(), startScan: vi.fn(), nodeDetail: vi.fn(), cacheStats: vi.fn(), posterCacheStatus: vi.fn(), clearCoverCache: vi.fn(), updateSettings: vi.fn(),
     bindWorkBangumi: vi.fn(), bindBangumi: vi.fn(), clearWorkBangumi: vi.fn(), retryWorkBangumiCover: vi.fn(), bangumiPrefill: vi.fn(), searchBangumi: vi.fn(), renameNode: vi.fn(), playMedia: vi.fn(), openMediaInExplorer: vi.fn(),
     listHiddenNodes: vi.fn(), resetNodeType: vi.fn(), search: vi.fn(), browse: vi.fn(), syncPendingBangumiAliases: vi.fn(), openBangumiSubject: vi.fn(), openExternalUrl: vi.fn(),
-    getBookCatalogue:vi.fn(),revealComicBook:vi.fn(),
+    getBookCatalogue:vi.fn(),revealComicBook:vi.fn(),collectionRestoreNotice:vi.fn(),
   },
   progress: new Set<(value: ScanProgress) => void>(),
   finished: new Set<(value: ScanProgress) => void>(),
@@ -70,6 +70,9 @@ const mount = (_caption = false) => render(<StrictMode><I18nProvider><AppSetting
 
 beforeEach(() => {
   vi.resetAllMocks();
+  vi.stubGlobal("requestIdleCallback", vi.fn());
+  vi.stubGlobal("cancelIdleCallback", vi.fn());
+  mocks.api.collectionRestoreNotice.mockResolvedValue(null);
   mocks.api.testMpv.mockResolvedValue({ok:true,version:"mpv v0.41.0",message:""});
   mocks.api.tmdbCredentialStatus.mockResolvedValue({source:"DEFAULT",defaultAvailable:true,personalConfigured:false,check:"UNCHECKED"});
   mocks.progress.clear(); mocks.finished.clear();
@@ -97,6 +100,7 @@ beforeEach(() => {
   mocks.api.getCollectionSortPreferences.mockResolvedValue({ all: "title-asc", browse: "title-asc", favorites: "title-asc" });
   mocks.api.updateCollectionSortPreference.mockImplementation(async (_scope, sort) => sort);
   mocks.api.scanStatus.mockResolvedValue(null);
+  mocks.api.onMpvPlayback.mockResolvedValue(()=>{});
   mocks.api.allResources.mockResolvedValue(catalogue);
   mocks.api.listRecentlyWatched.mockResolvedValue([]);
   mocks.api.listFavoriteFolders.mockResolvedValue([]);
@@ -119,6 +123,227 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe("startup refresh and work browsing", () => {
+  it('keeps local filters on their collection when Enter confirms text, while explicit global search still works',async()=>{
+    settings.autoScanOnStartup=false;settings.allResourcesFlattened=false;
+    mount();await screen.findByText(/^Archive/);
+    const allInput=document.querySelector('.all-resources-page .search-field input')!;
+    fireEvent.change(allInput,{target:{value:'Archive'}});
+    fireEvent.keyDown(allInput,{key:'Enter',code:'Enter'});
+    expect(document.querySelector('.all-resources-page')).not.toBeNull();
+    expect(document.querySelector('.search-page')).toBeNull();expect(mocks.api.search).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button',{name:/Test Library/}));
+    await waitFor(()=>expect(document.querySelector('.library-toolbar .search-field input')).not.toBeNull());
+    const libraryInput=document.querySelector('.library-toolbar .search-field input')!;
+    fireEvent.change(libraryInput,{target:{value:'Release A'}});
+    fireEvent.keyDown(libraryInput,{key:'Enter',code:'Enter'});
+    fireEvent.keyDown(libraryInput,{key:'Enter',code:'Enter',isComposing:true});
+    expect(document.querySelector('.library-toolbar')).not.toBeNull();expect(document.querySelector('.search-page')).toBeNull();
+    expect(mocks.api.search).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button',{name:'搜索'}));
+    await waitFor(()=>expect(document.querySelector('.search-page')).not.toBeNull());
+    const search=screen.getByRole('textbox',{name:'搜索'});fireEvent.change(search,{target:{value:'Release A'}});
+    fireEvent.submit(search.closest('form')!);
+    await waitFor(()=>expect(mocks.api.search).toHaveBeenCalledWith('Release A',undefined));
+  });
+  it('opens cached Settings without a loading frame',async()=>{
+    settings.autoScanOnStartup=false;settings.allResourcesFlattened=false;
+    mount();await screen.findByText(/^Archive/);
+    fireEvent.click(screen.getByRole('button',{name:'设置'}));
+    expect(document.querySelector('.settings-page')).not.toBeNull();
+    expect(document.querySelector('.settings-page .loading-state')).toBeNull();
+  });
+
+  it('keeps both display modes ready without making a new catalogue request',async()=>{
+    settings.autoScanOnStartup=false;settings.allResourcesFlattened=false;
+    mount();await screen.findByText(/^Archive/);
+    mocks.api.allResources.mockClear();
+    fireEvent.click(screen.getByRole('button',{name:'设置'}));
+    fireEvent.click(screen.getByRole('checkbox',{name:'全部资源穿透显示'}));
+    await waitFor(()=>expect(settings.allResourcesFlattened).toBe(true));
+    fireEvent.click(screen.getByRole('button',{name:'全部资源'}));
+    expect(screen.getByText('Example Work')).toBeDefined();
+    expect(document.querySelector('.all-resources-page .loading-state')).toBeNull();
+    expect(mocks.api.allResources).not.toHaveBeenCalled();expect(screen.queryByText(/^Archive/)).toBeNull();
+  });
+
+  it('does not reread collections for player connection lifecycle events',async()=>{
+    let listener!:(event:import('./types/episodes').MpvPlaybackEvent)=>void;
+    mocks.api.onMpvPlayback.mockImplementation(async(callback)=>{listener=callback;return()=>{};});
+    settings.autoScanOnStartup=false;mount();await screen.findByText('Example Work');
+    await waitFor(()=>expect(listener).toBeDefined());
+    mocks.api.allResources.mockClear();mocks.api.listRecentlyWatched.mockClear();
+    await act(async()=>{for(const state of ['STARTED','CONNECTED','ENDED'] as const)listener({sessionId:900,state});await new Promise(resolve=>setTimeout(resolve,230));});
+    expect(mocks.api.allResources).not.toHaveBeenCalled();expect(mocks.api.listRecentlyWatched).not.toHaveBeenCalled();
+    await act(async()=>{listener({sessionId:901,state:'FILE',fileId:1,ownerNodeId:1});await new Promise(resolve=>setTimeout(resolve,230));});
+    expect(mocks.api.allResources).toHaveBeenCalledOnce();expect(mocks.api.listRecentlyWatched).toHaveBeenCalledOnce();
+    await act(async()=>{listener({sessionId:901,state:'FINISHED',fileId:1,ownerNodeId:1});listener({sessionId:901,state:'ENDED'});await new Promise(resolve=>setTimeout(resolve,230));});
+    expect(mocks.api.allResources).toHaveBeenCalledTimes(2);expect(mocks.api.listRecentlyWatched).toHaveBeenCalledTimes(2);
+  });
+  it.each(["another work", "Settings"])("rejects an old detail completion after navigating to %s", async (destination) => {
+    settings.autoScanOnStartup = false;
+    const second = node(3, "Second Work");
+    mocks.api.allResources.mockResolvedValue({ ...catalogue, works: [
+      ...catalogue.works,
+      { node: second, sources: [second], target: { sourceNodeIds: [3], snapshot: "second" } },
+    ] });
+    const detailFor = (value: MediaNode) => ({ node: value, children: [], mediaFiles: [], resourceFiles: [], breadcrumbs: [], binding: null });
+    let finishFirst!: (value: ReturnType<typeof detailFor>) => void;
+    mocks.api.nodeDetail.mockImplementation((id: number) => id === work.id
+      ? new Promise(resolve => { finishFirst = resolve; })
+      : Promise.resolve(detailFor(second)));
+    mount();
+    fireEvent.click((await screen.findByText("Example Work")).closest("button")!);
+    await waitFor(() => expect(mocks.api.nodeDetail).toHaveBeenCalledTimes(1));
+    if (destination === "Settings") {
+      fireEvent.click(screen.getByRole("button", { name: "设置" }));
+      await screen.findByRole("checkbox", { name: "全部资源穿透显示" });
+    } else {
+      fireEvent.click(screen.getByText("Second Work").closest("button")!);
+      await screen.findByRole("heading", { name: "Second Work", level: 1 });
+    }
+    await act(async () => finishFirst(detailFor(work)));
+    if (destination === "Settings") expect(document.querySelector(".settings-page")).not.toBeNull();
+    else expect(screen.getByRole("heading", { name: "Second Work", level: 1 })).toBeTruthy();
+    expect(document.querySelector(".detail-page h1")?.textContent).not.toBe("Example Work");
+  });
+
+  it.each((["zh-CN", "en-US", "ja-JP", "ko-KR"] as const).flatMap(language => (["light", "dark"] as const).map(theme => [language, theme] as const)))("shows ready content once under StrictMode (%s, %s)", async (language, theme) => {
+    settings.autoScanOnStartup = false;
+    settings.theme = theme;
+    settings.language = language;
+    let show!: () => void;
+    mocks.api.showMainWindow.mockImplementation(() => new Promise<void>(resolve => { show = resolve; }));
+    mount();
+    await waitFor(() => expect(mocks.api.showMainWindow).toHaveBeenCalledTimes(1));
+    expect(document.documentElement.dataset.theme).toBe(theme);
+    expect(document.documentElement.lang).toBe(language);
+    expect(mocks.api.allResources).toHaveBeenCalledTimes(1);
+    expect(document.querySelector(".all-resources-page .media-card")).not.toBeNull();
+    expect(document.querySelector(".root-item")).not.toBeNull();
+    expect(document.querySelector(".loading-state")).toBeNull();
+    expect(mocks.api.listRecentlyWatched).not.toHaveBeenCalled();
+    await act(async () => show());
+    await screen.findByText("Example Work");
+    expect(mocks.api.allResources).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the actual page visible until a cold Recently opened request is ready", async () => {
+    settings.autoScanOnStartup = false;
+    let finishHistory!: (entries: { node: MediaNode; watchedAt: string }[]) => void;
+    mocks.api.listRecentlyWatched.mockImplementation(() => new Promise(resolve => { finishHistory = resolve; }));
+    mount();
+    await screen.findByText("Example Work");
+    expect(mocks.api.listRecentlyWatched).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "最近打开" }));
+    await waitFor(() => expect(mocks.api.listRecentlyWatched).toHaveBeenCalledTimes(1));
+    expect(document.querySelector(".all-resources-page .media-card")).not.toBeNull();
+    expect(document.querySelector(".loading-state")).toBeNull();
+    await act(async () => finishHistory([{ node: node(3, "History Work"), watchedAt: "2026-01-01" }]));
+    await screen.findByText("History Work");
+    expect(document.querySelector(".recently-watched-page")).not.toBeNull();
+  });
+
+  it("prepares recent records only after display, reuses the ready snapshot, and preserves route cancellation", async () => {
+    settings.autoScanOnStartup = false;
+    let idle!: IdleRequestCallback;
+    vi.stubGlobal("requestIdleCallback", vi.fn((callback: IdleRequestCallback) => {idle=callback; return 1;}));
+    const entries=[{node:node(3,"History Work"),watchedAt:"2026-01-01"}];
+    let finish!: (value: typeof entries) => void;
+    mocks.api.listRecentlyWatched.mockImplementation(()=>new Promise(resolve=>{finish=resolve;}));
+    mount();
+    await waitFor(()=>expect(mocks.api.showMainWindow).toHaveBeenCalledTimes(1));
+    expect(mocks.api.listRecentlyWatched).not.toHaveBeenCalled();
+    await waitFor(()=>expect(idle).toBeTypeOf("function"));
+    await act(async()=>idle({didTimeout:false,timeRemaining:()=>40}));
+    expect(mocks.api.listRecentlyWatched).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button",{name:"最近打开"}));
+    expect(document.querySelector(".all-resources-page .media-card")).not.toBeNull();
+    fireEvent.click(screen.getByRole("button",{name:"设置"}));
+    await screen.findByRole("checkbox",{name:"全部资源穿透显示"});
+    await act(async()=>finish(entries));
+    expect(document.querySelector(".settings-page")).not.toBeNull();
+    fireEvent.click(screen.getByRole("button",{name:"最近打开"}));
+    await screen.findByText("History Work");
+    expect(mocks.api.listRecentlyWatched).toHaveBeenCalledTimes(1);
+    expect(document.querySelector(".loading-state")).toBeNull();
+    fireEvent.click(screen.getByRole("button",{name:"全部资源"}));
+    await screen.findByText("Example Work");
+    fireEvent.click(screen.getByRole("button",{name:"最近打开"}));
+    await screen.findByText("History Work");
+    expect(mocks.api.listRecentlyWatched).toHaveBeenCalledTimes(1);
+  });
+
+  it("revalidates a prepared snapshot after manual progress changes without flashing old entries",async()=>{
+    settings.autoScanOnStartup=false;
+    mocks.api.listRecentlyWatched.mockResolvedValue([{node:node(3,"History Work"),watchedAt:"2026-01-01"}]);
+    mount();await screen.findByText("Example Work");
+    fireEvent.click(screen.getByRole("button",{name:"最近打开"}));await screen.findByText("History Work");
+    fireEvent.click(screen.getByRole("button",{name:"全部资源"}));await screen.findByText("Example Work");
+    let finish!:(value:unknown[])=>void;
+    mocks.api.listRecentlyWatched.mockImplementation(()=>new Promise(resolve=>{finish=resolve;}));
+    act(()=>window.dispatchEvent(new Event('m2shelf-progress-changed')));
+    fireEvent.click(screen.getByRole("button",{name:"最近打开"}));
+    await waitFor(()=>expect(mocks.api.listRecentlyWatched).toHaveBeenCalledTimes(2));
+    expect(document.querySelector(".all-resources-page .media-card")).not.toBeNull();
+    expect(screen.queryByText("History Work")).toBeNull();
+    expect(document.querySelector(".loading-state")).toBeNull();
+    await act(async()=>finish([{node:node(4,"Newly watched"),watchedAt:"2026-01-02"}]));
+    await screen.findByText("Newly watched");
+  });
+
+  it("keeps the window hidden and delays automatic scanning until the catalogue is ready", async () => {
+    let finishCatalogue!: (value: typeof catalogue) => void;
+    mocks.api.allResources.mockImplementation(() => new Promise(resolve => { finishCatalogue = resolve; }));
+    mount();
+    await waitFor(() => expect(mocks.api.allResources).toHaveBeenCalledTimes(1));
+    expect(mocks.api.showMainWindow).not.toHaveBeenCalled();
+    expect(mocks.api.startScan).not.toHaveBeenCalled();
+    await act(async () => finishCatalogue(catalogue));
+    await waitFor(() => expect(mocks.api.showMainWindow).toHaveBeenCalledTimes(1));
+    expect(document.querySelector(".all-resources-page .media-card")).not.toBeNull();
+    expect(document.querySelector(".loading-state")).toBeNull();
+    await waitFor(() => expect(mocks.api.startScan).toHaveBeenCalledTimes(1));
+  });
+
+  it("waits for the library sidebar as well as the catalogue before displaying the window", async () => {
+    settings.autoScanOnStartup = false;
+    let finishRoots!: (value: typeof root[]) => void;
+    mocks.api.listRoots.mockImplementation(() => new Promise(resolve => { finishRoots = resolve; }));
+    mount();
+    await screen.findByText("Example Work");
+    expect(mocks.api.showMainWindow).not.toHaveBeenCalled();
+    expect(mocks.api.startScan).not.toHaveBeenCalled();
+    await act(async () => finishRoots([root]));
+    await waitFor(() => expect(mocks.api.showMainWindow).toHaveBeenCalledTimes(1));
+    expect(document.querySelector(".root-item")).not.toBeNull();
+  });
+
+  it("keeps a newer sort choice when library bootstrap finishes later", async () => {
+    settings.autoScanOnStartup = false;
+    let finishRoots!: (value: typeof root[]) => void;
+    mocks.api.listRoots.mockImplementation(() => new Promise(resolve => { finishRoots = resolve; }));
+    mount();
+    await screen.findByText("Example Work");
+    chooseOption(screen.getByRole("combobox", { name: "排序方式" }), "modified");
+    await waitFor(() => expect(mocks.api.updateCollectionSortPreference).toHaveBeenCalledWith("all", "modified-asc"));
+    await act(async () => finishRoots([root]));
+    expect(screen.getByRole("combobox", { name: "排序方式" }).textContent).toBe("更新时间");
+    expect(document.querySelector(".file-modified-time")).not.toBeNull();
+  });
+
+  it("does not repeatedly retry a failed initial catalogue in the background", async () => {
+    settings.autoScanOnStartup = false;
+    mocks.api.allResources.mockRejectedValue(Object.assign(new Error("fixture index unavailable"), { name: "M2ShelfError" }));
+    mount();
+    await screen.findByText("fixture index unavailable");
+    await waitFor(() => expect(mocks.api.showMainWindow).toHaveBeenCalledTimes(1));
+    await act(async () => undefined);
+    expect(mocks.api.allResources).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: "设置" }));
+    await screen.findByRole("checkbox", { name: "全部资源穿透显示" });
+    expect(mocks.api.allResources).toHaveBeenCalledTimes(1);
+  });
+
   it('opens a smart series from All Resources with original book identities and returns to All',async()=>{
     settings.autoScanOnStartup=false;settings.allResourcesFlattened=false;
     const bookRoot={...root,mediaKind:'EBOOK' as const,bookOrganizationStrategy:'SMART_MIXED' as const};
@@ -128,7 +353,7 @@ describe("startup refresh and work browsing", () => {
     mocks.api.allResources.mockResolvedValue({nodes:[],works:[],comicNodes:[],totalCount:1,bookLibraries:[{root:bookRoot,catalogue:logical}]});
     mocks.api.browse.mockResolvedValue({root:bookRoot,nodes:[],mediaFiles:[],comicBooks:[],resourceFiles:[],breadcrumbs:[]});
     mount();fireEvent.click((await screen.findByText('The series')).closest('button')!);
-    await screen.findByText('Volume 1.epub');await screen.findByText('Volume 2.epub');
+    await screen.findByText('Volume 1.epub',{selector:'.file-name strong'});await screen.findByText('Volume 2.epub',{selector:'.file-name strong'});
     expect(mocks.api.nodeDetail).not.toHaveBeenCalled();
     expect(window.history.state.smartMixed.destination.group).toBe('series-1');
     fireEvent.click(screen.getByRole('button',{name:/^返回$/}));
@@ -235,7 +460,7 @@ describe("startup refresh and work browsing", () => {
     mount();
     await screen.findByText("Example Work");
     fireEvent.click(screen.getByRole("button", { name: "设置" }));
-    const languageSelect = await screen.findByRole("combobox", { name: "界面语言" });
+    const languageSelect = await within(document.querySelector('.window-titlebar') as HTMLElement).findByRole("combobox", { name: "界面语言" });
     await waitFor(() => expect((languageSelect as HTMLSelectElement).disabled).toBe(false));
     chooseOption(languageSelect, language);
     const toggle = await screen.findByRole("checkbox", { name: label });
@@ -372,7 +597,7 @@ describe("startup refresh and work browsing", () => {
     mocks.api.syncPendingBangumiAliases.mockResolvedValueOnce(true);
     mocks.api.allResources.mockClear();
     mount();
-    await waitFor(() => expect(mocks.api.allResources.mock.calls.length).toBeGreaterThan(2));
+    await waitFor(() => expect(mocks.api.allResources).toHaveBeenCalledTimes(2));
     expect(document.querySelector(".toast")).toBeNull();
   });
   it("searches every library from the sidebar and exposes scope changes without retaining stale results", async () => {
@@ -440,8 +665,11 @@ describe("startup refresh and work browsing", () => {
     mocks.api.getCollectionSortPreferences.mockResolvedValue({ all: "modified-desc", browse: "title-asc", favorites: "title-asc" });
     mount();
     await screen.findByText("Newer Work");
-    expect(titles()).toEqual(["Newer Work", "Older Work", "Unknown Work"]);
-    expect(document.querySelectorAll("time.file-modified-time")).toHaveLength(2);
+    // Catalogue rows may settle before persisted sort restoration; wait for the complete state.
+    await waitFor(() => {
+      expect(titles()).toEqual(["Newer Work", "Older Work", "Unknown Work"]);
+      expect(document.querySelectorAll("time.file-modified-time")).toHaveLength(2);
+    });
   });
 
   it("opens hidden entries from settings, filters by path, and restores the selected original node", async () => {
@@ -727,6 +955,54 @@ describe("startup refresh and work browsing", () => {
     fireEvent.change(screen.getByRole("textbox",{name:"显示名称"}),{target:{value:"My release"}});
     fireEvent.click(screen.getByRole("button",{name:"保存名称"}));
     await waitFor(()=>expect(mocks.api.renameNode).toHaveBeenCalledWith(2,"My release"));
+  });
+
+  it("shows the saved name of a bound card after refresh and when opening its detail",async()=>{
+    settings.autoScanOnStartup=false;
+    const bound={...sources[0],binding:{nodeId:1,provider:'BANGUMI' as const,providerSubjectId:42,providerSubjectType:2 as const,providerTitle:'Official title',providerTitleCn:'官方标题',providerTitleEn:null,providerTitleJa:null,providerTitleKo:null,providerDate:null,providerImageUrl:null,boundAt:'2026-01-01',updatedAt:'2026-01-01',coverCachePath:null,coverDownloadError:null}};
+    const result=(value:MediaNode)=>({nodes:[value],totalCount:1,works:[{node:value,sources:[value]}]});
+    mocks.api.allResources.mockResolvedValue(result(bound));
+    mocks.api.nodeDetail.mockResolvedValue({node:bound,binding:bound.binding,mediaFiles:[],resourceFiles:[],children:[],breadcrumbs:[]});
+    mocks.api.renameNode.mockImplementation(async(_id,name)=>{
+      const updated={...bound,displayName:name,manualDisplayName:true};
+      mocks.api.allResources.mockResolvedValue(result(updated));
+      mocks.api.nodeDetail.mockResolvedValue({node:updated,binding:bound.binding,mediaFiles:[],resourceFiles:[],children:[],breadcrumbs:[]});
+      return updated;
+    });
+    mount();await screen.findByText('官方标题');
+    fireEvent.contextMenu(document.querySelector('.media-card')!);
+    fireEvent.click(screen.getByRole('button',{name:'修改显示名称'}));
+    expect(screen.queryByText('仅修改 M²Shelf')).toBeNull();
+    fireEvent.change(screen.getByRole('textbox',{name:'显示名称'}),{target:{value:'My preferred title'}});
+    fireEvent.click(screen.getByRole('button',{name:'保存名称'}));
+    await waitFor(()=>expect(document.querySelector('.media-card-copy > strong')?.textContent).toBe('My preferred title'));
+    fireEvent.click(document.querySelector('.media-card-open')!);
+    await waitFor(()=>expect(document.querySelector('.detail-copy h1')?.textContent).toBe('My preferred title'));
+    expect(screen.getByText('官方标题')).toBeTruthy();
+  });
+
+  it("applies a confirmed series rename before revalidation finishes and preserves it across grid/list and detail",async()=>{
+    settings.autoScanOnStartup=false;settings.allResourcesFlattened=false;
+    const series={...sources[0],nodeType:'CONTAINER' as const,mediaKind:'LIVE_ACTION' as const,displayName:'Source (2015)',manualDisplayName:false,tmdbBinding:{active:true,coverCachePath:null,coverError:null,movie:{mediaType:'TV' as const,id:22,title:'Official TV Show',originalTitle:'Original Show',releaseDate:'2015-01-01',overview:'',posterPath:null}}};
+    const result=(node:MediaNode)=>({nodes:[node],totalCount:1,works:[]});
+    mocks.api.allResources.mockResolvedValue(result(series));
+    let finish!:(value:ReturnType<typeof result>)=>void;
+    mocks.api.renameNode.mockImplementation(async(_id,name)=>{
+      const updated={...series,displayName:name,manualDisplayName:true};
+      mocks.api.allResources.mockImplementation(()=>new Promise(resolve=>{finish=resolve;}));
+      mocks.api.nodeDetail.mockResolvedValue({node:updated,binding:null,mediaFiles:[],resourceFiles:[],children:[],breadcrumbs:[]});
+      return updated;
+    });
+    mount();await screen.findByText('Official TV Show系列');
+    const card=document.querySelector('.media-card');fireEvent.contextMenu(card!);fireEvent.click(screen.getByRole('button',{name:'修改显示名称'}));
+    expect((screen.getByRole('textbox',{name:'显示名称'}) as HTMLInputElement).value).toBe('Official TV Show系列');
+    fireEvent.change(screen.getByRole('textbox',{name:'显示名称'}),{target:{value:'My TV Series (2015)'}});fireEvent.click(screen.getByRole('button',{name:'保存名称'}));
+    await waitFor(()=>expect(document.querySelector('.media-card-copy > strong')?.textContent).toBe('My TV Series (2015)'));
+    expect(document.querySelector('.media-card')).toBe(card);expect(document.querySelector('.loading-state')).toBeNull();
+    await act(async()=>finish(result({...series,displayName:'My TV Series (2015)',manualDisplayName:true})));
+    await waitFor(()=>expect(screen.queryByRole('dialog',{name:'修改显示名称'})).toBeNull());
+    fireEvent.click(document.querySelector('.media-card-open')!);
+    await waitFor(()=>expect(document.querySelector('.detail-copy h1')?.textContent).toBe('My TV Series (2015)'));
   });
 
   it("shows durable scan failure details without replacing the unchanged work card",async()=>{

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { BangumiSearchPrefill, MediaNode, MetadataBinding } from "../types/media";
 import { api, isStaleWorkError } from "../lib/api";
-import { cleanBangumiKeyword, errorMessage, nodeDisplayTitle } from "../lib/format";
+import { canBindTmdb, cleanBangumiKeyword, errorMessage, nodeDisplayTitle } from "../lib/format";
 import {tmdbResult,tmdbErrorKey,type MatchResult} from "./TmdbMatch";
 import {MatchingResults} from "./MatchingResults";
 import {Select} from "./Select";
@@ -20,6 +20,7 @@ interface BangumiModalProps {
 export function BangumiModal({ node, onClose, onBound, onStale, onMetadataChanged }: BangumiModalProps) {
   const { language, t } = useI18n();
   const [provider,setProvider]=useState<'BANGUMI'|'TMDB'>('BANGUMI');
+  const [tmdbType,setTmdbType]=useState<'AUTO'|'MOVIE'|'TV'>('AUTO');
   const [configured,setConfigured]=useState<boolean|null>(null);
   const providerRef=useRef(provider);providerRef.current=provider;
   const backdropRef=useRef<HTMLDivElement>(null);
@@ -63,7 +64,8 @@ export function BangumiModal({ node, onClose, onBound, onStale, onMetadataChange
     requestGenerationRef.current = generation;
     const nodeId = node?.id ?? null;
     activeNodeIdRef.current = nodeId;
-    setProvider('BANGUMI');
+    setProvider(node && canBindTmdb(node) && node.tmdbBinding?.active ? 'TMDB' : 'BANGUMI');
+    setTmdbType(node?.nodeType === 'CONTAINER' ? 'TV' : node?.tmdbBinding?.active ? node.tmdbBinding.movie.mediaType ?? 'MOVIE' : 'AUTO');
     setResults([]);
     setError(null);
     setSearched(false);
@@ -112,7 +114,7 @@ export function BangumiModal({ node, onClose, onBound, onStale, onMetadataChange
     setError(null);
     setErrorKind("search");
     try {
-      const nextResults:MatchResult[]=provider==='TMDB'?await api.tmdbSearch(nodeId,query,null,language).then(found=>found.movies.map(movie=>tmdbResult(movie,found.snapshot))):(await api.searchBangumi(query,20,node.id)).map(subject=>({provider:'BANGUMI',id:subject.subjectId,title:(language==='en-US'?subject.titleEn:language==='ja-JP'?subject.titleJa:language==='ko-KR'?subject.titleKo:subject.titleCn)||subject.titleCn||subject.title,originalTitle:subject.title,date:subject.date,poster:subject.imageUrl,subject}));
+      const nextResults:MatchResult[]=provider==='TMDB'?await api.tmdbSearch(nodeId,query,null,language,tmdbType==='AUTO'?undefined:tmdbType).then(found=>found.movies.map(movie=>tmdbResult(movie,found.snapshot))):(await api.searchBangumi(query,20,node.id)).map(subject=>({provider:'BANGUMI',id:subject.subjectId,title:(language==='en-US'?subject.titleEn:language==='ja-JP'?subject.titleJa:language==='ko-KR'?subject.titleKo:subject.titleCn)||subject.titleCn||subject.title,originalTitle:subject.title,date:subject.date,poster:subject.imageUrl,subject}));
       if (!requestIsCurrent(generation, nodeId)) return;
       setResults(nextResults);
     } catch (caught) {
@@ -159,7 +161,7 @@ export function BangumiModal({ node, onClose, onBound, onStale, onMetadataChange
           <button className="modal-close" aria-label={t("common.close")} onClick={close} type="button"><Icon name="close" /></button>
         </header>
 
-        {(['WORK','AUTO_WORK'].includes(node.nodeType))&&(node.mediaKind==='LIVE_ACTION'||node.mediaKind==='VIDEO')&&node.binding?.providerSubjectType!==2&&(!node.workTarget||node.workTarget.sourceNodeIds.length===1)&&<div className="metadata-provider"><Select aria-label={t('match.provider')} value={provider} disabled={bindingId!==null} onChange={e=>{requestGenerationRef.current++;setLoading(false);setResults([]);setError(null);setSearched(false);setBindingId(null);if(provider==='TMDB')void api.tmdbCancel().catch(()=>undefined);setProvider(e.target.value as 'BANGUMI'|'TMDB');}}><option value="BANGUMI">Bangumi</option><option value="TMDB">TMDb</option></Select></div>}
+        {canBindTmdb(node)&&<div className="metadata-provider"><Select aria-label={t('match.provider')} value={provider} disabled={bindingId!==null} onChange={e=>{requestGenerationRef.current++;setLoading(false);setResults([]);setError(null);setSearched(false);setBindingId(null);if(provider==='TMDB')void api.tmdbCancel().catch(()=>undefined);setProvider(e.target.value as 'BANGUMI'|'TMDB');}}><option value="BANGUMI">Bangumi</option><option value="TMDB">TMDb</option></Select>{provider==='TMDB'&&node.nodeType!=='CONTAINER'&&<Select aria-label={t('match.tmdbType')} value={tmdbType} disabled={bindingId!==null} onChange={event=>{requestGenerationRef.current++;setLoading(false);setResults([]);setError(null);setSearched(false);void api.tmdbCancel().catch(()=>undefined);setTmdbType(event.target.value as 'AUTO'|'MOVIE'|'TV');}}><option value="AUTO">{t('match.typeAuto')}</option><option value="MOVIE">{t('match.typeMovie')}</option><option value="TV">{t('match.typeTv')}</option></Select>}</div>}
         {prefill && <div className="bangumi-keyword-context">
           <div><span>{t("bangumi.originalName")}</span><strong title={prefill.originalName}>{prefill.originalName}</strong></div>
           <div><span>{t("bangumi.extractedName")}</span><button disabled={bindingId !== null} onClick={() => updateKeyword(prefill.extractedName)} type="button">{prefill.extractedName || t("bangumi.noExtracted")}</button></div>
@@ -174,7 +176,7 @@ export function BangumiModal({ node, onClose, onBound, onStale, onMetadataChange
         </form>
 
         {error && <div className="inline-error" role="alert"><Icon name="warning" /><span><strong>{t(errorKind==='search'?'match.searchFailed':'match.saveFailed',{provider:providerName})}</strong><small>{error}</small></span>{errorKind === "search" && <button onClick={() => void search()} type="button">{t("common.retry")}</button>}</div>}
-        <MatchingResults results={results} loading={loading} searched={searched} error={!!error} bindingId={bindingId} currentBindingId={provider==='TMDB'?(node.tmdbBinding?.active?node.tmdbBinding.movie.id:null):node.binding?.providerSubjectId} provider={provider} onChoose={result=>void bind(result)}/>
+        <MatchingResults currentTmdbType={node.tmdbBinding?.movie.mediaType??"MOVIE"} results={results} loading={loading} searched={searched} error={!!error} bindingId={bindingId} currentBindingId={provider==='TMDB'?(node.tmdbBinding?.active?node.tmdbBinding.movie.id:null):node.binding?.providerSubjectId} provider={provider} onChoose={result=>void bind(result)}/>
       </section>
     </div>
   );

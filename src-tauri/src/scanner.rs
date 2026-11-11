@@ -144,20 +144,22 @@ pub(crate) fn run_scan_with_matcher<F>(
     let mut scan_targets = targets.clone();
     let mut root_results: HashMap<i64, (String, u64, Option<String>)> = HashMap::new();
     let mut completed_roots = HashSet::new();
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        if !background {
-            // A manual/rebuild scan can repair or partially replace the index. Its next startup
-            // must establish a new baseline, including after interruption.
-            let connection = database.connect()?;
-            for target in &targets {
-                connection
-                    .execute(
-                        "DELETE FROM library_scan_snapshots WHERE library_root_id=?1",
-                        [target.root.id],
-                    )
-                    .map_err(|error| error.to_string())?;
+    let mut before_changes = HashMap::new();
+    for target in &targets {
+        if let std::collections::hash_map::Entry::Vacant(entry) =
+            before_changes.entry(target.root.id)
+        {
+            let scoped = targets
+                .iter()
+                .filter(|t| t.root.id == target.root.id)
+                .cloned()
+                .collect::<Vec<_>>();
+            if let Ok(snapshot) = crate::scan_changes::capture(database, &scoped) {
+                entry.insert(snapshot);
             }
         }
+    }
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         if background {
             let next = crate::incremental::prepare(database, &targets, control, &extension_set)?;
             scan_targets = next.targets.clone();
@@ -204,6 +206,17 @@ pub(crate) fn run_scan_with_matcher<F>(
                 Ok(()) => {
                     let progress = control.progress();
                     let errors = progress.errors - before;
+                    if !background && errors == 0 {
+                        // Invalidate only after a complete manual range succeeds. A failed or
+                        // cancelled scan must retain its last successful incremental baseline.
+                        database
+                            .connect()?
+                            .execute(
+                                "DELETE FROM library_scan_snapshots WHERE library_root_id=?1",
+                                [root_id],
+                            )
+                            .map_err(|e| ScanAbort::Failed(e.to_string()))?;
+                    }
                     root_results.insert(
                         root_id,
                         (
@@ -335,6 +348,25 @@ pub(crate) fn run_scan_with_matcher<F>(
     }
     let final_progress = progress.clone();
     drop(progress);
+    for (root_id, before) in before_changes {
+        let scoped = targets
+            .iter()
+            .filter(|t| t.root.id == root_id)
+            .cloned()
+            .collect::<Vec<_>>();
+        let result = root_results.get(&root_id);
+        let complete =
+            completed_roots.contains(&root_id) && result.is_some_and(|r| r.0 == "SUCCESS");
+        let errors = result.map_or(final_progress.errors, |r| r.1);
+        let _ = crate::scan_changes::finish(
+            database,
+            &scoped,
+            &before,
+            &control.scan_id,
+            complete,
+            errors,
+        );
+    }
     for target in &targets {
         let mut root_progress = final_progress.clone();
         root_progress.root_id = target.root.id;
@@ -2112,6 +2144,7 @@ mod tests {
             })),
         };
         let node = crate::models::MediaNode {
+            card_progress: None,
             tmdb_binding: None,
             media_kind: crate::models::LibraryMediaKind::Video,
             direct_comic_book_count: 0,
@@ -2125,6 +2158,7 @@ mod tests {
             absolute_path: r"C:\media\current".into(),
             folder_name: "current".into(),
             display_name: "current".into(),
+            manual_display_name: false,
             node_type: NodeType::AutoWork,
             manual_type_override: false,
             cover_source: crate::models::CoverSource::Placeholder,

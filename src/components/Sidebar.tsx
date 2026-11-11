@@ -1,10 +1,9 @@
 import type { LibraryRoot } from "../types/media";
-import { compactPath } from "../lib/format";
 import brandMark from "../../src-tauri/icons/icon.png";
 import { Icon } from "./Icon";
 import { useI18n } from "../lib/i18n";
 
-export type AppPage = "all" | "library" | "search" | "recent" | "favorites" | "settings";
+export type AppPage = "all" | "library" | "organize" | "search" | "recent" | "favorites" | "settings";
 
 interface SidebarProps {
   page: AppPage;
@@ -28,7 +27,6 @@ export function Sidebar({ page, roots, selectedRootId, loading, onNavigate, onSe
       </button>
 
       <nav className="sidebar-nav" aria-label={t("sidebar.mainNavigation")}>
-        <p className="nav-section-label">{t("sidebar.browse")}</p>
         <button className={`nav-item ${page === "all" ? "is-active" : ""}`} onClick={() => onNavigate("all")} type="button">
           <Icon name="archive" /><span>{t("sidebar.allResources")}</span>
         </button>
@@ -41,6 +39,8 @@ export function Sidebar({ page, roots, selectedRootId, loading, onNavigate, onSe
         <button className={`nav-item ${page === "favorites" ? "is-active" : ""}`} onClick={() => onNavigate("favorites")} type="button">
           <Icon name="bookmark" /><span>{t("sidebar.favorites")}</span>
         </button>
+
+        <button className={`nav-item ${page === "organize" ? "is-active" : ""}`} onClick={() => onNavigate("organize")} type="button"><Icon name="shelf"/><span>{t('tidy.title')}</span></button>
 
         <div className="nav-library-heading">
           <p className="nav-section-label">{t("sidebar.library")}</p>
@@ -61,10 +61,11 @@ export function Sidebar({ page, roots, selectedRootId, loading, onNavigate, onSe
               onClick={() => onSelectRoot(root.id)}
               onContextMenu={(event) => { event.preventDefault(); onRootMenu(event, root); }}
               title={root.path}
+              aria-label={`${root.displayName} · ${root.path}${root.hiddenFromAll ? ` · ${t("library.hiddenFromAll")}` : ""}`}
               type="button"
             >
-              <Icon name="folder" />
-              <span><strong>{root.displayName}</strong><small>{compactPath(root.path, 28)}</small></span>
+              <Icon name={root.hiddenFromAll ? "eye-off" : "folder"} />
+              <span><strong>{root.displayName}</strong></span>
             </button>{root.scanHealth && !root.scanHealth.warningsIgnored && ["PARTIAL", "FAILED"].includes(root.scanHealth.outcome) && <button className="root-scan-warning" onClick={() => onNavigate("settings")} title={`${root.displayName}: ${t("health.showDetails")}`} aria-label={`${root.displayName}: ${t("health.showDetails")}`} type="button"><Icon name="warning" /></button>}</div>
           ))}
         </div>

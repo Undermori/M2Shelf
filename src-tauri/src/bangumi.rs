@@ -935,6 +935,30 @@ fn valid_image_signature(content_type: &str, bytes: &[u8]) -> bool {
     }
 }
 
+pub(crate) fn valid_candidate_url(url: &str) -> bool {
+    Url::parse(url).is_ok_and(|u| {
+        u.scheme() == "https"
+            && u.username().is_empty()
+            && u.password().is_none()
+            && is_allowed_cover_host(u.host_str())
+    })
+}
+pub(crate) fn candidate_bytes(url: &str) -> AppResult<Vec<u8>> {
+    if !valid_candidate_url(url) {
+        return Err("COVER_SELECTION_INVALID".into());
+    }
+    let active = client()?;
+    let mut response = download_response_with_retry(&active, url)?;
+    let mut bytes = vec![];
+    response
+        .by_ref()
+        .take(15 * 1024 * 1024 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| "COVER_SELECTION_NETWORK")?;
+    cache::validate_cover_payload(&bytes)?;
+    Ok(bytes)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

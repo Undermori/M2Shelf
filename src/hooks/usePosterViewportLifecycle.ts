@@ -10,6 +10,7 @@ interface PosterViewportLifecycleOptions {
 interface PosterViewportLifecycle {
   coverRequested: boolean;
   coverVisible: boolean;
+  visibleRef: {current:boolean};
 }
 
 interface RetainedPoster {
@@ -69,8 +70,10 @@ export function usePosterViewportLifecycle<T extends Element>(
     retentionMarginPx,
   }: PosterViewportLifecycleOptions,
 ): PosterViewportLifecycle {
+  const visibleRef=useRef(false);
+  const proximity=useRef({preheat:false,retention:false});
   const retentionTokenRef = useRef(Symbol("retained-poster"));
-  const [lifecycle, setLifecycle] = useState<PosterViewportLifecycle>({
+  const [lifecycle, setLifecycle] = useState<Omit<PosterViewportLifecycle,'visibleRef'>>({
     coverRequested: false,
     coverVisible: false,
   });
@@ -101,13 +104,16 @@ export function usePosterViewportLifecycle<T extends Element>(
     };
 
     if (!target) {
+      visibleRef.current=true;
       activate();
       return () => {
         disposed = true;
+        visibleRef.current=false;
         forgetRetainedPoster(retentionToken);
       };
     }
     if (typeof IntersectionObserver === "undefined") {
+      visibleRef.current=true;
       if (retentionEnabled) {
         retainPoster(retentionToken, {
           // Without geometry support the hard cap is safer than an unbounded soft overage.
@@ -118,6 +124,7 @@ export function usePosterViewportLifecycle<T extends Element>(
       setLifecycle({ coverRequested: true, coverVisible: true });
       return () => {
         disposed = true;
+        visibleRef.current=false;
         forgetRetainedPoster(retentionToken);
       };
     }
@@ -126,22 +133,29 @@ export function usePosterViewportLifecycle<T extends Element>(
     // the explicit root makes rootMargin a real preheat distance instead of having it clipped
     // away by the overflow ancestor.
     const scrollRoot = target.closest(".content-scroll");
+    const updateProtection=()=>updateRetainedPosterProximity(retentionToken,visibleRef.current||proximity.current.preheat||proximity.current.retention);
+    const stopVisibility=observePosterViewport(target,scrollRoot,0,visible=>{visibleRef.current=visible;if(visible)activate();updateProtection();});
     const stopActivation = observePosterViewport(target, scrollRoot, activationMarginPx, nearViewport => {
       if (disposed) return;
+      proximity.current.preheat=nearViewport;
       if (nearViewport) activate();
+      updateProtection();
     });
     const stopRetention = observePosterViewport(target, scrollRoot, retentionMarginPx, nearViewport => {
       if (disposed) return;
-      if (retentionEnabled) updateRetainedPosterProximity(retentionToken, nearViewport);
+      proximity.current.retention=nearViewport;
+      if (retentionEnabled) updateProtection();
     });
 
     return () => {
       disposed = true;
+      visibleRef.current=false;
+      stopVisibility();
       forgetRetainedPoster(retentionToken);
       stopActivation();
       stopRetention();
     };
   }, [activationMarginPx, identity, retentionEnabled, retentionMarginPx, targetRef]);
 
-  return lifecycle;
+  return {...lifecycle,visibleRef};
 }

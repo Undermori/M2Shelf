@@ -1,3 +1,4 @@
+import {useCollection} from '../lib/collectionState';
 import { CollectionSortControl } from "../components/CollectionSortControl";
 import { SmartMixedBrowser, type SmartPresentation } from "../components/SmartMixedBrowser";
 import type {NodeAction} from '../components/ContextMenu';
@@ -10,7 +11,7 @@ import { Icon } from "../components/Icon";
 import { LoadingState } from "../components/LoadingState";
 import { MediaFileList } from "../components/MediaFileList";
 import { PosterGrid } from "../components/PosterGrid";
-import { TagFilter } from "../components/TagFilter";
+import {CollectionFilters} from "../components/CollectionFilters";
 import { OtherResourceList } from "../components/OtherResourceList";
 import { SelectionToolbar } from "../components/SelectionToolbar";
 import { compareMediaNodes, nodeMatchesQuery, nodeDisplayTitle, nodeTypeLabel } from "../lib/format";
@@ -20,7 +21,7 @@ import {readingFiles} from '../lib/readingFiles';
 
 interface BrowsePageProps {
   onLogicalCount?: (rootId:number,count:number)=>void;
-  onReadComic?:(book:import('../types/comic').ComicBook)=>void;
+  onReadComic?:(book:import('../types/comic').ComicBook,list?:import('../types/comic').ComicBook[])=>void;
   data: BrowseResult | null;
   currentNode: MediaNode | null;
   loading: boolean;
@@ -45,7 +46,6 @@ interface BrowsePageProps {
   onRevealResource: (file: ResourceFile) => void;
   onScan: () => void;
   onAddRoot: () => void;
-  onSearch: (query: string) => void;
   coverRevision: number;
   editMode: boolean;
   selectedNodeIds: ReadonlySet<number>;
@@ -60,8 +60,9 @@ interface BrowsePageProps {
   onMatch: (nodeIds: number[] | null, rematchExisting: boolean) => void;
 }
 
-export function BrowsePage({ onLogicalCount,onReadComic,data, currentNode, loading, viewMode, onViewMode, filter, onFilter, tagFilterId, onTagFilter, sort, onSort, onRoot, onBreadcrumb, onOpenNode, onMenu, onNodeAction, onBangumi, onRetryCover, onPlay, onRevealMedia, onOpenResource, onRevealResource, onScan, onAddRoot, onSearch, coverRevision, editMode, selectedNodeIds, matchBusy, onEditMode, onToggleSelection, onSelectAll, onClearSelection, onBatchTags, onBatchFavorites, onBatchMenu, onMatch }: BrowsePageProps) {
+export function BrowsePage({ onLogicalCount,onReadComic,data, currentNode, loading, viewMode, onViewMode, filter, onFilter, tagFilterId, onTagFilter, sort, onSort, onRoot, onBreadcrumb, onOpenNode, onMenu, onNodeAction, onBangumi, onRetryCover, onPlay, onRevealMedia, onOpenResource, onRevealResource, onScan, onAddRoot, coverRevision, editMode, selectedNodeIds, matchBusy, onEditMode, onToggleSelection, onSelectAll, onClearSelection, onBatchTags, onBatchFavorites, onBatchMenu, onMatch }: BrowsePageProps) {
   const { language, number, t } = useI18n();
+  const collection=useCollection();const stateScope=`library:${data?.root.id??0}`;const stateFilter=collection?.filters[stateScope]??'';
   const [presentation,setPresentation]=useState<SmartPresentation|null>(null);
   useEffect(()=>setPresentation(null),[data?.root.id,currentNode?.id]);
   const smart=data?.root.bookOrganizationStrategy==='SMART_MIXED'&&!currentNode;
@@ -74,14 +75,15 @@ export function BrowsePage({ onLogicalCount,onReadComic,data, currentNode, loadi
     const query = filter.trim().toLocaleLowerCase();
     return [...(data?.nodes ?? [])]
       .filter((node) => nodeMatchesQuery(node, query, language))
+      .filter(node=>!collection||collection.matches(collection.nodeTargets(node),stateFilter))
       .filter((node) => effectiveTagFilterId == null || node.userTags.some((tag) => tag.id === effectiveTagFilterId))
       .sort((a, b) => compareMediaNodes(a, b, sort, language));
-  }, [data?.nodes, effectiveTagFilterId, filter, language, sort]);
+  }, [collection,stateFilter,data?.nodes, effectiveTagFilterId, filter, language, sort]);
   const mediaFiles = data?.mediaFiles ?? [];
-  const reading = readingFiles(data?.comicBooks ?? [], data?.resourceFiles ?? []);
+  const reading = readingFiles((data?.comicBooks ?? []).filter(book=>!collection||collection.matches([{kind:"BOOK",id:book.id}],stateFilter)), stateFilter?[]:data?.resourceFiles ?? []);
   const resourceFiles = reading.other;
   const title = smart&&presentation?presentation.title:currentNode ? nodeDisplayTitle(currentNode, language) : data?.root.displayName ?? t("browse.libraryFallback");
-  const hasActiveFilter = Boolean(filter.trim()) || effectiveTagFilterId != null;
+  const hasActiveFilter = Boolean(filter.trim()) || effectiveTagFilterId != null||!!stateFilter;
   const directCount = mediaFiles.length + (bookLibrary?reading.count:0);
 
   if (loading && !data) return <LoadingState />;
@@ -100,13 +102,13 @@ export function BrowsePage({ onLogicalCount,onReadComic,data, currentNode, loadi
           </div>
           <div className="toolbar-actions">
             <button aria-pressed={editMode} className={`button secondary edit-mode-button ${editMode ? "is-active" : ""}`} onClick={() => onEditMode(!editMode)} type="button"><Icon name="edit" />{editMode ? t("selection.exit") : t("selection.editMode")}</button>
-            <button className="button secondary scan-button" disabled={matchBusy || (editMode && selectedNodeIds.size === 0)} onClick={() => onMatch(editMode ? [...selectedNodeIds] : (smart?presentation?.visibleNodes??[]:data.nodes).map((node) => node.id), editMode)} type="button"><Icon name="bangumi" />{matchBusy ? t("selection.matching") : editMode ? t("selection.rematchSelectedCount", { count: number(selectedNodeIds.size) }) : t("browse.matchExisting")}</button>
-            <button className="button secondary scan-button" disabled={matchBusy} onClick={onScan} type="button"><Icon name="refresh" />{currentNode ? t("browse.scanAndMatchDirectory") : t("browse.scanAndMatchLibrary")}</button>
+            <button className="button secondary scan-button" aria-label={editMode?undefined:t("browse.matchExisting")} title={t("browse.matchExisting")} disabled={matchBusy || (editMode && selectedNodeIds.size === 0)} onClick={() => onMatch(editMode ? [...selectedNodeIds] : (smart?presentation?.visibleNodes??[]:data.nodes).map((node) => node.id), editMode)} type="button"><Icon name="bangumi" />{matchBusy ? t("selection.matching") : editMode ? t("selection.rematchSelectedCount", { count: number(selectedNodeIds.size) }) : t("layout.match")}</button>
+            <button className="button secondary scan-button" aria-label={currentNode?t("browse.scanAndMatchDirectory"):t("browse.scanAndMatchLibrary")} title={currentNode?t("browse.scanAndMatchDirectory"):t("browse.scanAndMatchLibrary")} disabled={matchBusy} onClick={onScan} type="button"><Icon name="refresh" />{t("layout.scan")}</button>
           </div>
         </div>
           <div className="browse-controls collection-filters">
-            <label className="search-field"><Icon name="search" /><input aria-label={t("browse.filterAria")} onChange={(event) => onFilter(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && filter.trim()) onSearch(filter.trim()); }} placeholder={t("browse.filterPlaceholder")} value={filter} />{filter && <button aria-label={t("all.clearFilter")} onClick={() => onFilter("")} type="button"><Icon name="close" /></button>}</label>
-            <TagFilter nodes={smart?presentation?.nodes??[]:data.nodes} value={tagFilterId} onChange={onTagFilter} />
+            <label className="search-field"><Icon name="search" /><input aria-label={t("browse.filterAria")} onChange={(event) => onFilter(event.target.value)} placeholder={t("browse.filterPlaceholder")} value={filter} />{filter && <button aria-label={t("all.clearFilter")} onClick={() => onFilter("")} type="button"><Icon name="close" /></button>}</label>
+            <CollectionFilters nodes={smart?presentation?.nodes??[]:data.nodes} value={tagFilterId} onChange={onTagFilter} scope={stateScope}/>
             <CollectionSortControl value={sort} onChange={onSort} />
             <div className="view-toggle" aria-label={t("common.displayMode")}><button className={viewMode === "grid" ? "is-active" : ""} onClick={() => onViewMode("grid")} title={t("common.grid")} type="button"><Icon name="grid" /></button><button className={viewMode === "list" ? "is-active" : ""} onClick={() => onViewMode("list")} title={t("common.list")} type="button"><Icon name="list" /></button></div>
           </div>
@@ -114,12 +116,12 @@ export function BrowsePage({ onLogicalCount,onReadComic,data, currentNode, loadi
 
       <div className="page-content">
         {editMode && <SelectionToolbar selectedCount={selectedNodeIds.size} visibleCount={smart?presentation?.visibleNodes.length??0:nodes.length} busy={matchBusy} onSelectAll={() => onSelectAll((smart?presentation?.visibleNodes??[]:nodes).map((node) => node.id))} onClear={onClearSelection} onTags={onBatchTags} onFavorites={onBatchFavorites} onMore={onBatchMenu} onRematch={() => onMatch([...selectedNodeIds], true)} onExit={() => onEditMode(false)} />}
-        {smart&&<SmartMixedBrowser root={data.root} sort={sort} filter={filter} tagFilterId={effectiveTagFilterId} viewMode={viewMode} coverRevision={coverRevision} onRead={b=>onReadComic?.(b)} onPresentation={setPresentation} onOpenNode={onOpenNode} onNodeAction={onNodeAction} onBangumi={onBangumi} onRetryCover={onRetryCover} editMode={editMode} selectedNodeIds={selectedNodeIds} onSelect={onToggleSelection} fallback={<><PosterGrid nodes={nodes} viewMode={viewMode} onOpen={onOpenNode} onMenu={onMenu} onBangumi={onBangumi} onRetryCover={onRetryCover} coverRevision={coverRevision} editMode={editMode} selectedNodeIds={selectedNodeIds} onSelect={onToggleSelection}/>{reading.count>0&&<ComicBookList books={reading.books} resources={reading.readable} onReadResource={onOpenResource} onRevealResource={onRevealResource} onRead={b=>onReadComic?.(b)}/>}</>}/>}
-        {!smart&&bookLibrary&&reading.count>0&&<section className="content-section"><div className="section-heading"><div><p className="eyebrow">{t('book.readableFiles')}</p><h2>{t('comic.doubleClickRead')}</h2></div><span>{t('comic.books',{count:reading.count})}</span></div><ComicBookList books={reading.books} resources={reading.readable} onReadResource={onOpenResource} onRevealResource={onRevealResource} onRead={b=>onReadComic?.(b)}/></section>}
+        {smart&&<SmartMixedBrowser root={data.root} sort={sort} filter={filter} tagFilterId={effectiveTagFilterId} viewMode={viewMode} coverRevision={coverRevision} onRead={(b,list)=>onReadComic?.(b,list)} onPresentation={setPresentation} onOpenNode={onOpenNode} onNodeAction={onNodeAction} onBangumi={onBangumi} onRetryCover={onRetryCover} editMode={editMode} selectedNodeIds={selectedNodeIds} onSelect={onToggleSelection} fallback={<><PosterGrid nodes={nodes} viewMode={viewMode} onOpen={onOpenNode} onMenu={onMenu} onBangumi={onBangumi} onRetryCover={onRetryCover} coverRevision={coverRevision} editMode={editMode} selectedNodeIds={selectedNodeIds} onSelect={onToggleSelection}/>{reading.count>0&&<ComicBookList books={reading.books} resources={reading.readable} onReadResource={onOpenResource} onRevealResource={onRevealResource} onRead={(b,list)=>onReadComic?.(b,list)}/>}</>}/>}
+        {!smart&&bookLibrary&&reading.count>0&&<section className="content-section"><div className="section-heading"><div><p className="eyebrow">{t('book.readableFiles')}</p><h2>{t('comic.doubleClickRead')}</h2></div><span>{t('comic.books',{count:reading.count})}</span></div><ComicBookList books={reading.books} resources={reading.readable} onReadResource={onOpenResource} onRevealResource={onRevealResource} onRead={(b,list)=>onReadComic?.(b,list)}/></section>}
 
         {mediaFiles.length > 0 && <section className="content-section"><div className="section-heading"><div><p className="eyebrow">{t("browse.directVideos")}</p><h2>{t("browse.doubleClickPlay")}</h2></div><span>{t("browse.videoCount", { count: mediaFiles.length })}</span></div><MediaFileList modifiedSort={sort.startsWith("modified-") ? sort : undefined} files={mediaFiles} onPlay={onPlay} onReveal={onRevealMedia} /></section>}
         {!smart&&nodes.length > 0 && <section className="content-section">{currentNode && <div className="section-heading"><div><p className="eyebrow">{t("browse.children")}</p><h2>{t("browse.continue")}</h2></div><span>{t("browse.nodeCount", { count: nodes.length })}</span></div>}<PosterGrid showModifiedTime={sort.startsWith("modified-")} nodes={nodes} viewMode={viewMode} onOpen={onOpenNode} onMenu={onMenu} onBangumi={onBangumi} onRetryCover={onRetryCover} coverRevision={coverRevision} editMode={editMode} selectedNodeIds={selectedNodeIds} onSelect={onToggleSelection} /></section>}
-        {!bookLibrary&&reading.count>0&&<details className="content-section attached-documents"><summary>{t('smart.attachments')} ({reading.count})</summary><ComicBookList books={reading.books} resources={reading.readable} onReadResource={onOpenResource} onRevealResource={onRevealResource} onRead={b=>onReadComic?.(b)}/></details>}
+        {!bookLibrary&&reading.count>0&&<details className="content-section attached-documents"><summary>{t('smart.attachments')} ({reading.count})</summary><ComicBookList books={reading.books} resources={reading.readable} onReadResource={onOpenResource} onRevealResource={onRevealResource} onRead={(b,list)=>onReadComic?.(b,list)}/></details>}
         {(!smart||presentation?.path===data.root.path)&&resourceFiles.length > 0 && <section className="content-section"><div className="section-heading"><div><p className="eyebrow">{t("browse.otherResources")}</p><h2>{t("browse.nonVideoFiles")}</h2></div><span>{t("browse.fileCount", { count: resourceFiles.length })}</span></div><OtherResourceList modifiedSort={sort.startsWith("modified-") ? sort : undefined} files={resourceFiles} folders={[]} onOpenFile={onOpenResource} onRevealFile={onRevealResource} onOpenFolder={onOpenNode} onFolderMenu={onMenu} /></section>}
         {!smart&&nodes.length === 0 && mediaFiles.length === 0 && resourceFiles.length === 0 && !reading.count && <EmptyState compact icon={hasActiveFilter ? "search" : "folder"} title={hasActiveFilter ? t("browse.noMatch") : t("browse.empty")} description={hasActiveFilter ? t("browse.noMatchDescription") : t("browse.emptyFolderDescription")} />}
       </div>

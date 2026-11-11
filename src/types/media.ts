@@ -32,7 +32,9 @@ export type ResourceType =
   | "PLAYLIST"
   | "OTHER";
 
+export interface ScanChanges { scanId: string; scope: string[]; added: number; updated: number; unchanged: number; removed: number | null; errors: number; complete: boolean; addedNodeIds: number[]; }
 export interface ScanHealth {
+  changes?: ScanChanges | null;
   warningsIgnored?: boolean;
   lastAutoAttemptAt: string | null;
   lastSuccessAt: string | null;
@@ -43,6 +45,7 @@ export interface ScanHealth {
 export interface WorkTarget { sourceNodeIds: number[]; snapshot: string; }
 export interface NestedMediaFile { file: MediaFile; sourceNodeId: number; sourceName: string; relativeDirectory: string; }
 export interface LibraryRoot {
+  hiddenFromAll?: boolean;
   bookOrganizationStrategy?: "LEGACY" | "SMART_MIXED";
   autoBangumi?: boolean;
   mediaKind?: LibraryMediaKind;
@@ -100,6 +103,10 @@ export interface FavoriteFolder {
 }
 
 export interface MediaNode {
+  /** Authoritative summary returned with this collection snapshot, ready before first paint. */
+  cardProgress?: import('./cardProgress').CardProgress;
+  /** Frontend response fence, never persisted or used as media metadata. */
+  cardProgressGeneration?: number;
   tmdbBinding?: import("./tmdb").TmdbBinding | null;
   mediaKind?: LibraryMediaKind;
   directComicBookCount?: number;
@@ -114,6 +121,8 @@ export interface MediaNode {
   absolutePath: string;
   folderName: string;
   displayName: string;
+  /** Explicit application-owned title override, independent of provider metadata. */
+  manualDisplayName?: boolean;
   nodeType: NodeType;
   manualTypeOverride: boolean;
   coverSource: CoverSource;
@@ -192,6 +201,7 @@ export interface RecentlyWatchedEntry {
 }
 
 export interface SearchHit {
+  noteExcerpt?:string|null;
   kind: "NODE" | "MEDIA_FILE" | "COMIC_BOOK";
   comicBook?:import('./comic').ComicBook|null;
   node: MediaNode;
@@ -328,6 +338,10 @@ export interface ScanStarted {
 }
 
 export interface NodeDetail {
+  episodeWatch?: import('./episodes').EpisodeWatchSnapshot;
+  episodeWatchGeneration?: number;
+  // Sparse deviations: omitted direct videos are MAIN, omitted nested videos are OTHER.
+  videoSections?:Array<{fileId:number;section:"MAIN"|"SPS"|"OTHER"}>;
   comicBooks?: import('./comic').ComicBook[];
   workTarget?: WorkTarget | null;
   nestedMediaFiles?: NestedMediaFile[];

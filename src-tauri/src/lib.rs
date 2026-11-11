@@ -2,26 +2,43 @@ mod alias_sync;
 mod auto_match;
 mod bangumi;
 mod cache;
+mod card_progress;
+mod collection;
+mod collection_backup;
 mod comic_reader;
 mod comics;
 mod commands;
+mod cover_selection;
 mod db;
 mod ebooks;
+mod episode_watch;
 mod incremental;
+#[cfg(test)]
+mod incremental_tests;
 mod kindle_books;
+mod library_paths;
+mod library_relocation;
 mod logical_works;
 mod media_scraper;
 pub mod models;
+mod mpv_ipc;
+mod next_volume;
+mod notes;
+mod organize;
+mod pdf_cover;
 mod player;
 pub mod portable_update;
 mod poster_cache;
 mod poster_cache_db;
+mod poster_resource;
 #[cfg(test)]
 mod reader_extension_tests;
 #[cfg(test)]
 mod review_tests;
+mod scan_changes;
 mod scanner;
 mod scraper_metadata;
+mod search_filters;
 mod single_instance;
 mod smart_mixed;
 mod text_books;
@@ -30,6 +47,7 @@ mod title_extractor;
 mod tmdb;
 mod tmdb_credentials;
 pub mod update;
+mod video_presentation;
 mod window_state;
 mod works;
 
@@ -49,6 +67,7 @@ use tauri::{AppHandle, Manager, PhysicalSize, RunEvent, WindowEvent};
 pub const DATABASE_URL: &str = "sqlite:morimediashelf.db";
 
 pub struct AppState {
+    mpv_monitor: mpv_ipc::Monitor,
     database: Database,
     default_cover_cache_dir: PathBuf,
     scan_lifecycle: Mutex<()>,
@@ -57,11 +76,16 @@ pub struct AppState {
     window_size: window_state::WindowSizeMemory,
     update_manager: update::UpdateManager,
     update_recovery_notice: Mutex<Option<String>>,
+    collection_restore_notice: Mutex<Option<String>>,
     update_exit_in_progress: AtomicBool,
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    if let Err(error) = single_instance::wait_for_collection_restart_parent() {
+        eprintln!("collection restart failed: {error}");
+        return;
+    }
     let active_update_transaction = match portable_update::current_update_transaction_id() {
         Ok(value) => value,
         Err(error) => {
@@ -94,7 +118,7 @@ pub fn run() {
             return;
         }
     };
-    let app = tauri::Builder::default()
+    let app = poster_resource::register(tauri::Builder::default())
         .plugin(tauri_plugin_dialog::init())
         .setup(move |app| {
             let app_data_dir = app
@@ -102,6 +126,8 @@ pub fn run() {
                 .app_data_dir()
                 .map_err(|error| io::Error::other(format!("无法确定应用数据目录：{error}")))?;
             std::fs::create_dir_all(&app_data_dir)?;
+            let collection_restore_notice =
+                collection_backup::startup(&app_data_dir).map_err(io::Error::other)?;
             let update_cache_dir = app_data_dir.join("updates");
             let default_cover_cache_dir = app_data_dir.join("cache").join("covers");
             let database = Database::new(app_data_dir.join("morimediashelf.db"));
@@ -120,15 +146,9 @@ pub fn run() {
                 None
             };
             let configured_cache = database
-                .get_settings(&default_cover_cache_dir)
-                .map(|settings| PathBuf::from(settings.cover_cache_directory))
+                .poster_cache_root(&default_cover_cache_dir)
                 .map_err(io::Error::other)?;
-            let library_roots = database
-                .list_roots()
-                .map_err(io::Error::other)?
-                .into_iter()
-                .map(|root| PathBuf::from(root.path))
-                .collect::<Vec<_>>();
+            let library_roots = database.library_paths().map_err(io::Error::other)?;
             let update_recovery_notice =
                 match update::ensure_safe_update_cache(&update_cache_dir, &library_roots) {
                     Ok(_) => {
@@ -168,6 +188,7 @@ pub fn run() {
                 }
             }
             app.manage(AppState {
+                mpv_monitor: mpv_ipc::Monitor::default(),
                 database,
                 default_cover_cache_dir,
                 scan_lifecycle: Mutex::new(()),
@@ -176,6 +197,9 @@ pub fn run() {
                 window_size: window_state::WindowSizeMemory::new(initial_window_size),
                 update_manager: update::UpdateManager::new(update_cache_dir),
                 update_recovery_notice: Mutex::new(update_recovery_notice),
+                collection_restore_notice: Mutex::new(
+                    collection_restore_notice.map(str::to_string),
+                ),
                 update_exit_in_progress: AtomicBool::new(false),
             });
             Ok(())
@@ -195,6 +219,11 @@ pub fn run() {
             commands::correct_book_organization,
             commands::get_app_bootstrap,
             commands::get_comic_detail,
+            commands::get_next_volume,
+            commands::confirm_next_volume,
+            commands::episode_watch_snapshot,
+            commands::set_episode_watched,
+            commands::clear_episode_watch,
             commands::open_comic_book,
             commands::open_comic_in_explorer,
             commands::read_book_document,
@@ -208,14 +237,36 @@ pub fn run() {
             commands::acknowledge_update_recovery_notice,
             commands::show_main_window,
             commands::list_library_roots,
+            commands::set_library_hidden_from_all,
             commands::add_library_root,
             commands::remove_library_root,
             commands::update_library_root_name,
             commands::open_library_root_in_explorer,
             commands::set_library_auto_bangumi,
             commands::get_all_resources,
+            commands::card_progress,
             commands::list_hidden_nodes,
             commands::list_recently_watched,
+            commands::remove_recent_activity,
+            commands::clear_recent_activity,
+            commands::preview_embedded_cover,
+            commands::begin_cover_selection,
+            commands::cover_selection_candidates,
+            commands::apply_cover_selection,
+            commands::discard_cover_selection,
+            commands::preview_library_relocation,
+            commands::apply_library_relocation,
+            commands::discard_library_relocation,
+            commands::validate_library_path,
+            commands::get_private_note,
+            commands::save_private_note,
+            commands::collection_statuses,
+            commands::set_collection_status,
+            commands::export_collection_backup,
+            commands::prepare_collection_restore,
+            commands::discard_collection_restore,
+            commands::apply_collection_restore,
+            commands::collection_restore_notice,
             commands::list_favorite_folders,
             commands::create_favorite_folder,
             commands::rename_favorite_folder,
@@ -227,6 +278,9 @@ pub fn run() {
             commands::get_node_detail,
             commands::get_work_detail,
             commands::search_library,
+            commands::search_extensions,
+            commands::organize_issues,
+            commands::set_issue_reminder,
             commands::start_scan,
             commands::match_existing_content,
             commands::cancel_scan,
@@ -257,6 +311,9 @@ pub fn run() {
             commands::clear_node_cover,
             commands::get_cover_data_url,
             commands::get_book_cover_data_url,
+            commands::begin_pdf_cover,
+            commands::commit_pdf_cover,
+            commands::cancel_pdf_cover,
             commands::get_settings,
             commands::get_text_reader_settings,
             commands::update_text_reader_settings,

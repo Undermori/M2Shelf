@@ -1,3 +1,4 @@
+import {useCollection} from '../lib/collectionState';
 import { CollectionSortControl } from "../components/CollectionSortControl";
 import { useMemo, useState, useEffect } from "react";
 import type { AllResourcesResult, CollectionSort, MediaNode, ViewMode } from "../types/media";
@@ -6,7 +7,7 @@ import { Icon } from "../components/Icon";
 import { LoadingState } from "../components/LoadingState";
 import { PosterGrid } from "../components/PosterGrid";
 import { SelectionToolbar } from "../components/SelectionToolbar";
-import { TagFilter } from "../components/TagFilter";
+import {CollectionFilters} from "../components/CollectionFilters";
 import { compareMediaNodes, nodeMatchesQuery, nodeDisplayTitle, naturalCompare, compareFileModifiedTimes } from "../lib/format";
 import { allCollectionEntries, type BookCollectionEntry } from '../lib/bookCollection';
 import { MediaCard } from '../components/MediaCard';
@@ -36,7 +37,6 @@ interface AllResourcesPageProps {
   onRetryCover: (node: MediaNode, imageDecodeFailed?: boolean) => void;
   onScan: () => void;
   onAddRoot: () => void;
-  onSearch: (query: string) => void;
   coverRevision: number;
   editMode: boolean;
   selectedNodeIds: ReadonlySet<number>;
@@ -51,8 +51,9 @@ interface AllResourcesPageProps {
   onMatch: (nodeIds: number[] | null, rematchExisting: boolean) => void;
 }
 
-export function AllResourcesPage({ onOpenBookEntry,onRevealBook,mediaKind='ALL',onMediaKind,grouping, data, loading, viewMode, onViewMode, filter, onFilter, tagFilterId, onTagFilter, sort, onSort, onOpenNode, onMenu, onBangumi, onRetryCover, onScan, onAddRoot, onSearch, coverRevision, editMode, selectedNodeIds, matchBusy, onEditMode, onToggleSelection, onSelectAll, onClearSelection, onBatchTags, onBatchFavorites, onBatchMenu, onMatch }: AllResourcesPageProps) {
+export function AllResourcesPage({ onOpenBookEntry,onRevealBook,mediaKind='ALL',onMediaKind,grouping, data, loading, viewMode, onViewMode, filter, onFilter, tagFilterId, onTagFilter, sort, onSort, onOpenNode, onMenu, onBangumi, onRetryCover, onScan, onAddRoot, coverRevision, editMode, selectedNodeIds, matchBusy, onEditMode, onToggleSelection, onSelectAll, onClearSelection, onBatchTags, onBatchFavorites, onBatchMenu, onMatch }: AllResourcesPageProps) {
   const { language, number, t } = useI18n();
+  const collection=useCollection();const stateFilter=collection?.filters.all??'';
   const [bookMenu,setBookMenu]=useState<{x:number;y:number;book:ComicBook}|null>(null);
   useEffect(()=>setBookMenu(null),[data,grouping,editMode]);
   const sourceEntries=useMemo(()=>allCollectionEntries(data,grouping,editMode),[data,grouping,editMode]);
@@ -67,11 +68,12 @@ export function AllResourcesPage({ onOpenBookEntry,onRevealBook,mediaKind='ALL',
     return [...sourceEntries]
       .filter(({node,bookEntry})=>mediaKind==='ALL'||(bookEntry?.root.mediaKind??node?.mediaKind??'VIDEO')===mediaKind||node?.mediaKind==='VIDEO'&&(mediaKind==='ANIMATION'?node.binding?.providerSubjectType!==6:mediaKind==='LIVE_ACTION'&&node.binding?.providerSubjectType!==2))
       .filter(({node,bookEntry})=>!query||!!node&&nodeMatchesQuery(node,query,language)||bookEntry?.name.toLocaleLowerCase().includes(query)||bookEntry?.group?.books.some(book=>`${book.displayName} ${book.sourcePath??''}`.toLocaleLowerCase().includes(query))||node?.workView&&data?.works.find(work=>work.node.id===node.id)?.sources.some(source=>nodeMatchesQuery(source,query,language)))
+      .filter(({node,bookEntry})=>!collection||collection.matches(bookEntry?.group?bookEntry.group.books.map(book=>({kind:'BOOK' as const,id:book.id})):node?.workView?(data?.works.find(work=>work.node.id===node.id)?.sources??[]).flatMap(source=>collection.nodeTargets(source)):node?collection.nodeTargets(node):[],stateFilter))
       .filter(({node})=>effectiveTagFilterId==null||node?.userTags.some(tag=>tag.id===effectiveTagFilterId))
       .sort((a,b)=>a.node&&b.node?compareMediaNodes(a.node,b.node,sort,language):(sort.startsWith('title-')?(sort.endsWith('-desc')?-1:1)*naturalCompare(name(a),name(b),language):compareFileModifiedTimes(stamp(a),stamp(b),sort))||naturalCompare(name(a),name(b),language)||a.key.localeCompare(b.key));
-  }, [mediaKind,data?.works, sourceEntries, effectiveTagFilterId, filter, language, sort]);
+  }, [collection,stateFilter,mediaKind,data?.works, sourceEntries, effectiveTagFilterId, filter, language, sort]);
   const nodes=entries.flatMap(entry=>entry.node?[entry.node]:[]);
-  const hasActiveFilter = Boolean(filter.trim()) || effectiveTagFilterId != null || mediaKind!=='ALL';
+  const hasActiveFilter = Boolean(filter.trim()) || effectiveTagFilterId != null || mediaKind!=='ALL'||!!stateFilter;
 
   if (loading && !data) return <LoadingState label={t("all.loading")} />;
   if (!data) return <EmptyState eyebrow={t("all.eyebrow")} title={t("all.emptyTitle")} description={t("all.emptyDescription")} action={<button className="button primary" onClick={onAddRoot} type="button"><Icon name="plus" />{t("app.addMediaDirectory")}</button>} />;
@@ -84,8 +86,8 @@ export function AllResourcesPage({ onOpenBookEntry,onRevealBook,mediaKind='ALL',
           <div className="collection-title"><h1>{t("all.title")}</h1><span className="collection-count" role="status">{t("app.projectCount", { count: number(entries.length) })}{hasActiveFilter && <span> / {number(sourceEntries.length)}</span>}</span></div>
           <div className="toolbar-actions">
             <button aria-pressed={editMode} className={`button secondary edit-mode-button ${editMode ? "is-active" : ""}`} onClick={() => onEditMode(!editMode)} type="button"><Icon name="edit" />{editMode ? t("selection.exit") : t("selection.editMode")}</button>
-            <button className="button secondary scan-button" disabled={matchBusy || (editMode && selectedNodeIds.size === 0)} onClick={() => onMatch(editMode ? [...selectedNodeIds] : null, editMode)} type="button"><Icon name="bangumi" />{matchBusy ? t("selection.matching") : editMode ? t("selection.rematchSelectedCount", { count: number(selectedNodeIds.size) }) : t("all.matchExisting")}</button>
-            <button className="button secondary scan-button" disabled={matchBusy} onClick={onScan} type="button"><Icon name="refresh" />{t("all.scanAndMatch")}</button>
+            <button className="button secondary scan-button" aria-label={editMode?undefined:t("all.matchExisting")} title={t("all.matchExisting")} disabled={matchBusy || (editMode && selectedNodeIds.size === 0)} onClick={() => onMatch(editMode ? [...selectedNodeIds] : null, editMode)} type="button"><Icon name="bangumi" />{matchBusy ? t("selection.matching") : editMode ? t("selection.rematchSelectedCount", { count: number(selectedNodeIds.size) }) : t("layout.match")}</button>
+            <button className="button secondary scan-button" aria-label={t("all.scanAndMatch")} title={t("all.scanAndMatch")} disabled={matchBusy} onClick={onScan} type="button"><Icon name="refresh" />{t("layout.scan")}</button>
           </div>
         </div>
         <div className="media-kind-tabs" role="tablist" aria-label={t("comic.kind")}>
@@ -97,8 +99,8 @@ export function AllResourcesPage({ onOpenBookEntry,onRevealBook,mediaKind='ALL',
           }}>{t(label)}</button>)}
         </div>
           <div className="browse-controls collection-filters all-resources-filters">
-            <label className="search-field"><Icon name="search" /><input aria-label={t("all.filterAria")} onChange={(event) => onFilter(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && filter.trim()) onSearch(filter.trim()); }} placeholder={t("all.filterPlaceholder")} value={filter} />{filter && <button aria-label={t("all.clearFilter")} onClick={() => onFilter("")} type="button"><Icon name="close" /></button>}</label>
-            <TagFilter nodes={sourceNodes} value={tagFilterId} onChange={onTagFilter} />
+            <label className="search-field"><Icon name="search" /><input aria-label={t("all.filterAria")} onChange={(event) => onFilter(event.target.value)} placeholder={t("all.filterPlaceholder")} value={filter} />{filter && <button aria-label={t("all.clearFilter")} onClick={() => onFilter("")} type="button"><Icon name="close" /></button>}</label>
+            <CollectionFilters nodes={sourceNodes} value={tagFilterId} onChange={onTagFilter} scope="all"/>
             <CollectionSortControl value={sort} onChange={onSort} />
             <div className="view-toggle" aria-label={t("common.displayMode")}><button className={viewMode === "grid" ? "is-active" : ""} onClick={() => onViewMode("grid")} title={t("common.grid")} type="button"><Icon name="grid" /></button><button className={viewMode === "list" ? "is-active" : ""} onClick={() => onViewMode("list")} title={t("common.list")} type="button"><Icon name="list" /></button></div>
           </div>
@@ -106,7 +108,7 @@ export function AllResourcesPage({ onOpenBookEntry,onRevealBook,mediaKind='ALL',
       <div className="page-content">
         {editMode && <SelectionToolbar selectedCount={selectedNodeIds.size} visibleCount={nodes.length} busy={matchBusy} onSelectAll={() => onSelectAll(nodes.map((node) => node.id))} onClear={onClearSelection} onTags={onBatchTags} onFavorites={onBatchFavorites} onMore={onBatchMenu} onRematch={() => onMatch([...selectedNodeIds], true)} onExit={() => onEditMode(false)} />}
         {entries.length > 0 && <PosterGrid nodes={[]} viewMode={viewMode} onOpen={onOpenNode} onMenu={onMenu} onBangumi={onBangumi} onRetryCover={onRetryCover} coverRevision={coverRevision}>
-          {entries.map(({key,node,bookEntry})=>node?<MediaCard key={key} showModifiedTime={sort.startsWith('modified-')} node={node} viewMode={viewMode} onOpen={()=>bookEntry?onOpenBookEntry(bookEntry):onOpenNode(node)} onMenu={onMenu} onBangumi={onBangumi} onRetryCover={onRetryCover} coverRevision={coverRevision} editMode={editMode} selected={selectedNodeIds.has(node.id)} onSelect={onToggleSelection}/>:bookEntry?.group&&<BookPosterCard key={key} book={bookEntry.group.books[0]} title={bookEntry.name} count={bookEntry.group.books.length} series={bookEntry.group.kind==='SERIES'} root={bookEntry.root} viewMode={viewMode} revision={coverRevision} onOpen={()=>onOpenBookEntry(bookEntry)} onMenu={event=>{event.preventDefault();setBookMenu({x:Math.max(8,Math.min(event.clientX,window.innerWidth-245)),y:Math.max(8,Math.min(event.clientY,window.innerHeight-100)),book:bookEntry.group!.books[0]});}} editMode={editMode}/>)}
+          {entries.map(({key,node,bookEntry})=>node?<MediaCard key={key} showModifiedTime={sort.startsWith('modified-')} node={node} viewMode={viewMode} onOpen={()=>bookEntry?onOpenBookEntry(bookEntry):onOpenNode(node)} onMenu={onMenu} onBangumi={onBangumi} onRetryCover={onRetryCover} coverRevision={coverRevision} editMode={editMode} selected={selectedNodeIds.has(node.id)} onSelect={onToggleSelection}/>:bookEntry?.group&&<BookPosterCard key={key} book={bookEntry.group.books[0]} books={bookEntry.group.books} title={bookEntry.name} count={bookEntry.group.books.length} series={bookEntry.group.kind==='SERIES'} root={bookEntry.root} viewMode={viewMode} revision={coverRevision} onOpen={()=>onOpenBookEntry(bookEntry)} onMenu={event=>{event.preventDefault();setBookMenu({x:Math.max(8,Math.min(event.clientX,window.innerWidth-245)),y:Math.max(8,Math.min(event.clientY,window.innerHeight-100)),book:bookEntry.group!.books[0]});}} editMode={editMode}/>)}
         </PosterGrid>}
         {entries.length === 0 && <EmptyState compact icon={hasActiveFilter ? "search" : "folder"} title={hasActiveFilter ? t("all.noMatch") : t("all.temporarilyEmpty")} description={hasActiveFilter ? t("all.noMatchDescription") : t("all.emptyScanDescription")} />}
         {bookMenu&&<BookContextMenu {...bookMenu} onClose={()=>setBookMenu(null)} onReveal={onRevealBook}/>}

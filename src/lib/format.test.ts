@@ -1,6 +1,24 @@
 import { describe, expect, it } from "vitest";
-import { compareFileModifiedTimes, compareMediaNodes, formatRelativeTime, nodeMatchesQuery } from "./format";
+import { canBindTmdb, bindingDisplayTitle, compareFileModifiedTimes, compareMediaNodes, formatRelativeTime, nodeDisplayTitle, nodeMatchesQuery } from "./format";
 import type { MediaNode } from "../types/media";
+
+describe('manual display names', () => {
+  const bound = {displayName: 'Source', folderName: 'Source', nodeType: 'CONTAINER', userTags: [], binding: {providerTitle: 'Official', providerTitleCn: '官方', providerTitleEn: 'Official EN', providerTitleJa: '公式', providerTitleKo: '공식'}} as unknown as MediaNode;
+  it('uses an explicit name in every locale without appending a series suffix or changing provider titles', () => {
+    for (const language of ['zh-CN', 'en-US', 'ja-JP', 'ko-KR'] as const) {
+      const renamed = {...bound, displayName: 'My title [1080p]', manualDisplayName: true};
+      expect(nodeDisplayTitle(renamed, language)).toBe('My title [1080p]');
+      expect(bindingDisplayTitle(renamed, language)).toBe(bindingDisplayTitle(bound, language));
+      expect(nodeMatchesQuery(renamed, 'Official', language)).toBe(true);
+    }
+  });
+  it('overrides active TMDb titles, including when the chosen name equals the source name', () => {
+    const movie = {...bound, manualDisplayName: true, tmdbBinding: {active: true, movie: {title: 'Movie title'}}} as MediaNode;
+    expect(nodeDisplayTitle(movie)).toBe('Source');
+    expect(nodeDisplayTitle({...movie, manualDisplayName: false})).toContain('Movie title');
+    expect(nodeDisplayTitle({...bound, manualDisplayName: false}, 'en-US')).toContain('Official EN');
+  });
+});
 
 describe("source file update ordering", () => {
   it("compares instants across timezone offsets and puts unavailable dates last in both directions", () => {
@@ -35,4 +53,10 @@ it("matches official aliases and multilingual titles independently of the displa
   const node = { displayName: "Folder", folderName: "Folder", userTags: [], binding: { providerTitle: "フリップフラッパーズ", providerTitleCn: "轻拍翻转小魔女", providerAliases: ["Flip Flappers", "フリフラ"] } } as unknown as MediaNode;
   for (const query of ["轻拍", "flip", "ＦＬＩＰ", "フリフラ"]) expect(nodeMatchesQuery(node, query, "en-US")).toBe(true);
   expect(nodeMatchesQuery(node, "missing", "zh-CN")).toBe(false);
+});
+
+it('offers manual TMDb on real live-action/legacy series and preserves unsupported and aggregate boundaries',()=>{
+ const node={id:1,parentNodeId:2,nodeType:'CONTAINER',mediaKind:'LIVE_ACTION',totalVideoCount:63,binding:null} as unknown as MediaNode;
+ expect(canBindTmdb(node)).toBe(true);expect(canBindTmdb({...node,mediaKind:'VIDEO'})).toBe(true);
+ for(const patch of [{parentNodeId:null},{totalVideoCount:0},{nodeType:'MIXED' as const},{mediaKind:'ANIMATION' as const},{mediaKind:'COMIC' as const},{workTarget:{sourceNodeIds:[1,2],snapshot:'two-sources'}}]) expect(canBindTmdb({...node,...patch})).toBe(false);
 });

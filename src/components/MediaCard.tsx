@@ -1,3 +1,6 @@
+import {isBookKind} from "../types/media";
+import {useCardProgress,cardProgressLabel} from '../lib/cardProgress';
+import {useCollection} from '../lib/collectionState';
 import { memo, useEffect, useRef, useState } from "react";
 import type { MediaNode, ViewMode } from "../types/media";
 import { canBindBangumi, formatDate, nodeDisplayTitle, mediaBadge } from "../lib/format";
@@ -23,19 +26,35 @@ interface MediaCardProps {
   onSelect?: (node: MediaNode) => void;
 }
 
+// A progress/status update owns this text only; it must not rerender the
+// artwork, its observers or its measurement/decoding hooks.
+function CardSummary({node}:{node:MediaNode}) {
+  const {t}=useI18n();
+  const collection=useCollection();
+  const progress=useCardProgress(node,true);
+  const states=collection?.nodeTargets(node).map(target=>collection.get(target));
+  const status=states?.length&&states.every(s=>s==='COMPLETED')?'COMPLETED':states?.length===1?states[0]:undefined;
+  const book=['COMIC','EBOOK','DOUJIN','ARTBOOK'].includes(node.mediaKind??'');
+  const label=cardProgressLabel(t,book,progress,status||undefined);
+  const videos=node.totalVideoCount??node.directVideoCount??0;
+  const container=node.nodeType==='CONTAINER'||node.nodeType==='MIXED';
+  return <small className="card-summary" title={label||undefined}>
+    {label&&<>{label}<span aria-hidden="true"> · </span></>}{book?t('comic.books',{count:node.totalComicBookCount??0}):videos>0?t('card.videoCount',{count:videos}):container?t('card.childCount',{count:node.childMediaBranchCount??0}):t('card.awaitingScan')}
+  </small>;
+}
+
 function MediaCardComponent({ node, viewMode, onOpen, onMenu, onBangumi, onRetryCover, coverRevision, watchedAt, showModifiedTime = false, editMode = false, selected = false, onSelect }: MediaCardProps) {
   const { t } = useI18n();
   const cardRef = useRef<HTMLElement>(null);
   const hasCachedCover = Boolean(node.coverCachePath ?? node.binding?.coverCachePath) || ["COMIC","EBOOK","DOUJIN","ARTBOOK"].includes(node.mediaKind ?? "") && (node.totalComicBookCount ?? 0) > 0;
-  const { coverRequested, coverVisible } = usePosterViewportLifecycle(cardRef, node.id, {
-    activationMarginPx: 1_000,
+  const { coverRequested, coverVisible, visibleRef } = usePosterViewportLifecycle(cardRef, node.id, {
+    activationMarginPx: 3_000,
     retentionEnabled: hasCachedCover,
-    retentionMarginPx: 1_800,
+    retentionMarginPx: 4_200,
   });
-  const { coverFrameRef, coverCacheKey, coverUrl: cover, coverFailed: coverReadFailed, coverLoading } = useCoverDataUrl(node, coverRevision, coverRequested);
+  const { coverFrameRef, coverCacheKey, coverUrl: cover, coverFailed: coverReadFailed, coverLoading, onCoverError } = useCoverDataUrl(node, coverRevision, coverRequested,undefined,visibleRef);
   const [imageFailed, setImageFailed] = useState(false);
   useEffect(() => setImageFailed(false), [cover]);
-  const videos = node.totalVideoCount ?? node.directVideoCount ?? 0;
   const container = node.nodeType === "CONTAINER" || node.nodeType === "MIXED";
   const bindable = canBindBangumi(node);
   const title = nodeDisplayTitle(node);
@@ -50,9 +69,9 @@ function MediaCardComponent({ node, viewMode, onOpen, onMenu, onBangumi, onRetry
     >
       <button aria-pressed={editMode ? selected : undefined} className="media-card-open" onClick={() => editMode ? onSelect?.(node) : onOpen(node)} type="button">
         <span ref={coverFrameRef} className={`cover-frame ${cover ? "has-cover" : ""} ${container ? "is-container" : ""}`}>
-          {cover && !coverFailed ? <PosterImage active={coverVisible} alt={t("card.coverAlt", { title })} cacheKey={coverCacheKey} onError={() => setImageFailed(true)} src={cover} /> : (
+          {cover && !coverFailed ? <PosterImage active={coverVisible} alt={t("card.coverAlt", { title })} cacheKey={coverCacheKey} onError={() => {setImageFailed(true);onCoverError?.();}} src={cover} /> : (
             <span className="cover-placeholder">
-              <span className="cover-art"><Icon name={container ? "folder-open" : "work"} /></span>
+              <span className="cover-art"><Icon name={container ? "folder-open" : isBookKind(node.mediaKind) ? "book" : "work"} /></span>
               <small>{coverError ? t("card.coverFailed") : container ? t("card.resourceContainer") : t("card.noCover")}</small>
             </span>
           )}
@@ -65,9 +84,7 @@ function MediaCardComponent({ node, viewMode, onOpen, onMenu, onBangumi, onRetry
           {showModifiedTime && <FileModifiedTime value={node.latestFileModifiedAt} />}
           <span className="media-card-meta">
             {viewMode === "list" && <span className="type-pill system-tag">{mediaBadge(node)}</span>}
-            <small>
-              {(node.mediaKind==='COMIC'||node.mediaKind==='EBOOK'||(node.mediaKind==='DOUJIN' || node.mediaKind === 'ARTBOOK'))?t('comic.books',{count:node.totalComicBookCount??0}):videos > 0 ? t("card.videoCount", { count: videos }) : container ? t("card.childCount", { count: node.childMediaBranchCount ?? 0 }) : t("card.awaitingScan")}
-            </small>
+            <CardSummary node={node}/>
             {node.userTags.length > 0 && <span aria-label={t("card.customTags")} className="media-card-tags" title={node.userTags.map((tag) => tag.name).join(" · ")}>
               <span className="user-tag-pill">{node.userTags[0].name}</span>
               {node.userTags.length > 1 && <span className="media-card-tag-overflow">+{node.userTags.length - 1}</span>}

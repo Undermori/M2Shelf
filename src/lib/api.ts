@@ -1,3 +1,6 @@
+import {beginCardProgressSnapshot,seedCardProgressResponse} from './cardProgress';
+import {invalidatePosterResources,observePosterCacheDirectory,markPosterNodesChanged} from './posterResource';
+import type {SearchFilters,TidyIssue,PdfCoverRequest} from "../types/incremental";
 import type {BookCatalogue,BookCorrection} from '../types/catalogue';
 import type {TmdbMovie,TmdbBinding,TmdbSearch,TmdbCredentialStatus} from '../types/tmdb';
 import { invoke, isTauri } from "@tauri-apps/api/core";
@@ -139,10 +142,18 @@ function commandErrorMessage(command: string): string {
   return translateActive(key);
 }
 
+const posterMutationCommands=new Set(['bind_bangumi','clear_bangumi_binding','retry_bangumi_cover','bind_work_bangumi','clear_work_bangumi_binding','retry_work_bangumi_cover','set_container_cover','clear_node_cover','tmdb_bind','tmdb_clear','tmdb_retry_cover']);
 async function call<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   if (!isTauri()) throw new DesktopOnlyError();
   try {
-    return await invoke<T>(command, args);
+    const progressSnapshot=beginCardProgressSnapshot();
+    const result=await invoke<T>(command, args);
+    seedCardProgressResponse(result,progressSnapshot);
+    if(posterMutationCommands.has(command)){
+      const ids=typeof args?.nodeId==='number'?[args.nodeId]:(args?.target as WorkTarget|undefined)?.sourceNodeIds??[];
+      markPosterNodesChanged(ids);
+    }
+    return result;
   } catch (error) {
     if (isScanBusyError(error)) throw new M2ShelfError(translateActive("app.scanAlreadyRunning"), error, command);
     if (String(error).includes('COMIC_') || String(error).includes('BOOK_KINDLE_') || String(error).includes('EPUB_')) {
@@ -158,6 +169,12 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
 export const desktopAvailable = isTauri();
 
 export const api = {
+  episodeWatchSnapshot:(nodeId:number,workView:boolean)=>call<import('../types/episodes').EpisodeWatchSnapshot>('episode_watch_snapshot',{nodeId,workView}),
+  markEpisodeWatched:(nodeId:number,workView:boolean,fileId:number,watched:boolean,snapshot:string)=>call<import('../types/episodes').EpisodeWatchSnapshot>('set_episode_watched',{nodeId,workView,fileId,watched,snapshot}),
+  clearEpisodeWatch:(nodeId:number,workView:boolean,snapshot:string)=>call<import('../types/episodes').EpisodeWatchSnapshot>('clear_episode_watch',{nodeId,workView,snapshot}),
+  onMpvPlayback:(handler:(event:import('../types/episodes').MpvPlaybackEvent)=>void):Promise<UnlistenFn>=>isTauri()?listen<import('../types/episodes').MpvPlaybackEvent>('mpv-playback',({payload})=>handler(payload)):Promise.resolve(()=>undefined),
+  confirmNextVolume:(comicBookId:number,expectedRevision:string,nextBookId:number,snapshot:string)=>call<import('../types/readerFeatures').NextVolumeResult>('confirm_next_volume',{comicBookId,expectedRevision,nextBookId,snapshot}),
+  nextVolume:(comicBookId:number,expectedRevision:string)=>call<import('../types/readerFeatures').NextVolumeResult>('get_next_volume',{comicBookId,expectedRevision}),
   getBookCatalogue:(rootId:number)=>call<BookCatalogue>('get_book_catalogue',{rootId}),
   correctBookOrganization:(rootId:number,relativePath:string,action:BookCorrection,target:string|null,expectedRevision:number)=>call<void>('correct_book_organization',{rootId,relativePath,action,target,expectedRevision}),
   tmdbStatus:()=>call<boolean>('tmdb_status'),
@@ -169,7 +186,7 @@ export const api = {
   tmdbOpenPage:(nodeId:number)=>call<void>('tmdb_open_page',{nodeId}),
   tmdbCancel:()=>call<void>('tmdb_cancel'),
   tmdbConfigure:(title:string,message:string)=>call<boolean>('tmdb_configure',{title,message}),
-  tmdbSearch:(nodeId:number,query:string,year:number|null,language:string)=>call<TmdbSearch>('tmdb_search',{nodeId,query,year,language}),
+  tmdbSearch:(nodeId:number,query:string,year:number|null,language:string,mediaType?:'MOVIE'|'TV')=>call<TmdbSearch>('tmdb_search',{nodeId,query,year,language,mediaType:mediaType??null}),
   tmdbDetail:(movieId:number,language:string,mediaType:"MOVIE"|"TV"="MOVIE")=>call<TmdbMovie>('tmdb_detail',{movieId,language,mediaType}),
   tmdbBind:(nodeId:number,movieId:number,language:string,expectedSnapshot:string,mediaType:"MOVIE"|"TV"="MOVIE")=>call<TmdbBinding>('tmdb_bind',{nodeId,movieId,language,expectedSnapshot,mediaType}),
   tmdbClear:(nodeId:number)=>call<void>('tmdb_clear',{nodeId}),
@@ -196,6 +213,7 @@ export const api = {
   setLibraryScanWarningsIgnored: (rootId: number, ignored: boolean) => call<LibraryRoot>("set_library_scan_warnings_ignored", {rootId, ignored}),
   addRoot: (path: string, recognitionMode: LibraryRecognitionMode, mediaKind:LibraryMediaKind='VIDEO', autoBangumi?: boolean, bookOrganizationStrategy: 'LEGACY'|'SMART_MIXED'='LEGACY') =>
     call<LibraryRoot>("add_library_root", { path, displayName: null, recognitionMode,mediaKind,autoBangumi,bookOrganizationStrategy }),
+  setLibraryHiddenFromAll: (rootId: number, hidden: boolean) => call<LibraryRoot>("set_library_hidden_from_all", {rootId,hidden}),
   setRootAutoBangumi: (rootId: number, enabled: boolean) => call<LibraryRoot>("set_library_auto_bangumi", {rootId,enabled}),
   removeRoot: (rootId: number) => call<void>("remove_library_root", { rootId }),
   renameRoot: (rootId: number, displayName: string) =>
@@ -205,6 +223,27 @@ export const api = {
   browse: (rootId: number, parentNodeId: number | null = null) =>
     call<BrowseResult>("browse_library", { rootId, parentNodeId }),
   allResources: () => call<AllResourcesResult>("get_all_resources"),
+  cardProgress:(requests:import("../types/cardProgress").CardProgressRequest[])=>call<import("../types/cardProgress").CardProgress[]>("card_progress",{requests}),
+  removeRecentActivity: (targets: import('../types/collection').CollectionTarget[]) => call<void>("remove_recent_activity",{targets}),
+  previewLibraryRelocation:(rootId:number,path:string)=>call<import("../types/next6").RelocationPreview>("preview_library_relocation",{rootId,path}),
+  applyLibraryRelocation:(token:string)=>call<void>("apply_library_relocation",{token}),
+  discardLibraryRelocation:(token:string)=>call<void>("discard_library_relocation",{token}),
+  previewEmbeddedCover:(token:string)=>call<string|null>("preview_embedded_cover",{token}),
+  beginCoverSelection:(target:import('../types/collection').CollectionTarget)=>call<string>("begin_cover_selection",{target}),
+  discardCoverSelection:(token:string)=>call<void>("discard_cover_selection",{token}),
+  coverSelectionCandidates:(token:string)=>call<import("../types/next6").CoverCandidate[]>("cover_selection_candidates",{token}),
+  applyCoverSelection:(token:string,options:{local?:string;index?:number;page?:number;raster?:string;clear?:boolean})=>call<void>("apply_cover_selection",{token,local:options.local??null,index:options.index??null,page:options.page??null,raster:options.raster??null,clear:options.clear??false}),
+  validateLibraryPath:(path:string)=>call<string>("validate_library_path",{path}),
+  getNote:(target:import('../types/collection').CollectionTarget)=>call<import("../types/next6").NoteResult>("get_private_note",{target}),
+  saveNote:(target:import('../types/collection').CollectionTarget,body:string,revision:number)=>call<import("../types/next6").NoteResult>("save_private_note",{target,body,revision}),
+  collectionStatuses:()=>call<import('../types/collection').CollectionSnapshot>("collection_statuses"),
+  setCollectionStatus:(target:import('../types/collection').CollectionTarget,status:import('../types/collection').CollectionStatus|null)=>call<void>("set_collection_status",{target,status}),
+  clearRecentActivity: () => call<void>("clear_recent_activity"),
+  exportCollectionBackup: (destination:string)=>call<void>("export_collection_backup",{destination}),
+  prepareCollectionRestore: (source:string)=>call<import('../types/collection').BackupPreview>("prepare_collection_restore",{source}),
+  discardCollectionRestore: (token:string)=>call<void>("discard_collection_restore",{token}),
+  applyCollectionRestore: (token:string)=>call<void>("apply_collection_restore",{token}),
+  collectionRestoreNotice: ()=>call<string|null>("collection_restore_notice"),
   listRecentlyWatched: () => call<RecentlyWatchedEntry[]>("list_recently_watched"),
   nodeDetail: async (nodeId: number, workView = false) => {
     const detail = workView
@@ -213,8 +252,11 @@ export const api = {
     if (workView) { detail.node.workView = true; detail.node.workTarget = detail.workTarget ?? undefined; }
     return detail;
   },
-  search: (query: string, rootId?: number) =>
-    call<SearchHit[]>("search_library", { query, rootId: rootId ?? null }),
+  organizeIssues:()=>call<TidyIssue[]>('organize_issues'),
+  setIssueReminder:(nodeId:number,kind:string,ignored:boolean)=>call<void>('set_issue_reminder',{nodeId,kind,ignored}),
+  searchExtensions:(rootId?:number)=>call<string[]>('search_extensions',{rootId:rootId??null}),
+  search: (query: string, rootId?: number, filters?:SearchFilters) =>
+    call<SearchHit[]>("search_library", { query, rootId: rootId ?? null, filters: filters ?? null }),
   startScan: (rootId?: number, nodeId?: number, background = false) =>
     call<ScanStarted>("start_scan", { rootId: rootId ?? null, nodeId: nodeId ?? null, background }),
   cancelScan: (scanId: string) => call<boolean>("cancel_scan", { scanId }),
@@ -240,6 +282,9 @@ export const api = {
     call<MediaNode>("set_container_cover", { nodeId, sourcePath }),
   clearNodeCover: (nodeId: number) => call<MediaNode>("clear_node_cover", { nodeId }),
   getCoverDataUrl: (nodeId: number, width = 512) => call<string | null>("get_cover_data_url", { nodeId, width }),
+  beginPdfCover:(nodeId?:number,bookId?:number,revision?:string)=>call<PdfCoverRequest|null>('begin_pdf_cover',{nodeId:nodeId??null,comicBookId:bookId??null,expectedRevision:revision??null}),
+  commitPdfCover:(ticket:string,pngBase64:string)=>call<boolean>('commit_pdf_cover',{ticket,pngBase64}),
+  cancelPdfCover:(ticket:string)=>call<void>('cancel_pdf_cover',{ticket}),
   getBookCoverDataUrl: (comicBookId:number, expectedRevision:string, width=512) => call<string|null>('get_book_cover_data_url',{comicBookId,expectedRevision,width}),
   playMedia: (mediaFileId: number) => call<void>("play_media", { mediaFileId }),
   openInExplorer: (nodeId: number) => call<void>("open_node_in_explorer", { nodeId }),
@@ -248,10 +293,10 @@ export const api = {
     call<ComicBook|null>("open_resource_file", { resourceFileId }),
   openResourceInExplorer: (resourceFileId: number) =>
     call<void>("open_resource_in_explorer", { resourceFileId }),
-  getSettings: () => call<AppSettings>("get_settings"),
+  getSettings: () => call<AppSettings>("get_settings").then(settings=>{observePosterCacheDirectory(settings.coverCacheDirectory);return settings;}),
   getTextReaderSettings: () => call<import("../types/textReader").TextReaderSettings>("get_text_reader_settings"),
   updateTextReaderSettings: (settings: import("../types/textReader").TextReaderSettings) => call<import("../types/textReader").TextReaderSettings>("update_text_reader_settings", {settings}),
-  updateSettings: (settings: AppSettings) => call<AppSettings>("update_settings", { settings }),
+  updateSettings: (settings: AppSettings) => call<AppSettings>("update_settings", { settings }).then(saved=>{observePosterCacheDirectory(saved.coverCacheDirectory);return saved;}),
   getCollectionSortPreferences: () =>
     call<CollectionSortPreferences>("get_collection_sort_preferences"),
   updateCollectionSortPreference: (scope: CollectionSortScope, sort: CollectionSort) =>
@@ -262,7 +307,7 @@ export const api = {
   posterCacheFailures: () => call<PosterCacheFailure[]>("get_poster_cache_failures"),
   retryPosterCache: () => call<void>("retry_poster_cache"),
   openCoverCacheDirectory: () => call<void>("open_cover_cache_directory"),
-  clearCoverCache: () => call<CacheStats>("clear_cover_cache"),
+  clearCoverCache: () => call<CacheStats>("clear_cover_cache").then(stats=>{invalidatePosterResources();return stats;}),
   rebuildIndex: () => call<RebuildResult>("rebuild_index"),
   matchExistingContent: (nodeIds: number[] | null = null, rematchExisting = false) =>
     call<ScanStarted>("match_existing_content", { nodeIds, rematchExisting }),
