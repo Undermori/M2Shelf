@@ -357,7 +357,7 @@ struct Fixture {
 }
 impl Fixture {
     fn new(kind: LibraryMediaKind) -> Self {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = crate::db::test_temp_dir();
         let path = temp.path().join("Root_百分比%_合成");
         fs::create_dir(&path).unwrap();
         let db = Database::new(temp.path().join("fixture.sqlite"));
@@ -1560,7 +1560,7 @@ mod reader_boundaries {
     }
     impl Fixture {
         fn new() -> Self {
-            let temp = tempfile::tempdir().unwrap();
+            let temp = crate::db::test_temp_dir();
             let root = temp.path().join("synthetic-media");
             let folder = root.join("Synthetic comic");
             fs::create_dir_all(&folder).unwrap();
