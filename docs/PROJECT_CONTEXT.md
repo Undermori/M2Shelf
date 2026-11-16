@@ -1,5 +1,9 @@
 # M²Shelf 当前项目上下文
 
+## 2026-11-16 公开发布 0.5.19
+
+`v0.5.19`（`f6a16c1e80197692eee9c25cdeb6991e03dfc865`）的 Windows x64 安装包与 Portable 由 GitHub Actions（Run `43854382521`）构建，两项产物均通过 GitHub 官方 Sigstore attestation 校验。经所有者通过加密密钥 U 盘离线签名后，已公开发布 `M2Shelf-Setup-0.5.19-x64.exe`（`393e04a642f4225a72017686927fe64fb9f9fc532f6edfec9d446d9195391784`，11,589,866 字节）、`M2Shelf-Portable-0.5.19-x64.zip`（`43df505130ae44fe5d1500c9839abf11d0242e9734264bcd8414daa200255e05`，15,408,722 字节）与 `latest.json`（`05cc893834380590716d754dc487f50cff9f384f141fdad226cc4e68fceaa8d5`，3,415 字节）至 `Undermori/M2Shelf` Release；公开链接重下并以随包 `M2ShelfUpdater.exe verify` 验签一致，`/releases/latest/download/latest.json` 返回 `0.5.19`，四语 README 与个人博客介绍文档已同步上线。
+
 ## 2026-11-16 Round 12（本地 0.5.19 / schema 38 保持）
 
 Rust 后端于 `models.rs`、`db.rs`、`commands.rs`、`lib.rs` 与 `collection_backup.rs` 新增 `workbench_sort_files` / `workbench_sort_gallery` / `workbench_sort_notes` 独立设置键及 `get_workbench_sort_preferences` / `update_workbench_sort_preference` IPC，并复用 `read_setting_value` / `write_setting_value` 辅助函数纳入安全备份键；38 个历史数据库迁移保持不变。
