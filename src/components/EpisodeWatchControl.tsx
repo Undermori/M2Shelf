@@ -105,8 +105,12 @@ export function EpisodeWatchSummary({watch}:{watch:EpisodeWatchController}){
  if(!data&&!error)return null;
  if(data&&!data.totalEpisodes&&!data.totalFiles&&!error)return null;
  const watched=Boolean(data?.rows.some(row=>row.watched||row.partiallyWatched));
+ const locateLatest=()=>{
+  if(!data?.latestWatchedFileId)return;
+  window.dispatchEvent(new CustomEvent('m2shelf-locate-video-file',{detail:{fileId:data.latestWatchedFileId}}));
+ };
  return <div className="episode-watch-summary">
-  {data&&<><div className="episode-watch-position" role="status"><Icon name="play"/><strong title={data.latestWatchedFileName??undefined}>{data.latestWatchedFileName?t('episodes.watchedThrough',{name:data.latestWatchedFileName}):t('episodes.notStarted')}</strong></div><button className="button ghost episode-watch-clear" type="button" disabled={busy||!watched} onClick={()=>void clear()}>{t('episodes.clear')}</button></>}
+  {data&&<><button type="button" disabled={!data.latestWatchedFileId} className={`episode-watch-position${data.latestWatchedFileId?' is-clickable':''}`} onClick={locateLatest}><Icon name="play"/><strong role="status" title={data.latestWatchedFileName??undefined}>{data.latestWatchedFileName?t('episodes.watchedThrough',{name:data.latestWatchedFileName}):t('episodes.notStarted')}</strong></button><button className="button ghost episode-watch-clear" type="button" disabled={busy||!watched} onClick={()=>void clear()}>{t('episodes.clear')}</button></>}
   {error&&<span className="episode-watch-error" role="alert">{t('episodes.error')} <button type="button" className="button ghost" disabled={busy} onClick={refresh}>{t('common.retry')}</button></span>}
   {Boolean(data?.unresolvedRecords)&&<small>{t('episodes.unresolved',{count:data!.unresolvedRecords})}</small>}
  </div>;

@@ -387,6 +387,16 @@ fn canonical(path: &Path, root: &Path) -> AppResult<PathBuf> {
 pub(crate) fn checked_file(path: &Path, root: &Path, size: u64, stamp: &str) -> AppResult<File> {
     let resolved = canonical(path, root)?;
     let file = File::open(&resolved).map_err(|_| "COMIC_READ_FAILED".to_string())?;
+    validate_file_handle(&file, path, root, size, stamp)?;
+    Ok(file)
+}
+pub(crate) fn validate_file_handle(
+    file: &File,
+    path: &Path,
+    root: &Path,
+    size: u64,
+    stamp: &str,
+) -> AppResult<()> {
     // On Windows validate the actual opened handle, not just the pre-open path.
     #[cfg(windows)]
     {
@@ -416,7 +426,7 @@ pub(crate) fn checked_file(path: &Path, root: &Path, size: u64, stamp: &str) -> 
         return Err("COMIC_PAGE_CHANGED".into());
     }
     canonical(path, root)?;
-    Ok(file)
+    Ok(())
 }
 #[cfg(test)]
 pub fn read_page(database: &Database, id: i64, index: i64) -> AppResult<Vec<u8>> {
@@ -641,6 +651,12 @@ fn avif_dimensions(bytes: &[u8], depth: u8) -> AppResult<Option<(u32, u32)>> {
     Ok(None)
 }
 
+pub(crate) fn require_write_revision(expected: Option<&str>) -> AppResult<&str> {
+    expected
+        .filter(|revision| !revision.trim().is_empty())
+        .ok_or_else(|| "COMIC_PAGE_CHANGED".into())
+}
+
 fn validate_page(connection: &Connection, id: i64, index: i64) -> AppResult<()> {
     let (book, _, _, _, _, _) = validate_book(connection, id)?;
     if index < 0 || index >= book.page_count {
@@ -650,7 +666,8 @@ fn validate_page(connection: &Connection, id: i64, index: i64) -> AppResult<()> 
 }
 #[cfg(test)]
 pub fn progress(database: &Database, id: i64, index: i64) -> AppResult<()> {
-    progress_at_revision(database, id, index, None)
+    let revision = database.read_snapshot(|c| Ok(validate_book(c, id)?.0.revision))?;
+    progress_at_revision(database, id, index, Some(&revision))
 }
 #[cfg(test)]
 pub fn progress_at_revision(
@@ -668,6 +685,7 @@ pub fn progress_with_position_at_revision(
     expected: Option<&str>,
     position: Option<crate::comics::TextPosition>,
 ) -> AppResult<()> {
+    let expected = require_write_revision(expected)?;
     let mut c = database.connect()?;
     // Reserve the writer before revision reads: a background cache checkpoint must not
     // turn the validated deferred snapshot into SQLITE_BUSY_SNAPSHOT on its first write.
@@ -675,10 +693,8 @@ pub fn progress_with_position_at_revision(
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|e| e.to_string())?;
     validate_page(&tx, id, index)?;
-    if let Some(revision) = expected {
-        if validate_book(&tx, id)?.0.revision != revision {
-            return Err("COMIC_PAGE_CHANGED".into());
-        }
+    if validate_book(&tx, id)?.0.revision != expected {
+        return Err("COMIC_PAGE_CHANGED".into());
     }
     validate_position(&tx, id, position.as_ref())?;
     tx.execute("INSERT INTO comic_reading_progress(comic_book_id,last_page_index,text_block_index,text_character_offset) VALUES(?1,?2,?3,?4) ON CONFLICT(comic_book_id) DO UPDATE SET last_page_index=excluded.last_page_index,text_block_index=excluded.text_block_index,text_character_offset=excluded.text_character_offset,last_read_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')",params![id,index,position.as_ref().map(|p|p.block_index),position.as_ref().map_or(0,|p|p.character_offset)]).map_err(|_|"COMIC_PROGRESS_FAILED".to_string())?;
@@ -706,8 +722,10 @@ pub fn bookmarks(database: &Database, id: i64) -> AppResult<Vec<i64>> {
 }
 #[cfg(test)]
 pub fn bookmark(database: &Database, id: i64, index: i64, add: bool) -> AppResult<Vec<i64>> {
-    bookmark_at_revision(database, id, index, add, None)
+    let revision = database.read_snapshot(|c| Ok(validate_book(c, id)?.0.revision))?;
+    bookmark_at_revision(database, id, index, add, Some(&revision))
 }
+#[cfg(test)]
 pub fn bookmark_at_revision(
     database: &Database,
     id: i64,
@@ -725,15 +743,14 @@ pub fn bookmark_with_position_at_revision(
     expected: Option<&str>,
     position: Option<crate::comics::TextPosition>,
 ) -> AppResult<Vec<i64>> {
+    let expected = require_write_revision(expected)?;
     let mut c = database.connect()?;
     let tx = c
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|e| e.to_string())?;
     validate_page(&tx, id, index)?;
-    if let Some(revision) = expected {
-        if validate_book(&tx, id)?.0.revision != revision {
-            return Err("COMIC_PAGE_CHANGED".into());
-        }
+    if validate_book(&tx, id)?.0.revision != expected {
+        return Err("COMIC_PAGE_CHANGED".into());
     }
     tx.execute(
         if add {
@@ -771,4 +788,49 @@ fn validate_position(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn codex_native_read_permits_enforce_four_slots_and_restore_after_drop() {
+        const NAME: &str = "comic_reader::tests::codex_native_read_permits_enforce_four_slots_and_restore_after_drop";
+        const MARKER: &str = "M2SHELF_CODEX_READ_PERMIT_TEST";
+        if std::env::var(MARKER).as_deref() != Ok(NAME) {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", NAME, "--nocapture"])
+                .env(MARKER, NAME)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        // Fresh libtest process isolates this production-global semaphore from
+        // unrelated readers concurrently executing in the full test suite.
+        assert_eq!(ACTIVE_READS.load(Ordering::Acquire), 0);
+        let mut permits = (0..4)
+            .map(|_| ReadPermit::acquire().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(ACTIVE_READS.load(Ordering::Acquire), 4);
+        assert_eq!(ReadPermit::acquire().err().unwrap(), "COMIC_READER_BUSY");
+        assert_eq!(ACTIVE_READS.load(Ordering::Acquire), 4);
+        drop(permits.pop());
+        assert_eq!(ACTIVE_READS.load(Ordering::Acquire), 3);
+        permits.push(ReadPermit::acquire().unwrap());
+        drop(permits);
+        assert_eq!(ACTIVE_READS.load(Ordering::Acquire), 0);
+        let result: AppResult<()> = (|| {
+            let _permit = ReadPermit::acquire()?;
+            Err("synthetic read failure".into())
+        })();
+        assert!(result.is_err());
+        assert_eq!(ACTIVE_READS.load(Ordering::Acquire), 0);
+    }
 }

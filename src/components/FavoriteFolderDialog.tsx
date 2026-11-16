@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { FavoriteFolder } from "../types/media";
 import { useI18n } from "../lib/i18n";
 import { Icon } from "./Icon";
+import { useModalFocus } from "../hooks/useModalFocus";
 
 interface FavoriteFolderDialogProps {
   folder: FavoriteFolder | "new" | null;
@@ -14,22 +15,19 @@ export function FavoriteFolderDialog({ folder, busy, onClose, onSave }: Favorite
   const { t } = useI18n();
   const [name, setName] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
+  const backdropRef = useRef<HTMLDivElement>(null);
+  const dialogRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
     setName(folder && folder !== "new" ? folder.name : "");
-    if (folder) window.setTimeout(() => inputRef.current?.focus(), 0);
   }, [folder]);
-  useEffect(() => {
-    const key = (event: KeyboardEvent) => event.key === "Escape" && folder && !busy && onClose();
-    window.addEventListener("keydown", key);
-    return () => window.removeEventListener("keydown", key);
-  }, [busy, folder, onClose]);
+  useModalFocus(backdropRef, dialogRef, onClose, '#favorite-folder-name', busy, Boolean(folder));
 
   if (!folder) return null;
   const creating = folder === "new";
   return (
-    <div className="modal-backdrop" onPointerDown={(event) => { if (event.currentTarget === event.target && !busy) onClose(); }}>
-      <section aria-labelledby="favorite-folder-title" aria-modal="true" className="rename-dialog favorite-folder-dialog" role="dialog">
+    <div ref={backdropRef} className="modal-backdrop" onPointerDown={(event) => { if (event.currentTarget === event.target && !busy) onClose(); }}>
+      <section ref={dialogRef} tabIndex={-1} aria-labelledby="favorite-folder-title" aria-modal="true" className="rename-dialog favorite-folder-dialog" role="dialog">
         <header className="modal-header">
           <span className="modal-heading-icon"><Icon name="bookmark" /></span>
           <div><h2 id="favorite-folder-title">{creating ? t("favorites.createTitle") : t("favorites.renameTitle")}</h2></div>

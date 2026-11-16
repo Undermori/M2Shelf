@@ -16,6 +16,19 @@ afterEach(()=>{cleanup();vi.useRealTimers();});
 const show=(directory="X:/Cache")=>render(<I18nProvider><PosterCacheProgress cacheDirectory={directory} onCompleted={()=>{}}/></I18nProvider>);
 const flush=()=>act(async()=>{await Promise.resolve();});
 
+it("preserves an in-flight diagnostic across a sidebar switch without leaving its spinner stuck",async()=>{
+  let resolve:(value:unknown)=>void=()=>{};
+  mocks.failures.mockReturnValue(new Promise(done=>{resolve=done;}));
+  const view=show();await flush();fireEvent.click(screen.getByRole("button",{name:"查看原因"}));
+  view.rerender(<I18nProvider><PosterCacheProgress active={false} cacheDirectory="X:/Cache" onCompleted={()=>{}}/></I18nProvider>);
+  const calls=mocks.status.mock.calls.length;
+  await act(async()=>{vi.advanceTimersByTime(3000);resolve([{nodeId:1,name:"Example cover",reason:"SOURCE_READ",detail:"Retained diagnostic"}]);});
+  expect(mocks.status).toHaveBeenCalledTimes(calls);
+  view.rerender(<I18nProvider><PosterCacheProgress active cacheDirectory="X:/Cache" onCompleted={()=>{}}/></I18nProvider>);await flush();
+  expect(screen.getByText("Retained diagnostic")).toBeTruthy();
+  expect(screen.getByRole("button",{name:"收起原因"}).getAttribute('aria-expanded')).toBe('true');
+});
+
 it("shows saved failures and retries without hiding their explanation",async()=>{
   show();await flush();
   fireEvent.click(screen.getByRole("button",{name:"查看原因"}));await flush();

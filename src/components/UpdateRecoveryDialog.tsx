@@ -64,7 +64,6 @@ export function UpdateRecoveryDialog({ notice, busy, error, onAcknowledge }: Upd
         tabIndex={-1}
       >
         <span className={`dialog-symbol ${recoveryRequired ? "is-danger" : ""}`}><Icon name="warning" /></span>
-        <p className="eyebrow">{t("update.recoveryEyebrow")}</p>
         <h2 id="update-recovery-title">{title}</h2>
         <p id="update-recovery-description">{description}</p>
         {error && <p className="update-recovery-error" role="alert"><Icon name="warning" />{t("error.updateRecoveryAcknowledgeFailed")}</p>}

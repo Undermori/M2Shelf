@@ -11,7 +11,8 @@ use sha2::{Digest, Sha256};
 use std::{collections::BTreeSet, path::PathBuf, sync::atomic::Ordering};
 
 fn path(label: &str) -> PathBuf {
-    let d = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../.tmp/smart-mixed-phase2/tests");
+    let d = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../output/round4-20261116/smart-mixed-shadow-tests");
     std::fs::create_dir_all(&d).unwrap();
     d.join(format!(
         "{label}-{}-{}.sqlite",
@@ -47,7 +48,8 @@ fn shadow(p: &std::path::Path) -> (IndexSnapshot, ShadowReport) {
     (s, o)
 }
 fn private_report(name: &str, s: &IndexSnapshot, o: &ShadowReport) {
-    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../.tmp/smart-mixed-phase2");
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../output/round4-20261116/smart-mixed-shadow-tests");
     let file = std::fs::File::create(dir.join(format!("{name}.shadow.json"))).unwrap();
     serde_json::to_writer_pretty(std::io::BufWriter::new(file), &(s, o)).unwrap();
 }
@@ -606,7 +608,7 @@ fn windows_verbatim_unc_and_literal_unicode_paths_are_lexically_scoped() {
 }
 #[test]
 fn missing_or_future_schema_fails_closed() {
-    for version in [0, if cfg!(feature = "production") { 36 } else { 25 }] {
+    for version in [0, if cfg!(feature = "production") { 39 } else { 25 }] {
         let (f, p) = factory("schema", LibraryKind::Comic, "FOLDER");
         if version == 0 {
             f.connection
@@ -616,12 +618,16 @@ fn missing_or_future_schema_fails_closed() {
                 )
                 .unwrap();
         } else {
-            f.connection
-                .execute(
-                    "INSERT INTO mediashelf_schema_migrations(version) VALUES(?1)",
-                    [version],
-                )
-                .unwrap();
+            // Keep the migration sequence contiguous, so this exercises the future-version
+            // gate itself rather than accidentally passing through the missing-version gate.
+            for added in 25..=version {
+                f.connection
+                    .execute(
+                        "INSERT INTO mediashelf_schema_migrations(version) VALUES(?1)",
+                        [added],
+                    )
+                    .unwrap();
+            }
         }
         assert_eq!(
             ReadIndex::open(&p)
@@ -631,6 +637,30 @@ fn missing_or_future_schema_fails_closed() {
             "UNSUPPORTED_SCHEMA_VERSION"
         );
     }
+}
+#[cfg(feature = "production")]
+#[test]
+fn current_workspace_schema_keeps_the_index_adapter_read_only() {
+    let p = path("current-gallery-schema");
+    let mut f = Factory::create_smart(&p, LibraryKind::Comic).unwrap();
+    f.file_book("Example.cbz").unwrap();
+    assert_eq!(
+        f.connection
+            .query_row(
+                "SELECT max(version) FROM mediashelf_schema_migrations",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+        38
+    );
+    let before = disk_digest(&p);
+    let snapshot = ReadIndex::open(&p)
+        .unwrap()
+        .read(1, &ReadOptions::default())
+        .unwrap();
+    assert_eq!(snapshot.source_id_map.len(), 1);
+    assert_eq!(disk_digest(&p), before);
 }
 #[test]
 fn source_format_disagreement_and_missing_revision_are_not_verified() {
@@ -823,6 +853,33 @@ fn legacy_txt_text_encoding_fallback_matches_production_book_select() {
 }
 #[test]
 fn exact_current_production_owned_sql_and_browse_predicate_match_shadow_views() {
+    fn function_body<'a>(source: &'a str, name: &str) -> &'a str {
+        let marker = format!("fn {name}(");
+        let tail = source
+            .split_once(marker.as_str())
+            .unwrap_or_else(|| panic!("missing production function {name}"))
+            .1;
+        tail.split_once("\n}")
+            .unwrap_or_else(|| panic!("missing end of production function {name}"))
+            .0
+    }
+    fn literal_after<'a>(body: &'a str, call: &str) -> &'a str {
+        let tail = body
+            .split_once(call)
+            .unwrap_or_else(|| panic!("missing production call {call}"))
+            .1
+            .trim_start()
+            .strip_prefix('"')
+            .expect("production query must start with an ordinary string literal");
+        let literal = tail.split_once('"').expect("unterminated query literal").0;
+        // Fail clearly if production changes its quoting syntax; never consume a
+        // later Rust statement/function as SQL or silently author a substitute.
+        assert!(
+            !literal.contains('\\'),
+            "production query now needs escaped-string extraction"
+        );
+        literal
+    }
     let (mut f, p) = factory("production-query-parity", LibraryKind::Comic, "FOLDER");
     f.file_book("Series/第01卷.pdf").unwrap();
     f.file_book("Series/Bound/第02卷.pdf").unwrap();
@@ -835,18 +892,19 @@ fn exact_current_production_owned_sql_and_browse_predicate_match_shadow_views() 
     let (s, _) = shadow(&p);
     // Execute the literal SQL from the current production source, not another authored expected query.
     let source = include_str!("../../../src-tauri/src/comics.rs");
-    let tail = source.split("fn owned_nodes(").nth(1).unwrap();
-    let sql = tail
-        .split("prepare(\"")
-        .nth(1)
-        .unwrap()
-        .split("\").map_err")
-        .next()
-        .unwrap();
+    let owned = function_body(source, "owned_nodes");
+    let cte = function_body(source, "owned_nodes_cte");
+    let selection = literal_after(owned, "owned_nodes_cte(");
+    let cte_template = literal_after(cte, "format!(");
+    assert_eq!(cte_template.matches("{selection}").count(), 1);
+    let cte = cte_template.replace("{selection}", selection);
+    let query_template = literal_after(owned, ".prepare(&format!(");
+    assert_eq!(query_template.matches("{}").count(), 1);
+    let sql = query_template.replacen("{}", &cte, 1);
     for view in &s.current_details {
         let owned = f
             .connection
-            .prepare(sql)
+            .prepare(&sql)
             .unwrap()
             .query_map([view.anchor_node_id], |r| r.get::<_, i64>(0))
             .unwrap()
@@ -861,17 +919,10 @@ fn exact_current_production_owned_sql_and_browse_predicate_match_shadow_views() 
         assert_eq!(view.book_ids, expected);
     }
     let db = include_str!("../../../src-tauri/src/db.rs");
-    let tail = db
-        .split("pub(crate) fn list_children_conn(")
-        .nth(1)
-        .unwrap();
-    let pred = tail
-        .split("\"{} ")
-        .nth(1)
-        .unwrap()
-        .split('"')
-        .next()
-        .unwrap();
+    let browse = function_body(db, "list_children_conn");
+    let pred = literal_after(browse, "format!(")
+        .strip_prefix("{} ")
+        .expect("browse query must append its predicate to node_select");
     let old = f
         .connection
         .prepare(&format!("SELECT n.id FROM nodes n {pred} ORDER BY n.id"))

@@ -20,6 +20,20 @@ export default defineConfig({
   plugins: [react(),pdfResources()],
   // Scan only the real app entry. Archived test HTML in .tmp must not enter dev prebundling.
   optimizeDeps: { entries: ["index.html"] },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes("node_modules/react") || id.includes("node_modules/@tauri-apps")) {
+            return "vendor";
+          }
+          if (id.includes("/src/lib/i18n.tsx") || id.endsWith("Messages.ts")) {
+            return "i18n";
+          }
+        },
+      },
+    },
+  },
   clearScreen: false,
   server: {
     port: 1420,

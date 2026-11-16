@@ -1,0 +1,66 @@
+/* Motion belongs to view/panel surfaces. Poster frames and rasters remain untouched. */
+.nav-stage-surface { min-inline-size: 0; min-block-size: 100%; opacity: 1; }
+.reader-stage { block-size: 100%; }
+
+@media (prefers-reduced-motion: no-preference) {
+  .nav-stage-surface[data-nav-active="true"] {
+    --nav-from-x: 0px;
+    --nav-from-y: 6px;
+    animation-duration: 160ms;
+    animation-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  .nav-stage-surface[data-nav-direction="forward"] { --nav-from-x: 14px; --nav-from-y: 0px; animation-duration: 180ms; }
+  .nav-stage-surface[data-nav-direction="backward"] { --nav-from-x: -14px; --nav-from-y: 0px; animation-duration: 170ms; }
+  .nav-stage-surface[data-nav-active="true"][data-nav-cycle="a"] { animation-name: nav-enter-a; }
+  .nav-stage-surface[data-nav-active="true"][data-nav-cycle="b"] { animation-name: nav-enter-b; }
+  @keyframes nav-enter-a {
+    from { opacity: 1; transform: translate3d(var(--nav-from-x), var(--nav-from-y), 0); }
+    to { opacity: 1; transform: none; }
+  }
+  @keyframes nav-enter-b {
+    from { opacity: 1; transform: translate3d(var(--nav-from-x), var(--nav-from-y), 0); }
+    to { opacity: 1; transform: none; }
+  }
+  /* Readers use fixed native-size surfaces: fade the session without changing its containing block. */
+  .reader-stage[data-nav-active="true"][data-nav-cycle="a"] { animation-name: reader-enter-a; animation-duration: 160ms; }
+  .reader-stage[data-nav-active="true"][data-nav-cycle="b"] { animation-name: reader-enter-b; animation-duration: 160ms; }
+  @keyframes reader-enter-a { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes reader-enter-b { from { opacity: 0; } to { opacity: 1; } }
+  .video-tabs-panel, .studio-panel:not([hidden]), .collection-tab-panel {
+    animation: panel-enter 120ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  @keyframes panel-enter {
+    from { opacity: 1; transform: translate3d(0, 4px, 0); }
+    to { opacity: 1; transform: none; }
+  }
+  .media-kind-tabs [role="tab"]::after { transition: opacity 140ms ease, border-color 140ms ease; }
+  .studio-heading .studio-switch::before { translate: 0 0; transition: translate 160ms cubic-bezier(0.22, 1, 0.36, 1); }
+  .studio-heading .studio-switch[data-view="gallery"]::before { inset-inline-start: 3px; translate: 100% 0; }
+  .studio-heading .studio-switch[data-view="files"]::before { inset-inline-start: 3px; translate: 200% 0; }
+
+  .modal-backdrop { transition: opacity 140ms ease-out; }
+  :is(.modal, dialog[open], [role="dialog"], .context-menu, .select-menu, .collection-filter-panel, .studio-work-popover, .studio-lightbox, .toast) {
+    transition: opacity 150ms ease-out, translate 150ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  @starting-style {
+    .modal-backdrop { opacity: 0; }
+    :is(.modal, dialog[open], [role="dialog"], .context-menu, .select-menu, .collection-filter-panel, .studio-work-popover, .studio-lightbox, .toast) {
+      opacity: 0;
+      translate: 0 6px;
+    }
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nav-stage-surface, .video-tabs-panel, .studio-panel, .collection-tab-panel,
+  .modal-backdrop, .modal, dialog[open], [role="dialog"], .context-menu, .select-menu,
+  .collection-filter-panel, .studio-work-popover, .studio-lightbox, .toast {
+    animation: none;
+    opacity: 1;
+    transform: none;
+    translate: none;
+    transition: none;
+  }
+  .studio-switch::before, .studio-raster[data-ready="true"] > img { animation: none; transition: none; }
+  .spinner, .scan-pulse svg, .update-manual-check .is-busy svg, .update-actions .is-busy svg { animation: none; }
+}

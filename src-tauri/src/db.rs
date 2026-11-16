@@ -13,7 +13,7 @@ use crate::models::{
     CollectionSort, CollectionSortPreferences, CollectionSortScope, CoverSource, FavoriteFolder,
     LibraryMediaKind, LibraryRecognitionMode, LibraryRoot, MediaFile, MediaNode, MetadataBinding,
     NodeType, RecentlyWatchedEntry, ResourceFile, ResourceType, SearchHit, SearchHitKind, UserTag,
-    UserTagMembership, ViewMode, WindowSize,
+    UserTagMembership, ViewMode, WindowSize, WorkbenchSortPreferences, WorkbenchSortUpdate,
 };
 
 pub type AppResult<T> = Result<T, String>;
@@ -247,6 +247,14 @@ impl Database {
             (
                 36_i64,
                 include_str!("../migrations/0036_tmdb_tv_series_scope.sql"),
+            ),
+            (
+                37_i64,
+                include_str!("../migrations/0037_screenshot_gallery.sql"),
+            ),
+            (
+                38_i64,
+                include_str!("../migrations/0038_workspace_files_and_mpv_shots.sql"),
             ),
         ];
         let reclassification_needed: bool = connection
@@ -731,6 +739,19 @@ impl Database {
         let mut statement = connection
             .prepare("SELECT path FROM library_roots")
             .map_err(db_error)?;
+        let rows = statement
+            .query_map([], |r| r.get::<_, String>(0).map(PathBuf::from))
+            .map_err(db_error)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
+    }
+
+    /// Filesystem-write exclusions. These sources keep distinct product identities;
+    /// this union is only for cache/export safety, never catalogue or scanner scope.
+    pub(crate) fn read_only_source_paths(&self) -> AppResult<Vec<PathBuf>> {
+        let connection = self.connect()?;
+        let mut statement = connection.prepare(
+            "SELECT path FROM library_roots UNION ALL SELECT path FROM screenshot_folders UNION ALL SELECT path FROM workspace_folders",
+        ).map_err(db_error)?;
         let rows = statement
             .query_map([], |r| r.get::<_, String>(0).map(PathBuf::from))
             .map_err(db_error)?;
@@ -2530,16 +2551,29 @@ impl Database {
     /// Native window lifecycle state is deliberately stored under its own settings key instead
     /// of being part of the frontend's complete `AppSettings` snapshots. Invalid legacy/corrupt
     /// values are ignored so they can never prevent the application from opening.
+    fn read_setting_value(connection: &Connection, key: &str) -> AppResult<Option<String>> {
+        connection
+            .query_row("SELECT value FROM settings WHERE key=?1", [key], |row| {
+                row.get::<_, String>(0)
+            })
+            .optional()
+            .map_err(db_error)
+    }
+
+    fn write_setting_value(connection: &Connection, key: &str, value: &str) -> AppResult<()> {
+        connection
+            .execute(
+                "INSERT INTO settings(key,value) VALUES(?1,?2)
+                 ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                params![key, value],
+            )
+            .map_err(db_error)?;
+        Ok(())
+    }
+
     pub fn get_window_size(&self) -> AppResult<Option<WindowSize>> {
         let connection = self.connect()?;
-        let raw = connection
-            .query_row(
-                "SELECT value FROM settings WHERE key=?1",
-                [WINDOW_SIZE_SETTING_KEY],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()
-            .map_err(db_error)?;
+        let raw = Self::read_setting_value(&connection, WINDOW_SIZE_SETTING_KEY)?;
         Ok(raw
             .and_then(|value| serde_json::from_str::<WindowSize>(&value).ok())
             .and_then(crate::window_state::validate_persisted_size))
@@ -2550,26 +2584,13 @@ impl Database {
             .ok_or_else(|| "窗口大小超出可保存范围。".to_string())?;
         let value = serde_json::to_string(&size).map_err(|error| error.to_string())?;
         let connection = self.connect()?;
-        connection
-            .execute(
-                "INSERT INTO settings(key,value) VALUES(?1,?2)
-                 ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                params![WINDOW_SIZE_SETTING_KEY, value],
-            )
-            .map_err(db_error)?;
-        Ok(())
+        Self::write_setting_value(&connection, WINDOW_SIZE_SETTING_KEY, &value)
     }
 
     pub fn get_collection_sort_preferences(&self) -> AppResult<CollectionSortPreferences> {
         let connection = self.connect()?;
         let read = |key: &str| -> AppResult<CollectionSort> {
-            let value = connection
-                .query_row("SELECT value FROM settings WHERE key=?1", [key], |row| {
-                    row.get::<_, String>(0)
-                })
-                .optional()
-                .map_err(db_error)?;
-            Ok(value
+            Ok(Self::read_setting_value(&connection, key)?
                 .as_deref()
                 .map(CollectionSort::from_db)
                 .unwrap_or_default())
@@ -2587,14 +2608,49 @@ impl Database {
         sort: CollectionSort,
     ) -> AppResult<CollectionSort> {
         let connection = self.connect()?;
-        connection
-            .execute(
-                "INSERT INTO settings(key,value) VALUES(?1,?2)
-                 ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                params![scope.setting_key(), sort.as_db()],
-            )
-            .map_err(db_error)?;
+        Self::write_setting_value(&connection, scope.setting_key(), sort.as_db())?;
         Ok(sort)
+    }
+
+    pub fn get_workbench_sort_preferences(&self) -> AppResult<WorkbenchSortPreferences> {
+        let connection = self.connect()?;
+        Self::workbench_sort_preferences_with(&connection)
+    }
+
+    fn workbench_sort_preferences_with(
+        connection: &Connection,
+    ) -> AppResult<WorkbenchSortPreferences> {
+        let mut prefs = WorkbenchSortPreferences::default();
+        if let Some(raw) =
+            Self::read_setting_value(connection, WorkbenchSortPreferences::FILES_KEY)?
+        {
+            let (sort, descending) = WorkbenchSortPreferences::parse_files(&raw);
+            prefs.files_sort = sort;
+            prefs.files_descending = descending;
+        }
+        if let Some(raw) =
+            Self::read_setting_value(connection, WorkbenchSortPreferences::GALLERY_KEY)?
+        {
+            let (sort, descending) = WorkbenchSortPreferences::parse_gallery(&raw);
+            prefs.gallery_sort = sort;
+            prefs.gallery_descending = descending;
+        }
+        if let Some(raw) =
+            Self::read_setting_value(connection, WorkbenchSortPreferences::NOTES_KEY)?
+        {
+            prefs.notes_sort = WorkbenchSortPreferences::parse_notes(&raw);
+        }
+        Ok(prefs)
+    }
+
+    pub fn update_workbench_sort_preference(
+        &self,
+        update: WorkbenchSortUpdate,
+    ) -> AppResult<WorkbenchSortPreferences> {
+        let connection = self.connect()?;
+        let (key, value) = update.setting_key_and_value();
+        Self::write_setting_value(&connection, key, &value)?;
+        Self::workbench_sort_preferences_with(&connection)
     }
 
     pub fn update_settings(
@@ -2640,6 +2696,28 @@ impl Database {
         }
         let mut connection = self.connect()?;
         let transaction = connection.transaction().map_err(db_error)?;
+        let previous_extensions: Option<String> = transaction
+            .query_row(
+                "SELECT value FROM settings WHERE key='video_extensions'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(db_error)?;
+        let mut previous_extensions = previous_extensions
+            .and_then(|value| serde_json::from_str::<Vec<String>>(&value).ok())
+            .unwrap_or_else(default_video_extensions)
+            .into_iter()
+            .map(|extension| {
+                extension
+                    .trim()
+                    .trim_start_matches('.')
+                    .to_ascii_lowercase()
+            })
+            .collect::<Vec<_>>();
+        previous_extensions.sort();
+        previous_extensions.dedup();
+        let extensions_changed = previous_extensions != extensions;
         let values = [
             (
                 "comic_reader",
@@ -2691,6 +2769,17 @@ impl Database {
                     "INSERT INTO settings(key,value) VALUES(?1,?2)
                      ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                     params![key, value],
+                )
+                .map_err(db_error)?;
+        }
+        if extensions_changed {
+            // A directory's timestamps do not change when the recognition policy does.
+            // Invalidate only video-root baselines in the same settings transaction.
+            transaction
+                .execute(
+                    "DELETE FROM library_scan_snapshots WHERE library_root_id IN
+                 (SELECT id FROM library_roots WHERE media_kind='VIDEO')",
+                    [],
                 )
                 .map_err(db_error)?;
         }
@@ -5057,7 +5146,7 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(versions, 36);
+        assert_eq!(versions, 38);
         connection
             .prepare("SELECT library_root_id,snapshot_json FROM library_scan_snapshots")
             .unwrap();
@@ -6853,6 +6942,72 @@ mod tests {
         assert_eq!(repaired.all, CollectionSort::TitleDesc);
         assert_eq!(repaired.browse, CollectionSort::TitleAsc);
         assert_eq!(repaired.favorites, CollectionSort::AddedAsc);
+    }
+
+    #[test]
+    fn workbench_sort_preferences_persist_independently_and_survive_settings_saves() {
+        use crate::models::{
+            ScreenshotSortField, WorkNotesSortField, WorkbenchSortPreferences, WorkbenchSortUpdate,
+            WorkspaceFileSort,
+        };
+        let temp = TempDir::new().unwrap();
+        let database_path = temp.path().join("workbench-sort.db");
+        let default_cache = temp.path().join("default-cache");
+        let database = Database::new(database_path.clone());
+        database.migrate().unwrap();
+
+        assert_eq!(
+            database.get_workbench_sort_preferences().unwrap(),
+            WorkbenchSortPreferences::default()
+        );
+        database
+            .update_workbench_sort_preference(WorkbenchSortUpdate::Files {
+                sort: WorkspaceFileSort::Modified,
+                descending: true,
+            })
+            .unwrap();
+        database
+            .update_workbench_sort_preference(WorkbenchSortUpdate::Gallery {
+                sort: ScreenshotSortField::Name,
+                descending: false,
+            })
+            .unwrap();
+        database
+            .update_workbench_sort_preference(WorkbenchSortUpdate::Notes {
+                sort: WorkNotesSortField::Title,
+            })
+            .unwrap();
+
+        let mut settings = database.get_settings(&default_cache).unwrap();
+        settings.theme = "dark".into();
+        database.update_settings(&settings, &default_cache).unwrap();
+
+        let reopened = Database::new(database_path);
+        assert_eq!(
+            reopened.get_workbench_sort_preferences().unwrap(),
+            WorkbenchSortPreferences {
+                files_sort: WorkspaceFileSort::Modified,
+                files_descending: true,
+                gallery_sort: ScreenshotSortField::Name,
+                gallery_descending: false,
+                notes_sort: WorkNotesSortField::Title,
+            }
+        );
+
+        let connection = reopened.connect().unwrap();
+        connection
+            .execute(
+                "UPDATE settings SET value='corrupt' WHERE key=?1",
+                [WorkbenchSortPreferences::GALLERY_KEY],
+            )
+            .unwrap();
+        drop(connection);
+        let repaired = reopened.get_workbench_sort_preferences().unwrap();
+        assert_eq!(repaired.files_sort, WorkspaceFileSort::Modified);
+        assert!(repaired.files_descending);
+        assert_eq!(repaired.gallery_sort, ScreenshotSortField::Modified);
+        assert!(repaired.gallery_descending);
+        assert_eq!(repaired.notes_sort, WorkNotesSortField::Title);
     }
 
     #[test]

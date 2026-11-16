@@ -1,5 +1,91 @@
 # M²Shelf 当前项目上下文
 
+## 2026-11-16 Round 12（本地 0.5.19 / schema 38 保持）
+
+Rust 后端于 `models.rs`、`db.rs`、`commands.rs`、`lib.rs` 与 `collection_backup.rs` 新增 `workbench_sort_files` / `workbench_sort_gallery` / `workbench_sort_notes` 独立设置键及 `get_workbench_sort_preferences` / `update_workbench_sort_preference` IPC，并复用 `read_setting_value` / `write_setting_value` 辅助函数纳入安全备份键；38 个历史数据库迁移保持不变。
+
+前端 `App.tsx` 为工作台三视图接入并发安全队列 `changeWorkbenchSort` 与启动加载，并在 `restorePreviousNavigation` 及子目录跳转路径中确保用户最新排序不被历史快照覆盖；`OrganizePage`、`WorkspaceFiles` 与 `ScreenshotStudio` 接入双向持久化回调，同时移除 `directoryViews` 对项目排序的局域覆写。
+
+交互与视觉稳定性：`WorkspaceFiles` 引入细粒度 `entryActionLocks` 与 `foldersReady` 脱离 `locked` 全屏禁用，取消“已交给系统默认软件打开”/排序切换多余 Toast 及底部 `openHint` 提示并统一文件夹与文件为单击选中、双击/Enter 进入或打开；`workspace_files.rs` 类型排序在 `FOLDER` 置顶后固定将 `PSD`（`.psd` 先于 `.psb`）排在第一类型；`ScreenshotStudio` 引入 `starringIds` 并发锁、`silentRefresh` 关闭刷新通道及 `autoScan` 变更指纹校验；`Icon.tsx` 新增矢量 `star`；`workspace-files.css`、`workbenchStudio.css`、`gallery-round8.css`、`motion.css` 统一 `36px` / `13px` 度量、`.view-toggle`、基线底线 Tab、中性选中态并取消 `opacity: 0` 全屏透明闪变。所有验证证据汇总于 `ROUND12_REPORT_20261116.md`。
+
+## 2026-11-16 Round 11（本地 0.5.19 / schema 38 保持）
+
+`screenshot_gallery` 的 list/locate 共用 MODIFIED/NAME/SIZE 及方向参数，默认 MODIFIED DESC，以同方向 ID 消除分页同值不稳定；无迁移。`ScreenshotStudio` 通过串行 flush 与代次保护合并最新草稿，普通输入 450ms 防抖，离开等待保存；失败草稿保留供重试。
+
+`workbenchThumbCache` 独立调度四路工作台图像请求，160 项 / 48MiB 的保留缓存以源种类、身份、修订和尺寸模式作为键；活动引用和未完成 decode 不提前撤销 URL。视口观察器提前 480px 请求并释放离屏引用。`workbench_cache.rs` 只从缩略图读取进入，按需创建数据库目录下 `cache/workbench`，4000 文件 / 256MiB、单项 4MiB；Windows 祖先目录句柄固定、重解析点与三类源根交叠检查、校验摘要和有界 LRU 清理均保留。失效/不可写安全回退为原有受检源读取。Triangle 与 JPEG q90/快速 PNG 替代工作台 Lanczos/慢编码，未修改主库海报缓存。
+
+`toast.ts` 提供应用统一回执事件，App 持有 ToastStack；通知为 feature-detected manual popover，旧运行时保留固定定位回退。原生 dialog 打开时通知区域进入当前 dialog，普通模态隔离与焦点循环包含通知按钮。定时器分别 3500/5000ms，鼠标/焦点共同暂停。`PrivateNote`、`HiddenNodesDialog`、`CollectionBackupSettings`、工作台画廊/项目/笔记导出均迁移了操作回执。
+
+`libraryDrop.ts` 将拖入建库限定至全部资源顶层，`LibraryDropImport` 同时检查模态及请求代次，避免异步路径验证跨页后触发旧建库。版本、38 个旧迁移、依赖锁、公钥与图标保持；完整证据见 `CODEX_ROUND11_REPORT_20261116.md`。
+
+## 2026-11-16 Round 10（本地 0.5.19 / schema 38 保持）
+
+`App` 的导航快照增加侧栏来源与工作台位置；各栏目的最后现场与顶层快照分离。父级导航查找已有历史项，逐次popstate到目标序号，保持前进栈；弹窗草稿继续拦截。详情/资源列表恢复仍读取当前SQLite数据并保留代次保护。工作台、设置访问后常驻，隐藏工作台不被其他栏目的旧快照重置；项目目录保留有界会话筛选状态，列表就绪后恢复滚动。
+
+`WorkspaceFiles` 根导航合并、字面父路径、网格/列表共用排序；`ScreenshotStudio`前台静默刷新使用300ms防抖、2.5秒节流、串行登记文件夹处理和代次校验，失败保留已展示内容。mpv通过已确认IPC执行expand-path展开特殊目录，沿用UTC毫秒、即时会话与5秒心跳证据。
+
+`workspace_drag` 以无新依赖COM ABI提供CF_HDROP，typed命令在只读根/路径/revision/句柄校验后交给主STA，最多100项，DoDragDrop只传COPY=1。前端共享7px指针手势只接入工作台两处。原生结构与安全测试不启动阻塞真实OLE。实际外部软件接收未纳入合成验收。
+
+截图与项目缩略图改为透明底原比例contain，明确替代下文Round9的cover策略。多选使用单一按钮焦点、同步对勾和柔和底色；鼠标模态不绘制outline，键盘focus-visible与forced-colors保留。绑定标题与外链图标垂直居中。
+
+全软件品牌强调色、主按钮、破坏性/确认弹窗按钮与核心警示统一采用森下红（Morishita Red）：`--logo-red: #a13436`、悬停 `#8f2d30`、纯白文字 `--on-brand: #ffffff`。亮暗主题均遵守；严禁使用高明度浅粉红 `#ef9290` 作为暗色确认按钮或核心警示色。错误正文可以使用独立、可读的语义文字色。
+
+本轮不增加依赖或迁移，不改变0.5.19/schema38；完整门禁、视觉矩阵、无凭据未签名本地交付及其边界以 `CODEX_ROUND10_REPORT_20261116.md` 为准。
+
+## 2026-11-16 Round 9（本地 0.5.19 / schema 38）
+
+新增 `workspace_files` 原生模块与 `0038_workspace_files_and_mpv_shots.sql`：项目根登记、只读直接子项浏览、面包屑、受限位图缩略图和校验后的默认软件打开/定位均通过 typed Tauri commands。项目目录不进入媒体扫描和作品计数；`notes_export` 将其纳入禁止写入范围。收藏备份结构检查保留旧 schema 的原结构校验并支持迁移到 38。
+
+媒体、截图与项目根共用 `read_only_source_paths` 写入保护：笔记/收藏备份导出和封面缓存路径均拒绝这些源目录，项目导入也拒绝与现有封面缓存互相包含。智能书库影子适配器支持 schema 25–38，未来 schema 仍拒绝；其夹具使用实际 0038 迁移验证兼容性。
+
+`mpv_ipc` 仅从本应用管理、PID 和索引身份已验证的会话记录播放时间窗与截图目录，保留随机管道、原字面媒体路径参数和有界读取。`screenshot_gallery` 在导入/刷新与显式自动匹配时使用当前未独立绑定截图、稳定源修订和唯一证据写入关联，并返回按播放/标题来源划分的真实计数。
+
+工作台新增 `WorkspaceFiles` 与四语资源；三个面板常驻并以 `hidden` 切换。项目网格与列表共用目录结果，命令面板可定位已登记目录。画廊卡片调整为 16:9 cover，灯箱保持 contain；扩展名恢复按钮移到添加行。版本配置同步为 0.5.19，依赖不增加。核验、构建和限制以 `CODEX_ROUND9_REPORT_20261116.md` 的最终实测记录为准，以下版本说明保留为历史记录。
+
+## 2026-11-16 Round 8（本地 0.5.17 / schema 37）
+
+`knowledgeSearch` 对原搜索、`list_work_notes` 与 `list_screenshots` 独立有界聚合；`openStudio` 用真实类型目标和一次性请求串接 App/详情/工作台。`notes` 在现有表上完成排序和单快照导出，`notes_export` 仅接受有界 `.md`，复用安全路径和原子替换检查；无新 migration 或 WebView 文件权限。
+
+`screenshot_gallery` 新增批量命令与精确标签过滤、按ID定位页；批量最多100个ID，校验源revision及note/tags/star/ownTarget后在Immediate事务修改。`ScreenshotStudio` 保持48张分页，跨页灯箱复用同一编辑器并拦截脏草稿，读取/Blob预算保持。`floatingPanelPosition` 为 Select/Filters/WorkPicker 提供共享视口几何，ContextMenu/BatchContextMenu保留既有焦点生命周期。`ShortcutHelp` 使用原生modal dialog，阅读器、App和窗口菜单识别原生modal，避免后台快捷操作。
+
+新的专项测试和合成浏览器证据位于 Round 8 输出；本地无凭据构建按任务单的独立流程执行，未使用要求生产令牌的公开发布包装器。报告区分合成浏览器、Rust/SQLite和真正Windows WebView验收。
+
+## 2026-11-16 Round 5（本地 0.5.17，schema 37 保持）
+
+`DetailVideoTabs` 接收原索引分区的 CDs 文件、文件夹和原操作回调；音乐视频与附件在同一个 tabpanel 呈现。`WorkDetailPage` 删除下方独立 CDs 区块并修正仅 CDs 的空态，资源去重、视频统计及所有原始身份保持。Rust 增补合成 SQLite 详情载荷回归，不更改生产 IPC。
+
+`tabs.css` 是全部资源、详情与工作台页签的共同视觉来源；删除 `ui-polish.css` 中 Round 4 的灰框、计数方块、双底线、utility 边框和设置窄列覆写，同时清理其他样式中的重复页签规则。共享圆角为 4/6/10px，常规字重为 400/500/600，集合工具栏统一 36px。窗口栏、侧栏、设置、菜单、弹窗和阅读器沿用语义主题与原功能边界。
+
+工作台使用单行编辑器底栏、受控可搜索作品弹层、全部文件夹管理入口、16:10 contain 画廊、独立星标按钮和灯箱快捷保存。`workbenchStudio.css` 按组件职责整理为单一来源。备注继续共用 CAS 草稿与 flush，截图使用原有有界读取、revision、Blob 清理和 schema 37。
+
+本轮是无私密输入的本地未签名重建；版本、依赖锁、图标、更新公钥和 Portable 八文件契约不变。完整门禁、视觉证据、归档校验及原生验收限制见 `CODEX_ROUND5_REPORT_20261116.md`。下面 Round 4 的独立 CDs 呈现及页签视觉由本节替代。
+
+## 2026-11-16 工作台重构（本地 0.5.17，schema 37）
+
+`OrganizePage` 保留既有导航目标，界面统一为工作台，使用 `studioMessages` 和 `workbenchStudio.css`。旧 `BookCatalogueStudio`、`WorkbenchHealthStudio`、旧工作台消息与样式已移除。`StudioNoteEditor` 与详情 `PrivateNote` 共用内存草稿、原生 `private_notes` 和 CAS 修订；`list_work_notes` 在 SQLite 快照中按可见真实 NODE/BOOK 身份筛选并分页，返回标题、所属库和备注时间，不枚举媒体磁盘。
+
+增量迁移 0037 添加截图夹/图片轻量元数据及私人笔记更新时间索引，不复制笔记正文、不创建另一套作品身份。`screenshot_gallery` 原生模块承担目录授权、扫描、图片签名/尺寸/修订/打开句柄归属校验、有界二进制读取和原图定位；写入只发生在应用数据库。前端 `ScreenshotStudio` 使用分页、可见区加载、双读取队列及 Blob 释放，和海报管线独立。旧 schema 32–36 备份继续按原结构校验后升级至 37。
+
+`video_presentation` 增加 `CDS` 分类，扫描与逻辑归属共享音乐目录规则；`cdResources` 对已有详情载荷分区去重。`DetailVideoTabs` 顺序为 MAIN / SPS / CDS / OTHER。设置恢复默认使用 `videoExtensions` 的八项常量，并通过测试核对 Rust 默认值。
+
+本轮仅本地未签名构建，版本保持 0.5.17，依赖、图标、更新公钥与 Portable 八文件契约保持。实际门禁、浏览器合成数据矩阵、打包校验和验证边界见 `CODEX_ROUND4_REPORT_20261116.md`。下方旧三页签实现说明仅保留为历史记录。
+
+## 2026-11-15 第三轮巡检与有界扫描（本地源码）
+
+`WorkbenchHealthStudio` 接入 `OrganizePage` 第三个 Tab；通过 `listRoots()` 刷新持久化的 `scanHealth.changes`，复用现有海报缓存 API 和 App 的扫描/隐藏内容回调。没有新增 scanReport 命令或统计存储。媒体类型来自现有枚举；书籍目录与问题队列共享所选 Root。异步刷新、缓存轮询与失败详情均有代次及卸载保护，磁盘统计仅在初次、刷新或缓存任务结束时读取。
+
+视频的 `scan_directory` 和漫画/电子书共用的 `ComicScan::directory` 采用 Enter/Finish 显式栈。`player::test` 保留每流 8192 字节上限，Windows 通过 `PeekNamedPipe` 读取已可用字节，停止标记/总截止时间让读取线程退出；两路输出共享 150ms 收束，终止后的进程回收不阻塞调用。`useModalFocus` 新增默认开启的可选激活参数，支持常驻隐藏/重复打开组件。`ToastStack` 独占计时并处理外部撤销焦点项，App 保留四条上限及按 ID 撤销。
+
+入口 HTML 声明 light/dark，主题 CSS 明确原生控件色系并保留标准滚动条与旧 WebKit 降级。扩展名错误、通知区域及健康页新增文案均提供四语。版本、schema、依赖和签名契约不变；验证与真实环境边界见 `CODEX_ROUND3_REPORT_20261115.md`。
+
+## 2026-11-15 第二轮修复与馆藏工作台（本地源码）
+
+`OrganizePage` 现在提供问题指标筛选、多选治理及 `BookCatalogueStudio`，复用原生问题/提醒、匹配、封面、智能目录和带 revision 的纠偏 API。新消息集中在 `workbenchMessages`，样式沿用共享主题并位于 `workbench.css`。异步读取按请求代次提交，操作期间防止重复写入；目录纠偏保持 Root/原索引身份和原有事务校验。`useModalFocus` 处理自定义弹窗的焦点、Escape/输入法和背景隔离；菜单保持普通按钮语义并按实测尺寸避开窗口边沿。
+
+`collection_backup` 增补向后兼容的 journal 封面代次字段，持久化候选终态后才改变内存阶段，失败回到受校验恢复。`comics` 扫描通过同一个已验证只读句柄调用归档/文档索引；`library_relocation` 按资源附件身份区分单图片文件与核心图片目录。`portable_update` 的 JSON 读取在实际句柄上核验路径、长度并限流。阅读进度/书签命令拒绝缺省或空 revision；通用播放器入口复核当前索引与可见性。四个单项/批量分类入口成功后撤销 raster、file lease 和 reader 代次，海报响应也拒绝旧代次完成。
+
+版本、schema、依赖、迁移、图标与更新信任根保持不变；无签名、打包、安装或发布。完整门禁、合成测试、浏览器矩阵和未覆盖的原生边界见 `CODEX_ROUND2_REPORT_20261115.md`。
+
 ## 2026-11-11 公开发布 0.5.17
 
 `v0.5.17`（`15213d5177e16ac00d878ca9d217f42025d3fbc1`）的 Windows x64 安装包和 Portable 由 GitHub Actions 构建并验证来源。经所有者 USB 签名后发布两个包及 `latest.json`，公开文件重新下载后与签名产物一致，稳定更新入口返回 0.5.17。四语 README 已同步下载链接。

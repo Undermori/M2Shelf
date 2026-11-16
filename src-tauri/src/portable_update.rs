@@ -2210,13 +2210,78 @@ fn wait_for_survival_grace(
 
 fn read_json_bounded<T: for<'de> Deserialize<'de>>(path: &Path, limit: u64) -> Result<T, String> {
     ensure_plain_file(path, "更新 JSON 文件")?;
-    let metadata =
-        fs::symlink_metadata(path).map_err(|error| format!("无法读取更新 JSON 文件：{error}"))?;
-    if metadata.len() == 0 || metadata.len() > limit {
+    let expected = path
+        .canonicalize()
+        .map_err(|error| format!("无法核验更新 JSON 路径：{error}"))?;
+    for ancestor in path
+        .ancestors()
+        .skip(1)
+        .filter(|p| !p.as_os_str().is_empty())
+    {
+        ensure_plain_directory(ancestor)?;
+    }
+    #[cfg(windows)]
+    let file = {
+        use std::os::windows::fs::OpenOptionsExt;
+        // Retain the checked file while reading; deny concurrent write/delete/replacement.
+        OpenOptions::new().read(true).share_mode(1).open(path)
+    };
+    #[cfg(not(windows))]
+    let file = File::open(path);
+    let mut file = file.map_err(|error| format!("无法打开更新 JSON：{error}"))?;
+    let metadata = file
+        .metadata()
+        .map_err(|error| format!("无法读取更新 JSON 句柄：{error}"))?;
+    if !metadata.is_file() || metadata.len() == 0 || metadata.len() > limit {
         return Err("更新 JSON 文件为空或超过安全上限。".into());
     }
-    let file = File::open(path).map_err(|error| format!("无法打开更新 JSON：{error}"))?;
-    serde_json::from_reader(file).map_err(|error| format!("更新 JSON 格式无效：{error}"))
+    #[cfg(windows)]
+    {
+        use std::os::windows::{fs::MetadataExt, io::AsRawHandle};
+        use windows_sys::Win32::Storage::FileSystem::GetFinalPathNameByHandleW;
+        let mut buffer = vec![0u16; 32_768];
+        let length = unsafe {
+            GetFinalPathNameByHandleW(
+                file.as_raw_handle(),
+                buffer.as_mut_ptr(),
+                buffer.len() as u32,
+                0,
+            )
+        };
+        if metadata.file_attributes() & 0x400 != 0
+            || length == 0
+            || length as usize >= buffer.len()
+            || PathBuf::from(String::from_utf16_lossy(&buffer[..length as usize])) != expected
+        {
+            return Err("更新 JSON 文件句柄与已验证路径不一致。".into());
+        }
+    }
+    #[cfg(not(windows))]
+    if path.canonicalize().map_err(|error| error.to_string())? != expected {
+        return Err("更新 JSON 文件路径已变化。".into());
+    }
+    let value = read_json_stream_bounded(&mut file, limit, metadata.len())?;
+    let after = file.metadata().map_err(|error| error.to_string())?;
+    if after.len() != metadata.len() || after.modified().ok() != metadata.modified().ok() {
+        return Err("更新 JSON 文件在读取时发生变化。".into());
+    }
+    Ok(value)
+}
+
+fn read_json_stream_bounded<T: for<'de> Deserialize<'de>>(
+    reader: impl Read,
+    limit: u64,
+    expected_size: u64,
+) -> Result<T, String> {
+    let mut bytes = Vec::new();
+    reader
+        .take(limit.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("无法读取更新 JSON：{error}"))?;
+    if bytes.is_empty() || bytes.len() as u64 > limit || bytes.len() as u64 != expected_size {
+        return Err("更新 JSON 文件为空、已变化或超过安全上限。".into());
+    }
+    serde_json::from_slice(&bytes).map_err(|error| format!("更新 JSON 格式无效：{error}"))
 }
 
 fn write_json_create_new<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
@@ -2385,6 +2450,33 @@ mod tests {
     use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
     use tempfile::TempDir;
     use zip::{write::SimpleFileOptions, ZipWriter};
+
+    #[test]
+    fn json_reader_binds_opened_file_and_bounds_actual_stream() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("state.json");
+        fs::write(&path, br#"{"ok":true}"#).unwrap();
+        assert_eq!(
+            read_json_bounded::<serde_json::Value>(&path, 32).unwrap()["ok"],
+            true
+        );
+        assert!(read_json_bounded::<serde_json::Value>(&path, 2).is_err());
+        fs::write(&path, b"").unwrap();
+        assert!(read_json_bounded::<serde_json::Value>(&path, 32).is_err());
+        // Simulate growth after metadata was obtained. Even valid JSON plus whitespace
+        // cannot consume an unbounded stream or silently accept a changed file.
+        let mut growing = std::io::Cursor::new(
+            b"{}"
+                .iter()
+                .copied()
+                .chain(std::iter::repeat_n(b' ', 128))
+                .collect::<Vec<_>>(),
+        );
+        assert!(read_json_stream_bounded::<serde_json::Value>(&mut growing, 16, 2).is_err());
+        assert_eq!(growing.position(), 17);
+        assert!(read_json_stream_bounded::<serde_json::Value>(&b"{} "[..], 16, 2).is_err());
+        assert!(read_json_stream_bounded::<serde_json::Value>(&b"{"[..], 16, 1).is_err());
+    }
 
     fn write_zip(path: &Path, entries: &[(&str, &[u8], Option<u32>)]) {
         let file = File::create(path).unwrap();

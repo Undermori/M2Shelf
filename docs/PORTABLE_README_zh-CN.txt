@@ -11,7 +11,10 @@ Portable 文件
 - M2ShelfUpdater.exe：仅用于校验并应用 M²Shelf 官方签名更新，请勿单独移动或替换。
 - M2Shelf.portable.json：Portable 模式标记；主程序和更新程序依靠它确认分发类型。
 - README_zh-CN.txt：本说明。
-- SHA256SUMS.txt：以上文件的 SHA-256 完整性记录。
+- M2ShelfMobi.exe：内置 Kindle 文档解析辅助程序。
+- M2ShelfMobi-source.zip：解析辅助程序的源码、许可证与构建说明。
+- THIRD-PARTY-NOTICES.txt：第三方组件声明。
+- SHA256SUMS.txt：其余七个文件的 SHA-256 完整性记录。
 
 数据与隐私
 - M²Shelf 只读取媒体目录，不移动、重命名、删除或写入源文件。

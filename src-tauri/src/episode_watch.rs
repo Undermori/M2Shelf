@@ -887,6 +887,10 @@ impl PresentationReader {
                 video_sections: Vec::new(),
                 expanded_folder_ids: Vec::new(),
                 recognition_warnings: Vec::new(),
+                cds_folders: Vec::new(),
+                cds_files: Vec::new(),
+                sp_folders: Vec::new(),
+                sp_files: Vec::new(),
             };
             rows.extend(
                 self.cached_source_rows(c, &projection, work_view, count)?

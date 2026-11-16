@@ -23,6 +23,7 @@ pub fn format(path: &Path) -> Option<&'static str> {
         _ => None,
     }
 }
+#[cfg(test)]
 pub fn index(path: &Path) -> AppResult<Vec<IndexedPage>> {
     let format = format(path).ok_or("COMIC_DOCUMENT_INVALID")?;
     index_file(File::open(path).map_err(|_| "COMIC_READ_FAILED")?, format)

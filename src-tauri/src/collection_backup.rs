@@ -17,7 +17,7 @@ use std::{
 use uuid::Uuid;
 use zip::{write::SimpleFileOptions, ZipArchive, ZipWriter};
 
-const SCHEMA: i64 = 36;
+const SCHEMA: i64 = 38;
 const MAX_DB: u64 = 512 * 1024 * 1024;
 const MAX_COVERS: u64 = 256 * 1024 * 1024;
 const MAX_COVER: u64 = 15 * 1024 * 1024;
@@ -40,6 +40,9 @@ const SAFE_SETTINGS: &[&str] = &[
     "collection_sort_all",
     "collection_sort_browse",
     "collection_sort_favorites",
+    "workbench_sort_files",
+    "workbench_sort_gallery",
+    "workbench_sort_notes",
 ];
 
 fn err<T>(_: T) -> String {
@@ -85,7 +88,7 @@ pub struct Preview {
     pub offline_roots: usize,
     pub manual_covers: usize,
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Journal {
     token: String,
@@ -94,10 +97,13 @@ struct Journal {
     rollback_bytes: Option<u64>,
     incoming_hash: String,
     incoming_bytes: u64,
+    // A token, never a caller-supplied path. Old journals remain readable.
+    #[serde(default)]
+    cover_generation: Option<String>,
 }
 
 /// Reject every existing reparse point, including ancestors, before reads/writes/cleanup.
-fn plain(path: &Path, directory: bool) -> AppResult<()> {
+pub(crate) fn plain(path: &Path, directory: bool) -> AppResult<()> {
     if !path.is_absolute() {
         return Err("BACKUP_UNSAFE_PATH".into());
     }
@@ -202,7 +208,7 @@ fn write_new(path: &Path, bytes: &[u8]) -> AppResult<()> {
     io(f.write_all(bytes))?;
     io(f.sync_all())
 }
-fn replace(source: &Path, target: &Path) -> AppResult<()> {
+pub(crate) fn replace(source: &Path, target: &Path) -> AppResult<()> {
     plain(source, false)?;
     plain(target.parent().ok_or("BACKUP_UNSAFE_PATH")?, true)?;
     if target.exists() {
@@ -359,7 +365,26 @@ fn check_db(path: &Path, expected: &[(String, String, String)]) -> AppResult<Vec
     let compatible = expected
         .iter()
         .filter(|(_, name, _)| {
-            (version >= 35 || name != "library_all_resources_visibility")
+            (version >= 38
+                || !matches!(
+                    name.as_str(),
+                    "workspace_folders"
+                        | "mpv_playback_sessions"
+                        | "mpv_playback_sessions_time"
+                        | "mpv_playback_sessions_token"
+                ))
+                && (version >= 37
+                    || !matches!(
+                        name.as_str(),
+                        "screenshot_folders"
+                            | "screenshot_images"
+                            | "screenshot_images_folder"
+                            | "screenshot_images_star"
+                            | "private_note_updates"
+                            | "private_note_updates_insert"
+                            | "private_note_updates_save"
+                    ))
+                && (version >= 35 || name != "library_all_resources_visibility")
                 && (version >= 33 || (name != "private_notes" && name != "book_manual_covers"))
                 && (version >= 34
                     || (name != "episode_watch_states"
@@ -474,7 +499,18 @@ pub fn export(db: &Database, app: &Path, destination: &Path) -> AppResult<()> {
     if destination.extension().and_then(|s| s.to_str()) != Some("m2backup") {
         return Err("BACKUP_INVALID".into());
     }
-    let roots = db.library_paths().map_err(err)?;
+    let mut roots = db.library_paths().map_err(err)?;
+    // Imported screenshot/project sources are as read-only as Library Roots,
+    // including when the user chooses an export destination through a dialog.
+    let c = db.connect().map_err(err)?;
+    let mut sources = sql(c.prepare(
+        "SELECT path FROM screenshot_folders UNION ALL SELECT path FROM workspace_folders",
+    ))?;
+    let source_paths = sql(sql(sources.query_map([], |r| r.get::<_, String>(0)))?
+        .collect::<rusqlite::Result<Vec<_>>>())?;
+    roots.extend(source_paths.into_iter().map(PathBuf::from));
+    drop(sources);
+    drop(c);
     outside(destination, &roots)?;
     outside(app, &roots)?;
     let parent = destination.parent().ok_or("BACKUP_UNSAFE_PATH")?;
@@ -818,6 +854,7 @@ pub fn arm(app: &Path, token: &str, current: &Database) -> AppResult<()> {
             rollback_bytes: None,
             incoming_hash,
             incoming_bytes,
+            cover_generation: None,
         },
     )
 }
@@ -864,7 +901,7 @@ fn preserve_local(current: &Path, incoming: &Path) -> AppResult<()> {
         )
         .optional())?;
     if let Some(cache) = cache {
-        let mut s = sql(c.prepare("SELECT path FROM library_roots"))?;
+        let mut s = sql(c.prepare("SELECT path FROM library_roots UNION ALL SELECT path FROM screenshot_folders UNION ALL SELECT path FROM workspace_folders"))?;
         let roots: Vec<PathBuf> =
             sql(sql(s.query_map([], |r| Ok(PathBuf::from(r.get::<_, String>(0)?))))?.collect())?;
         crate::cache::validate_cache_location(Path::new(&cache), roots)
@@ -874,6 +911,102 @@ fn preserve_local(current: &Path, incoming: &Path) -> AppResult<()> {
             [cache],
         ))?;
     }
+    Ok(())
+}
+
+fn cleanup_restored_covers(app: &Path, journal: &Journal) -> AppResult<()> {
+    let Some(token) = &journal.cover_generation else {
+        return Ok(());
+    };
+    if token != &journal.token || Uuid::parse_str(token).map_err(err)?.to_string() != *token {
+        return Err("BACKUP_UNSAFE_PATH".into());
+    }
+    let dir = app.join("cache/restored-covers").join(token);
+    match fs::symlink_metadata(&dir) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        result => {
+            io(result)?;
+        }
+    }
+    plain(&dir, true)?;
+    let current = readonly(&app.join("morimediashelf.db"))?;
+    let roots: Vec<PathBuf> = sql(sql(current.prepare("SELECT path FROM library_roots"))?
+        .query_map([], |r| Ok(PathBuf::from(r.get::<_, String>(0)?))))?
+    .collect::<rusqlite::Result<_>>()
+    .map_err(err)?;
+    outside(&dir, &roots)?;
+    let mut query = sql(current.prepare("SELECT cover_cache_path FROM nodes WHERE cover_cache_path IS NOT NULL UNION ALL SELECT cover_cache_path FROM book_manual_covers"))?;
+    let paths = sql(query.query_map([], |r| r.get::<_, String>(0)))?;
+    for path in paths {
+        if cache::is_equal_or_within_checked(Path::new(&sql(path)?), &dir)? {
+            return Err("BACKUP_UNSAFE_PATH".into());
+        }
+    }
+    // Preflight the complete small, known generation before deleting anything. Never adopt
+    // unrelated content or traverse a reparse point, even inside an application-owned cache.
+    let mut files = Vec::new();
+    let mut directories = Vec::new();
+    for entry in io(fs::read_dir(&dir))? {
+        let path = io(entry)?.path();
+        match path.file_name().and_then(|n| n.to_str()) {
+            Some(".m2shelf-cover-cache") => {
+                plain(&path, false)?;
+                files.push(path);
+            }
+            Some(name @ ("manual" | "bangumi" | "posters")) => {
+                plain(&path, true)?;
+                for entry in io(fs::read_dir(&path))? {
+                    let file = io(entry)?.path();
+                    plain(&file, false)?;
+                    let stem = file.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+                    if name != "manual"
+                        || !cache::is_manual_stem(stem)
+                        || !matches!(
+                            file.extension().and_then(|s| s.to_str()),
+                            Some("png" | "jpg" | "webp")
+                        )
+                        || files.len() > MAX_COUNT
+                    {
+                        return Err("BACKUP_UNSAFE_PATH".into());
+                    }
+                    files.push(file);
+                }
+                directories.push(path);
+            }
+            _ => return Err("BACKUP_UNSAFE_PATH".into()),
+        }
+    }
+    for path in files {
+        plain(&path, false)?;
+        io(fs::remove_file(path))?;
+    }
+    for path in directories {
+        plain(&path, true)?;
+        io(fs::remove_dir(path))?;
+    }
+    plain(&dir, true)?;
+    io(fs::remove_dir(dir))
+}
+
+fn persist_terminal(
+    marker: &Path,
+    database: &Path,
+    journal: &mut Journal,
+    phase: &str,
+) -> AppResult<()> {
+    let mut candidate = journal.clone();
+    candidate.phase = phase.into();
+    #[cfg(test)]
+    if phase == "Completed" && FAIL_COMPLETED_HASH.with(|flag| flag.replace(false)) {
+        return Err("BACKUP_IO".into());
+    }
+    (candidate.incoming_bytes, candidate.incoming_hash) = file_hash(database, MAX_DB)?;
+    #[cfg(test)]
+    if phase == "Completed" && FAIL_COMPLETED_WRITE.with(|flag| flag.replace(false)) {
+        return Err("BACKUP_IO".into());
+    }
+    atomic_json(marker, &candidate)?;
+    *journal = candidate;
     Ok(())
 }
 /// Called only under the normal process mutex and before Database::new/migrate/background jobs.
@@ -893,6 +1026,9 @@ pub fn startup(app: &Path) -> AppResult<Option<&'static str>> {
         {
             return Err("BACKUP_ROLLBACK_FAILED".into());
         }
+        if journal.phase == "RolledBack" {
+            cleanup_restored_covers(app, &journal)?;
+        }
         let dir = root.join(&journal.token);
         if dir.exists() {
             cleanup_stage(&dir)?;
@@ -907,6 +1043,10 @@ pub fn startup(app: &Path) -> AppResult<Option<&'static str>> {
     let dir = stage(app, &journal.token)?;
     let rollback = dir.join("rollback.db");
     if journal.phase == "Committing" {
+        #[cfg(test)]
+        if FAIL_ROLLBACK.with(|flag| flag.replace(false)) {
+            return Err("BACKUP_ROLLBACK_FAILED".into());
+        }
         let bytes = journal.rollback_bytes.ok_or("BACKUP_INVALID")?;
         let hash = journal.rollback_hash.as_ref().ok_or("BACKUP_INVALID")?;
         if file_hash(&rollback, MAX_DB) != (Ok((bytes, hash.clone()))) {
@@ -921,15 +1061,22 @@ pub fn startup(app: &Path) -> AppResult<Option<&'static str>> {
         snapshot(&rollback, &restore)?;
         clear_sidecars(&database)?;
         replace(&restore, &database)?;
-        journal.phase = "RolledBack".into();
-        (journal.incoming_bytes, journal.incoming_hash) = file_hash(&database, MAX_DB)?;
-        atomic_json(&marker, &journal)?;
+        persist_terminal(&marker, &database, &mut journal, "RolledBack")?;
+        cleanup_restored_covers(app, &journal)?;
         cleanup_stage(&dir)?;
         io(fs::remove_file(marker))?;
         return Ok(Some("BACKUP_ROLLED_BACK"));
     }
     if journal.phase != "Armed" {
         return Err("BACKUP_INVALID".into());
+    }
+    // An interrupted preparation never changed the live database. Finish its registered
+    // generation cleanup instead of overwriting or adopting an existing directory.
+    if journal.cover_generation.is_some() {
+        cleanup_restored_covers(app, &journal)?;
+        cleanup_stage(&dir)?;
+        io(fs::remove_file(marker))?;
+        return Ok(Some("BACKUP_RESTORE_FAILED"));
     }
     let apply: AppResult<()> = (|| {
         let (manifest, roots) = validate_stage(&dir)?;
@@ -962,6 +1109,14 @@ pub fn startup(app: &Path) -> AppResult<Option<&'static str>> {
         }
         plain(&covers, true)?;
         let cover_root = covers.join(&journal.token);
+        if fs::symlink_metadata(&cover_root).is_ok() {
+            return Err("BACKUP_UNSAFE_PATH".into());
+        }
+        // Persist ownership before the first directory/file creation, including partial setup.
+        let mut preparing = journal.clone();
+        preparing.cover_generation = Some(journal.token.clone());
+        atomic_json(&marker, &preparing)?;
+        journal = preparing;
         io(fs::create_dir(&cover_root))?;
         cache::ensure_directories(&cover_root).map_err(err)?;
         {
@@ -993,10 +1148,12 @@ pub fn startup(app: &Path) -> AppResult<Option<&'static str>> {
             }
         }
         check_db(&incoming, &reference(&dir)?)?;
-        journal.phase = "Committing".into();
-        journal.rollback_bytes = Some(bytes);
-        journal.rollback_hash = Some(hash);
-        atomic_json(&marker, &journal)?;
+        let mut committing = journal.clone();
+        committing.phase = "Committing".into();
+        committing.rollback_bytes = Some(bytes);
+        committing.rollback_hash = Some(hash);
+        atomic_json(&marker, &committing)?;
+        journal = committing;
         clear_sidecars(&database)?;
         replace(&incoming, &database)?;
         #[cfg(test)]
@@ -1004,9 +1161,7 @@ pub fn startup(app: &Path) -> AppResult<Option<&'static str>> {
             return Err("BACKUP_IO".into());
         }
         check_db(&database, &reference(&dir)?)?;
-        journal.phase = "Completed".into();
-        (journal.incoming_bytes, journal.incoming_hash) = file_hash(&database, MAX_DB)?;
-        atomic_json(&marker, &journal)?;
+        persist_terminal(&marker, &database, &mut journal, "Completed")?;
         Ok(())
     })();
     if let Err(error) = apply {
@@ -1014,6 +1169,7 @@ pub fn startup(app: &Path) -> AppResult<Option<&'static str>> {
             startup(app)?;
             return Ok(Some("BACKUP_ROLLED_BACK"));
         }
+        cleanup_restored_covers(app, &journal)?;
         cleanup_stage(&dir)?;
         io(fs::remove_file(marker))?;
         let _ = error;
@@ -1026,6 +1182,12 @@ pub fn startup(app: &Path) -> AppResult<Option<&'static str>> {
 
 #[cfg(test)]
 thread_local! {static FAIL_AFTER_REPLACE:std::cell::Cell<bool>=const{std::cell::Cell::new(false)};}
+#[cfg(test)]
+thread_local! {
+    static FAIL_COMPLETED_HASH: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static FAIL_COMPLETED_WRITE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static FAIL_ROLLBACK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
 
 #[cfg(test)]
 mod tests {
@@ -1147,6 +1309,74 @@ mod tests {
         // A restored original remains eligible for the next backup without another poster pipeline.
         export(&db, &app, &archive).unwrap();
     }
+
+    #[test]
+    fn backup_preserves_gallery_metadata_and_shared_note_timestamps_without_source_images() {
+        let (temp, app, db, archive) = fixture();
+        let offline = temp.path().join("synthetic-offline-screenshots");
+        // Production registration stores absolute paths. Keep the directory absent
+        // to test offline metadata export without an invalid relative source root.
+        db.connect().unwrap().execute("INSERT INTO screenshot_folders(id,path,alias,note,node_id) VALUES(1,?1,'Scenes','Folder memory',2)",[offline.to_string_lossy()]).unwrap();
+        db.connect().unwrap().execute_batch("INSERT INTO screenshot_images(folder_id,relative_path,file_name,file_size,modified_at,revision,mime,width,height,note,tags,starred) VALUES(1,'scene.png','scene.png',100,'stamp','revision','image/png',24,16,'Image memory','[\"sunset\"]',1);
+            INSERT INTO private_notes(node_id,body,revision) VALUES(2,'Shared detail and studio note',1);").unwrap();
+        export(&db, &app, &archive).unwrap();
+        let p = prepare(&app, &archive).unwrap();
+        let c = readonly(&stage(&app, &p.token).unwrap().join("collection.db")).unwrap();
+        assert_eq!(
+            c.query_row(
+                "SELECT note||':'||starred FROM screenshot_images",
+                [],
+                |r| r.get::<_, String>(0)
+            )
+            .unwrap(),
+            "Image memory:1"
+        );
+        assert_eq!(
+            c.query_row("SELECT count(*) FROM private_note_updates", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            c.query_row("SELECT node_id FROM screenshot_folders", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            2
+        );
+        drop(c);
+        discard(&app, &p.token).unwrap();
+    }
+
+    #[test]
+    fn backup_export_never_writes_registered_screenshot_or_project_sources() {
+        let (temp, app, db, _archive) = fixture();
+        for (name, table) in [
+            ("Synthetic shots", "screenshot_folders"),
+            ("Synthetic project", "workspace_folders"),
+        ] {
+            let source = temp.path().join(name);
+            fs::create_dir(&source).unwrap();
+            db.connect()
+                .unwrap()
+                .execute(
+                    &format!("INSERT INTO {table}(path,alias) VALUES(?1,'Synthetic')"),
+                    [source.to_string_lossy()],
+                )
+                .unwrap();
+            let existing = source.join("existing.m2backup");
+            fs::write(&existing, b"original source file").unwrap();
+            assert_eq!(
+                export(&db, &app, &existing).unwrap_err(),
+                "BACKUP_UNSAFE_PATH"
+            );
+            assert_eq!(
+                export(&db, &app, &source.join("new.m2backup")).unwrap_err(),
+                "BACKUP_UNSAFE_PATH"
+            );
+            assert_eq!(fs::read(&existing).unwrap(), b"original source file");
+            assert_eq!(fs::read_dir(&source).unwrap().count(), 1);
+        }
+    }
     #[test]
     fn backup_write_failure_rolls_back_database_and_preserves_original_covers() {
         let (_t, app, db, archive) = fixture();
@@ -1160,6 +1390,10 @@ mod tests {
         arm(&app, &preview.token, &db).unwrap();
         FAIL_AFTER_REPLACE.with(|flag| flag.set(true));
         assert_eq!(startup(&app).unwrap(), Some("BACKUP_ROLLED_BACK"));
+        assert!(!app
+            .join("cache/restored-covers")
+            .join(&preview.token)
+            .exists());
         assert_eq!(business(&db.connect().unwrap()), before);
         assert_eq!(
             db.connect()
@@ -1170,6 +1404,133 @@ mod tests {
                 .unwrap(),
             "light"
         );
+    }
+    #[test]
+    fn completed_hash_and_journal_failures_retain_committing_and_allow_checked_recovery() {
+        for fail_hash in [true, false] {
+            let (_t, app, db, archive) = fixture();
+            export(&db, &app, &archive).unwrap();
+            db.connect()
+                .unwrap()
+                .execute("UPDATE settings SET value='light' WHERE key='theme'", [])
+                .unwrap();
+            let preview = prepare(&app, &archive).unwrap();
+            arm(&app, &preview.token, &db).unwrap();
+            FAIL_COMPLETED_HASH.with(|flag| flag.set(fail_hash));
+            FAIL_COMPLETED_WRITE.with(|flag| flag.set(!fail_hash));
+            FAIL_ROLLBACK.with(|flag| flag.set(true));
+            assert_eq!(startup(&app).unwrap_err(), "BACKUP_ROLLBACK_FAILED");
+            let marker = owned_root(&app).unwrap().join("restore.json");
+            let journal: Journal = serde_json::from_slice(&fs::read(&marker).unwrap()).unwrap();
+            assert_eq!(journal.phase, "Committing");
+            assert_eq!(
+                journal.cover_generation.as_deref(),
+                Some(preview.token.as_str())
+            );
+            let dir = stage(&app, &preview.token).unwrap();
+            assert_eq!(
+                file_hash(&dir.join("rollback.db"), MAX_DB).unwrap(),
+                (
+                    journal.rollback_bytes.unwrap(),
+                    journal.rollback_hash.unwrap()
+                )
+            );
+            let generation = app.join("cache/restored-covers").join(&preview.token);
+            assert!(generation.join("manual/node-2.png").is_file());
+            // A later startup follows the same validated rollback path, without re-arming.
+            assert_eq!(startup(&app).unwrap(), Some("BACKUP_ROLLED_BACK"));
+            assert_eq!(
+                db.connect()
+                    .unwrap()
+                    .query_row("SELECT value FROM settings WHERE key='theme'", [], |r| {
+                        r.get::<_, String>(0)
+                    })
+                    .unwrap(),
+                "light"
+            );
+            assert!(!generation.exists());
+            assert!(!dir.exists());
+            assert!(!marker.exists());
+            assert!(app.join("cache/covers/manual/node-2.png").is_file());
+        }
+    }
+    #[test]
+    fn failed_preparation_generation_cleanup_is_scoped_and_rejects_unknown_content() {
+        let (_t, app, db, archive) = fixture();
+        export(&db, &app, &archive).unwrap();
+        let preview = prepare(&app, &archive).unwrap();
+        arm(&app, &preview.token, &db).unwrap();
+        let marker = owned_root(&app).unwrap().join("restore.json");
+        let mut journal: Journal = serde_json::from_slice(&fs::read(&marker).unwrap()).unwrap();
+        journal.cover_generation = Some(preview.token.clone());
+        atomic_json(&marker, &journal).unwrap();
+        let generation = app.join("cache/restored-covers").join(&preview.token);
+        cache::ensure_directories(&generation).unwrap();
+        fs::write(generation.join("manual/node-2.png"), b"partial-copy").unwrap();
+        fs::write(generation.join("unrelated.txt"), b"preserve").unwrap();
+        assert_eq!(startup(&app).unwrap_err(), "BACKUP_UNSAFE_PATH");
+        assert!(generation.join("manual/node-2.png").exists());
+        assert_eq!(
+            fs::read(generation.join("unrelated.txt")).unwrap(),
+            b"preserve"
+        );
+        fs::remove_file(generation.join("unrelated.txt")).unwrap();
+        assert_eq!(startup(&app).unwrap(), Some("BACKUP_RESTORE_FAILED"));
+        assert!(!generation.exists());
+        assert!(app.join("cache/covers/manual/node-2.png").is_file());
+    }
+    #[test]
+    fn restore_generation_cleanup_preserves_live_references_and_rejects_foreign_tokens() {
+        let (_t, app, db, archive) = fixture();
+        export(&db, &app, &archive).unwrap();
+        let preview = prepare(&app, &archive).unwrap();
+        arm(&app, &preview.token, &db).unwrap();
+        let marker = owned_root(&app).unwrap().join("restore.json");
+        let mut journal: Journal = serde_json::from_slice(&fs::read(&marker).unwrap()).unwrap();
+        journal.cover_generation = Some(preview.token.clone());
+        let generation = app.join("cache/restored-covers").join(&preview.token);
+        cache::ensure_directories(&generation).unwrap();
+        let live_cover = generation.join("manual/node-2.png");
+        fs::write(&live_cover, b"live-cover").unwrap();
+        db.connect()
+            .unwrap()
+            .execute(
+                "UPDATE nodes SET cover_cache_path=?1 WHERE id=2",
+                [live_cover.to_string_lossy()],
+            )
+            .unwrap();
+        assert_eq!(
+            cleanup_restored_covers(&app, &journal).unwrap_err(),
+            "BACKUP_UNSAFE_PATH"
+        );
+        assert_eq!(fs::read(&live_cover).unwrap(), b"live-cover");
+        journal.cover_generation = Some(Uuid::new_v4().to_string());
+        assert_eq!(
+            cleanup_restored_covers(&app, &journal).unwrap_err(),
+            "BACKUP_UNSAFE_PATH"
+        );
+        assert_eq!(fs::read(&live_cover).unwrap(), b"live-cover");
+    }
+    #[test]
+    fn terminal_candidate_keeps_memory_phase_when_real_marker_replace_fails() {
+        let temp = tempfile::tempdir().unwrap();
+        let database = temp.path().join("synthetic.db");
+        fs::write(&database, b"replacement").unwrap();
+        let marker = temp.path().join("blocked-marker");
+        fs::create_dir(&marker).unwrap();
+        let mut journal = Journal {
+            token: Uuid::new_v4().to_string(),
+            phase: "Committing".into(),
+            rollback_hash: Some("rollback".into()),
+            rollback_bytes: Some(8),
+            incoming_hash: "original".into(),
+            incoming_bytes: 8,
+            cover_generation: None,
+        };
+        assert!(persist_terminal(&marker, &database, &mut journal, "Completed").is_err());
+        assert_eq!(journal.phase, "Committing");
+        assert_eq!(journal.incoming_hash, "original");
+        assert_eq!(journal.rollback_hash.as_deref(), Some("rollback"));
     }
     #[test]
     fn backup_interrupted_commit_and_completed_cleanup_are_recoverable() {
@@ -1352,8 +1713,8 @@ mod tests {
     }
 
     #[test]
-    fn schema32_to_35_backups_validate_before_staged_upgrade() {
-        for old_schema in [32, 33, 34, 35] {
+    fn schema32_to_37_backups_validate_before_staged_upgrade() {
+        for old_schema in [32, 33, 34, 35, 36, 37] {
             let (t, app, db, archive) = fixture();
             export(&db, &app, &archive).unwrap();
             let p = prepare(&app, &archive).unwrap();
@@ -1361,7 +1722,13 @@ mod tests {
             let old = t.path().join("legacy.db");
             snapshot(&dir.join("collection.db"), &old).unwrap();
             let c = Connection::open(&old).unwrap();
-            c.execute_batch(&format!("DROP TRIGGER tmdb_movie_scope;DROP TRIGGER tmdb_movie_update_scope;{};{};DELETE FROM mediashelf_schema_migrations WHERE version>=36;",legacy_tmdb_guard("tmdb_movie_scope").unwrap(),legacy_tmdb_guard("tmdb_movie_update_scope").unwrap())).unwrap();
+            c.execute_batch("DROP TABLE workspace_folders; DROP TABLE mpv_playback_sessions; DELETE FROM mediashelf_schema_migrations WHERE version>=38;").unwrap();
+            if old_schema < 37 {
+                c.execute_batch("DROP TRIGGER private_note_updates_insert; DROP TRIGGER private_note_updates_save; DROP TABLE private_note_updates; DROP TABLE screenshot_images; DROP TABLE screenshot_folders; DELETE FROM mediashelf_schema_migrations WHERE version>=37;").unwrap();
+            }
+            if old_schema < 36 {
+                c.execute_batch(&format!("DROP TRIGGER tmdb_movie_scope;DROP TRIGGER tmdb_movie_update_scope;{};{};DELETE FROM mediashelf_schema_migrations WHERE version>=36;",legacy_tmdb_guard("tmdb_movie_scope").unwrap(),legacy_tmdb_guard("tmdb_movie_update_scope").unwrap())).unwrap();
+            }
             if old_schema < 35 {
                 c.execute_batch("DROP TABLE library_all_resources_visibility;DELETE FROM mediashelf_schema_migrations WHERE version>=35;").unwrap();
             }
@@ -1406,7 +1773,7 @@ mod tests {
                         |r| r.get::<_, i64>(0)
                     )
                     .unwrap(),
-                36
+                38
             );
             assert_eq!(
                 db.connect()

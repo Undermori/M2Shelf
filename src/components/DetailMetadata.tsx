@@ -20,6 +20,6 @@ export function useBookDetailMetadata(books:ComicBook[],node?:MediaNode|null){
  const selectSource=!single&&!nodeTarget&&books.length>1;
  return {target,selectedBook:selected,
   actions:<>{selectSource&&<Select className="detail-book-source" aria-label={t('detail.bookSource')} value={selected?.id??''} onChange={event=>setSelectedId(Number(event.target.value)||null)}><option value="">{t('works.chooseSource')}</option>{books.map(book=><option key={book.id} value={book.id}>{book.displayName}</option>)}</Select>}{target&&<><CollectionStatusControl target={target} readable/><CoverButton target={target}/></>}</>,
-  note:target&&<PrivateNote key={`${target.kind}:${target.id}`} target={target} detail/>,
+  note:target&&<PrivateNote key={`${target.kind}:${target.id}`} target={target} nodeId={selected?.nodeId??node?.id} detail/>,
  };
 }

@@ -4,7 +4,7 @@ import {CollectionBackupSettings} from '../components/CollectionBackupSettings';
 import {TmdbDiagnostics} from "../components/TmdbDiagnostics";
 import {PlayerSettings} from '../components/PlayerSettings';
 import {Select} from '../components/Select';
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import type { AppBootstrap, AppLanguage, AppSettings, AppTheme, CacheStats, LibraryRoot, UpdateDownloadStatus } from "../types/media";
 import {PosterCacheProgress} from "../components/PosterCacheProgress";
 import { LibraryScanHealth } from "../components/LibraryScanHealth";
@@ -16,8 +16,10 @@ import { compactPath, errorMessage, formatBytes, formatDate } from "../lib/forma
 import { useI18n } from "../lib/i18n";
 import {defaultComicReaderSettings,type ComicReaderSettings} from '../types/comic';
 import { useAppSettings } from '../lib/settingsStore';
+import { DEFAULT_VIDEO_EXTENSIONS, hasDefaultVideoExtensions } from '../lib/videoExtensions';
 
 interface SettingsPageProps {
+  active?:boolean;
   onScanAdded?:(rootId:number)=>void;
   aboutRequest?:number;
   onRootPolicy?:(root:LibraryRoot,enabled:boolean)=>Promise<void>;
@@ -34,7 +36,7 @@ interface SettingsPageProps {
   onSuccess: (message: string) => void;
 }
 
-export function SettingsPage({onScanAdded, aboutRequest=0, onRootPolicy, roots, bootstrap, onAddRoot, onHiddenNodes, onRemoveRoot, onScanRoot, onIgnoreScanWarnings, updateDownloadStatus, onCheckForUpdate, onError, onSuccess }: SettingsPageProps) {
+export function SettingsPage({active=true,onScanAdded, aboutRequest=0, onRootPolicy, roots, bootstrap, onAddRoot, onHiddenNodes, onRemoveRoot, onScanRoot, onIgnoreScanWarnings, updateDownloadStatus, onCheckForUpdate, onError, onSuccess }: SettingsPageProps) {
   const { t } = useI18n();
   const { settings, saving, savedSequence, load, change: changeSettings } = useAppSettings();
   const [loading, setLoading] = useState(!settings);
@@ -44,6 +46,9 @@ export function SettingsPage({onScanAdded, aboutRequest=0, onRootPolicy, roots, 
   const [posterEpoch, setPosterEpoch] = useState(0);
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "fading">("idle");
   const [extensionDraft, setExtensionDraft] = useState("");
+  const [extensionError, setExtensionError] = useState<"settings.extensionInvalid" | "settings.extensionDuplicate" | null>(null);
+  const extensionId = useId();
+  const extensionInput = useRef<HTMLInputElement>(null);
   const reader=settings?.comicReader??defaultComicReaderSettings;
   const latestSettings = useRef<AppSettings | null>(null);
   latestSettings.current = settings;
@@ -104,12 +109,26 @@ export function SettingsPage({onScanAdded, aboutRequest=0, onRootPolicy, roots, 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const addExtension = () => {
-    const value = extensionDraft.trim().toLowerCase().replace(/^\.?/, ".");
+  const validateExtension = () => {
+    const value = extensionDraft.toLowerCase().replace(/^\.?/, ".");
     const current = latestSettings.current;
-    if (!current || !/^\.[a-z0-9]{1,10}$/.test(value) || current.videoExtensions.includes(value)) return;
+    const error = !/^\.[a-z0-9]{1,10}$/.test(value) ? "settings.extensionInvalid"
+      : current?.videoExtensions.some(item => item.toLowerCase().replace(/^\.?/, ".") === value) ? "settings.extensionDuplicate" : null;
+    setExtensionError(error);
+    return error ? null : value;
+  };
+  const addExtension = () => {
+    const value = validateExtension();
+    if (!value) { extensionInput.current?.focus(); return; }
+    if (!latestSettings.current) return;
     changeSettings((draft) => ({ ...draft, videoExtensions: [...draft.videoExtensions, value] }));
     setExtensionDraft("");
+    setExtensionError(null);
+  };
+  const restoreVideoExtensions = () => {
+    changeSettings(current => ({ ...current, videoExtensions: [...DEFAULT_VIDEO_EXTENSIONS] }));
+    setExtensionDraft("");
+    setExtensionError(null);
   };
   const clearCache = async () => {
     const request = ++cacheRequest.current;
@@ -152,9 +171,9 @@ export function SettingsPage({onScanAdded, aboutRequest=0, onRootPolicy, roots, 
           <div className="settings-section-heading"><span className="settings-symbol coral"><Icon name="folder" /></span><div><h2>{t("settings.rootsTitle")}</h2></div><button className="button secondary" disabled={!desktopAvailable} onClick={onAddRoot} type="button"><Icon name="plus" />{t("settings.addDirectory")}</button></div>
           <div className="settings-section-body">
           {roots.length === 0 ? <EmptyState compact icon="folder" title={t("settings.noDirectory")} description={t("settings.noDirectoryDescription")} /> : <div className="settings-root-list">{roots.map((root) => (
-            <article className="settings-root" key={root.id}><span><Icon name="folder-open" /></span><div><strong>{root.displayName}</strong><p title={root.path}>{compactPath(root.path, 74)}</p><small>{t(root.mediaKind==='ARTBOOK'?'artbook.name':root.mediaKind==='DOUJIN'?'doujin.name':root.mediaKind==='ANIMATION'?'comic.animation':root.mediaKind==='LIVE_ACTION'?'library.liveAction':root.mediaKind==='EBOOK'?'ebook.name':root.mediaKind==='COMIC'?'comic.name':'comic.unboundVideo')} · {t(root.bookOrganizationStrategy==='SMART_MIXED'?'smart.title':root.recognitionMode==='VIDEO_FILE'?(root.mediaKind==='COMIC'||root.mediaKind==='EBOOK'||(root.mediaKind==='DOUJIN' || root.mediaKind === 'ARTBOOK')?'bookMode.fileTitle':'rootMode.videoFileTitle'):'rootMode.folderTitle')}</small><small>{t("settings.lastScan", { date: formatDate(root.lastScanAt) })}</small><LibraryScanHealth health={root.scanHealth} onAdded={()=>onScanAdded?.(root.id)} />{['COMIC','EBOOK','DOUJIN','ARTBOOK'].includes(root.mediaKind??'') && <label className="root-policy-inline"><input type="checkbox" disabled={!onRootPolicy||policyBusy!==null} checked={root.autoBangumi===false || root.autoBangumi===undefined&&root.mediaKind==='DOUJIN'} onChange={event=>{setPolicyBusy(root.id);void onRootPolicy?.(root,!event.target.checked).finally(()=>setPolicyBusy(null));}} />{t('library.noAutoBangumi')}</label>}</div><div className="settings-root-actions"><LibraryRelocation root={root} onDone={()=>onSuccess(t("relocate.done"))}/>{root.scanHealth && root.scanHealth.outcome !== 'SUCCESS' && <button className="icon-button" aria-pressed={!!root.scanHealth.warningsIgnored} aria-label={t(root.scanHealth.warningsIgnored?'comic.restoreWarnings':'comic.ignoreWarnings')} title={t(root.scanHealth.warningsIgnored?'comic.restoreWarnings':'comic.ignoreWarnings')} disabled={!onIgnoreScanWarnings} onClick={()=>onIgnoreScanWarnings?.(root)} type="button"><Icon name={root.scanHealth.warningsIgnored?'warning':'close'}/></button>}<button aria-label={t("settings.scanNamed", { name: root.displayName })} onClick={() => onScanRoot(root)} title={t("settings.scanLibrary")} type="button"><Icon name="refresh" /></button><button className="danger-icon" aria-label={t("settings.removeNamed", { name: root.displayName })} onClick={() => onRemoveRoot(root)} title={t("settings.removeIndexOnly")} type="button"><Icon name="trash" /></button></div></article>
+            <article className="settings-root" key={root.id}><span><Icon name="folder-open" /></span><div><div className="settings-root-title-row"><strong>{root.displayName}</strong><p title={root.path}>{compactPath(root.path, 74)}</p></div><div className="settings-root-meta-row"><small>{t(root.mediaKind==='ARTBOOK'?'artbook.name':root.mediaKind==='DOUJIN'?'doujin.name':root.mediaKind==='ANIMATION'?'comic.animation':root.mediaKind==='LIVE_ACTION'?'library.liveAction':root.mediaKind==='EBOOK'?'ebook.name':root.mediaKind==='COMIC'?'comic.name':'comic.unboundVideo')} · {t(root.bookOrganizationStrategy==='SMART_MIXED'?'smart.title':root.recognitionMode==='VIDEO_FILE'?(root.mediaKind==='COMIC'||root.mediaKind==='EBOOK'||(root.mediaKind==='DOUJIN' || root.mediaKind === 'ARTBOOK')?'bookMode.fileTitle':'rootMode.videoFileTitle'):'rootMode.folderTitle')} · {t("settings.lastScan", { date: formatDate(root.lastScanAt ?? root.scanHealth?.lastSuccessAt ?? null) })}</small>{['COMIC','EBOOK','DOUJIN','ARTBOOK'].includes(root.mediaKind??'') && <label className="root-policy-inline"><input type="checkbox" disabled={!onRootPolicy||policyBusy!==null} checked={root.autoBangumi===false || root.autoBangumi===undefined&&root.mediaKind==='DOUJIN'} onChange={event=>{setPolicyBusy(root.id);void onRootPolicy?.(root,!event.target.checked).finally(()=>setPolicyBusy(null));}} />{t('library.noAutoBangumi')}</label>}</div><LibraryScanHealth health={root.scanHealth} onAdded={()=>onScanAdded?.(root.id)} /></div><div className="settings-root-actions"><LibraryRelocation root={root} onDone={()=>onSuccess(t("relocate.done"))}/>{root.scanHealth && root.scanHealth.outcome !== 'SUCCESS' && <button className="icon-button" aria-pressed={!!root.scanHealth.warningsIgnored} aria-label={t(root.scanHealth.warningsIgnored?'comic.restoreWarnings':'comic.ignoreWarnings')} title={t(root.scanHealth.warningsIgnored?'comic.restoreWarnings':'comic.ignoreWarnings')} disabled={!onIgnoreScanWarnings} onClick={()=>onIgnoreScanWarnings?.(root)} type="button"><Icon name={root.scanHealth.warningsIgnored?'warning':'close'}/></button>}<button aria-label={t("settings.scanNamed", { name: root.displayName })} onClick={() => onScanRoot(root)} title={t("settings.scanLibrary")} type="button"><Icon name="refresh" /></button><button className="danger-icon" aria-label={t("settings.removeNamed", { name: root.displayName })} onClick={() => onRemoveRoot(root)} title={t("settings.removeIndexOnly")} type="button"><Icon name="trash" /></button></div></article>
           ))}</div>}
-          <div className="settings-hidden-entry"><div><strong>{t("hidden.title")}</strong><p>{t("settings.hiddenDescription")}</p></div><button className="button secondary" disabled={!desktopAvailable} onClick={onHiddenNodes} type="button" aria-haspopup="dialog"><Icon name="eye-off" />{t("hidden.title")}</button></div>
+          <div className="settings-hidden-entry"><div><strong>{t("hidden.title")}</strong><p>{t("settings.hiddenDescription")}</p></div><button aria-label={t("hidden.title")} className="button secondary" disabled={!desktopAvailable} onClick={onHiddenNodes} type="button"><Icon name="eye-off" />{t("common.open")}</button></div>
           </div>
         </section>
 
@@ -174,12 +193,17 @@ export function SettingsPage({onScanAdded, aboutRequest=0, onRootPolicy, roots, 
           <label className="switch-field settings-switch-row"><span><strong>{t("settings.autoScanOnStartup")}</strong><small>{t("settings.autoScanOnStartupDescription")}</small></span><input aria-label={t("settings.autoScanOnStartup")} checked={settings?.autoScanOnStartup ?? true} disabled={!settings} onChange={(event) => changeSettings((current) => ({ ...current, autoScanOnStartup: event.target.checked }))} type="checkbox" /><i /></label>
           <label className="switch-field settings-switch-row"><span><strong>{t("settings.allResourcesFlattened")}</strong><small>{t("settings.allResourcesFlattenedDescription")}</small></span><input aria-label={t("settings.allResourcesFlattened")} checked={settings?.allResourcesFlattened ?? false} disabled={!settings} onChange={(event) => changeSettings((current) => ({ ...current, allResourcesFlattened: event.target.checked }))} type="checkbox" /><i /></label>
           </div>
-          <div className="extension-editor"><span>{t("settings.videoExtensions")}</span><div className="extension-chips">{settings?.videoExtensions.map((extension) => <button disabled={settings.videoExtensions.length <= 1} key={extension} onClick={() => changeSettings((current) => ({ ...current, videoExtensions: current.videoExtensions.filter((item) => item !== extension) }))} title={t("settings.removeExtension")} type="button">{extension}<Icon name="close" /></button>)}</div><div className="extension-add"><input onChange={(event) => setExtensionDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); addExtension(); } }} placeholder={t("settings.extensionPlaceholder")} value={extensionDraft} /><button onClick={addExtension} type="button">{t("common.add")}</button></div></div>
+          <div className="extension-editor"><div className="extension-heading"><label htmlFor={extensionId}>{t("settings.videoExtensions")}</label></div><div className="extension-chips">{settings?.videoExtensions.map((extension) => <button disabled={settings.videoExtensions.length <= 1} key={extension} onClick={() => changeSettings((current) => ({ ...current, videoExtensions: current.videoExtensions.filter((item) => item !== extension) }))} title={t("settings.removeExtension")} type="button">{extension.startsWith(".") ? extension : `.${extension}`}<Icon name="close" /></button>)}</div><div className="extension-add"><input ref={extensionInput} id={extensionId} autoCorrect="off" autoCapitalize="none" spellCheck={false}
+            pattern="\.?[a-zA-Z0-9]{1,10}" aria-invalid={!!extensionError} aria-describedby={extensionError ? `${extensionId}-error` : undefined}
+            onChange={(event) => { setExtensionDraft(event.target.value); setExtensionError(null); }}
+            onBlur={() => { if (extensionDraft !== "") validateExtension(); }}
+            onKeyDown={(event) => { if (event.key === "Enter" && !event.nativeEvent.isComposing) { event.preventDefault(); addExtension(); } }}
+            placeholder={t("settings.extensionPlaceholder")} value={extensionDraft} /><button disabled={!settings} onClick={addExtension} type="button">{t("common.add")}</button><button className="button secondary extension-restore" disabled={!settings || hasDefaultVideoExtensions(settings.videoExtensions)} onClick={restoreVideoExtensions} type="button"><Icon name="refresh" />{t("settings.restoreVideoExtensions")}</button></div>{extensionError && <p id={`${extensionId}-error`} className="extension-error" role="alert">{t(extensionError)}</p>}<p className="field-hint extension-rescan-hint">{t("settings.extensionsRescanHint")}</p></div>
           </div>
         </section>
 
         <section className="settings-section comic-settings">
-          <div className="settings-section-heading"><span className="settings-symbol navy"><Icon name="work"/></span><div><h2>{t('comic.defaults')}</h2><p>{t('comic.emptyHelp')}</p></div></div>
+          <div className="settings-section-heading"><span className="settings-symbol navy"><Icon name="work"/></span><div><h2>{t('comic.defaults')}</h2></div></div>
           <div className="settings-section-body">
           <div className="settings-columns">
             <label className="field-label"><span>{t('comic.direction')}</span><Select disabled={!settings} value={reader.direction} onChange={e=>changeSettings(s=>({...s,comicReader:{...(s.comicReader??defaultComicReaderSettings),direction:e.target.value as ComicReaderSettings['direction']}}))}><option value="RTL">{t('comic.rtl')}</option><option value="LTR">{t('comic.ltr')}</option></Select></label>
@@ -202,19 +226,19 @@ export function SettingsPage({onScanAdded, aboutRequest=0, onRootPolicy, roots, 
           <div className="settings-section-heading"><span className="settings-symbol green"><Icon name="database" /></span><div><h2>{t("settings.cacheTitle")}</h2></div></div>
           <div className="settings-section-body">
           <label className="field-label cache-directory-field"><span>{t("settings.cacheDirectory")}</span><div className="path-input"><input disabled={!settings} readOnly title={settings?.coverCacheDirectory} value={settings?.coverCacheDirectory ?? ""} /><button disabled={!desktopAvailable || !settings} onClick={() => void chooseCacheDirectory()} type="button">{t("settings.change")}</button><button disabled={!desktopAvailable} onClick={() => void openCache()} type="button">{t("common.open")}</button></div></label>
-          <PosterCacheProgress key={posterEpoch} cacheDirectory={settings?.coverCacheDirectory} onCompleted={()=>refreshCacheStats()} />
-          <div className="maintenance-grid"><article><Icon name="image" /><div><strong>{t("settings.coverCache")}</strong><p>{cache ? t("settings.cacheFileSummary", { count: cache.fileCount, size: formatBytes(cache.totalBytes) }) : t("common.unknown")}</p><small title={cache?.cacheDirectory}>{cache ? compactPath(cache.cacheDirectory, 55) : t("common.notAvailable")}</small></div><span className="maintenance-actions"><button disabled={!desktopAvailable} onClick={() => void openCache()} type="button">{t("common.open")}</button><button disabled={!desktopAvailable} onClick={() => void clearCache()} type="button">{t("common.clean")}</button></span></article><article><Icon name="refresh" /><div><strong>{t("settings.rebuildIndex")}</strong><p>{t("settings.rebuildDescription")}</p></div><button disabled={!desktopAvailable || roots.length === 0} onClick={() => void rebuild()} type="button">{t("common.rebuild")}</button></article></div>
+          <PosterCacheProgress active={active} key={posterEpoch} cacheDirectory={settings?.coverCacheDirectory} onCompleted={()=>refreshCacheStats()} />
+          <div className="maintenance-grid"><article><Icon name="image" /><div><strong>{t("settings.coverCache")}</strong><p>{cache ? t("settings.cacheFileSummary", { count: cache.fileCount, size: formatBytes(cache.totalBytes) }) : t("common.unknown")}</p></div><span className="maintenance-actions"><button disabled={!desktopAvailable} onClick={() => void clearCache()} type="button">{t("common.clean")}</button></span></article><article><Icon name="refresh" /><div><strong>{t("settings.rebuildIndex")}</strong><p>{t("settings.rebuildDescription")}</p></div><button disabled={!desktopAvailable || roots.length === 0} onClick={() => void rebuild()} type="button">{t("common.rebuild")}</button></article></div>
           <CollectionBackupSettings/>
           </div>
         </section>
 
         <section id="settings-about" className="settings-section about-section">
-          <div className="settings-section-heading"><span className="settings-symbol coral"><Icon name="info" /></span><div><h2>{t("settings.aboutTitle")}</h2><p>{t("settings.aboutDescription")}</p></div></div>
+          <div className="settings-section-heading"><span className="settings-symbol coral"><Icon name="info" /></span><div><h2>{t("settings.aboutTitle")}</h2></div></div>
           <div className="settings-section-body">
           <div className="about-brand"><strong>{t("brand.name")}</strong><span>{t("brand.subtitle")}</span></div>
           <div className="update-preferences">
-            <label className="switch-field settings-switch-row"><span><strong>{t("settings.autoCheckUpdates")}</strong><small>{t("settings.autoCheckUpdatesDescription")}</small></span><input aria-label={t("settings.autoCheckUpdates")} checked={settings?.autoCheckUpdates ?? false} disabled={!settings || !desktopAvailable} onChange={(event) => changeSettings((current) => ({ ...current, autoCheckUpdates: event.target.checked }))} type="checkbox" /><i /></label>
-            <div className="switch-field update-manual-check"><span><strong>{t("settings.manualCheckUpdates")}</strong><small>{t("settings.manualCheckUpdatesDescription")}</small></span><button aria-label={t("update.checkAria")} className={`button secondary${updateDownloadStatus.phase === "CHECKING" ? " is-busy" : ""}`} disabled={!desktopAvailable || updateDownloadStatus.phase === "CHECKING" || updateDownloadStatus.phase === "DOWNLOADING" || updateDownloadStatus.phase === "APPLYING"} onClick={onCheckForUpdate} title={t("update.checkAria")} type="button"><Icon name="refresh" />{updateDownloadStatus.phase === "CHECKING" ? t("update.checking") : t("update.check")}</button></div>
+            <label className="switch-field settings-switch-row"><span><strong>{t("settings.autoCheckUpdates")}</strong></span><input aria-label={t("settings.autoCheckUpdates")} checked={settings?.autoCheckUpdates ?? false} disabled={!settings || !desktopAvailable} onChange={(event) => changeSettings((current) => ({ ...current, autoCheckUpdates: event.target.checked }))} type="checkbox" /><i /></label>
+            <div className="switch-field update-manual-check"><span><strong>{t("settings.manualCheckUpdates")}</strong></span><button aria-label={t("update.checkAria")} className={`button secondary${updateDownloadStatus.phase === "CHECKING" ? " is-busy" : ""}`} disabled={!desktopAvailable || updateDownloadStatus.phase === "CHECKING" || updateDownloadStatus.phase === "DOWNLOADING" || updateDownloadStatus.phase === "APPLYING"} onClick={onCheckForUpdate} title={t("update.checkAria")} type="button"><Icon name="refresh" />{updateDownloadStatus.phase === "CHECKING" ? t("update.checking") : t("update.check")}</button></div>
           </div>
           <dl className="about-grid">
             <div><dt>{t("settings.currentVersion")}</dt><dd>{bootstrap?.version ?? t("common.notAvailable")}</dd></div>

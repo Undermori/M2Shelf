@@ -32,3 +32,10 @@ it('anchors inward at the window edge and stays visible after resizing', () => {
   expect(Number.parseFloat(popup.style.top)+174).toBeLessThanOrEqual(240-12);
   fireEvent.keyDown(screen.getByRole('combobox'),{key:'Tab'});expect(screen.queryByRole('listbox')).toBeNull();
 });
+
+it('keeps the visible label in sync for an uncontrolled native-style Select', () => {
+  const change=vi.fn();
+  render(<Select aria-label="Uncontrolled" defaultValue="first" onChange={e=>change(e.target.value)}><option value="first">First</option><option value="second">Second</option></Select>);
+  fireEvent.click(screen.getByRole('combobox'));fireEvent.click(screen.getByRole('option',{name:'Second'}));
+  expect(screen.getByRole('combobox').textContent).toBe('Second');expect(change).toHaveBeenCalledWith('second');
+});

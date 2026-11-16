@@ -1,11 +1,11 @@
 import type { ReactNode, SVGProps } from "react";
 
 export type IconName =
-  | "archive" | "arrow-left" | "bangumi" | "check" | "chevron" | "clock" | "shelf"
+  | "archive" | "arrow-left" | "bangumi" | "match" | "tmdb" | "check" | "chevron" | "chevron-down" | "chevron-up" | "clock" | "shelf"
   | "close" | "database" | "download" | "edit" | "external" | "file" | "folder"
   | "folder-open" | "grid" | "image" | "info" | "list" | "more"
   | "book" | "play" | "plus" | "refresh" | "search" | "settings" | "shield"
-  | "stop" | "trash" | "warning" | "work" | "audio" | "subtitle" | "font"
+  | "stop" | "star" | "trash" | "warning" | "work" | "audio" | "subtitle" | "font"
   | "filter" | "globe" | "tag" | "bookmark" | "eye-off";
 
 interface IconProps extends SVGProps<SVGSVGElement> { name: IconName }
@@ -17,10 +17,14 @@ const paths: Record<IconName, ReactNode> = {
   archive: <><path d="M4 7.5h16v12H4z"/><path d="M3 4.5h18v3H3zM9 12h6"/></>,
   audio: <><path d="M9 18V6l9-2v12"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="15.5" cy="16" r="2.5"/></>,
   "arrow-left": <path d="m15 18-6-6 6-6M9 12h11"/>,
-  bangumi: <><circle cx="12" cy="12" r="9"/><path d="M8 9.5h.01M16 9.5h.01M8.5 15c2.3 1.6 4.7 1.6 7 0"/></>,
+  bangumi: <><rect x="3" y="6" width="18" height="14" rx="3"/><path d="m8 3 2 3m6-3-2 3M9 15c1.7 1.4 4.3 1.4 6 0"/><path d="M8 10.5v1.5m8-1.5v1.5"/></>,
+  match: <><path d="M8 3H3v5m13-5h5v5M3 16v5h5"/><circle cx="11" cy="11" r="4.5"/><path d="m14.5 14.5 6 6"/></>,
+  tmdb: <><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 4v16M17 4v16M7 12h10M3 8h4m-4 8h4m10-8h4m-4 8h4"/></>,
   book: <><path d="M12 5C9 3 5 3 3 4v15c3-1 6-1 9 1 3-2 6-2 9-1V4c-2-1-6-1-9 1Z"/><path d="M12 5v15"/></>,
   bookmark: <path d="M6 3.5h12v17l-6-4-6 4v-17Z"/>,
   check: <path d="m5 12 4 4L19 6"/>,
+  "chevron-down": <path d="m5 9 7 7 7-7"/>,
+  "chevron-up": <path d="m5 15 7-7 7 7"/>,
   chevron: <path d="m9 5 7 7-7 7"/>,
   clock: <><circle cx="12" cy="12" r="8.5"/><path d="M12 7v5l3.4 2"/></>,
   close: <path d="m6 6 12 12M18 6 6 18"/>,
@@ -35,8 +39,8 @@ const paths: Record<IconName, ReactNode> = {
   grid: <path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z"/>,
   globe: <><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.3 2.5 3.5 5.5 3.5 9S14.3 18.5 12 21M12 3c-2.3 2.5-3.5 5.5-3.5 9S9.7 18.5 12 21"/></>,
   image: <><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m4 18 5-5 3 3 2-2 6 5"/></>,
-  info: <><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7h.01"/></>,
-  list: <><path d="M9 6h11M9 12h11M9 18h11"/><path d="M4 6h.01M4 12h.01M4 18h.01"/></>,
+  info: <><circle cx="12" cy="12" r="9"/><path d="M12 11v6"/><circle cx="12" cy="7.5" r="1.15" fill="currentColor" stroke="none"/></>,
+  list: <><path d="M9 6h11M9 12h11M9 18h11"/><circle cx="4.5" cy="6" r="1.15" fill="currentColor" stroke="none"/><circle cx="4.5" cy="12" r="1.15" fill="currentColor" stroke="none"/><circle cx="4.5" cy="18" r="1.15" fill="currentColor" stroke="none"/></>,
   more: <><circle cx="5" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1" fill="currentColor" stroke="none"/></>,
   play: <path d="m8 5 11 7-11 7V5Z"/>,
   plus: <path d="M12 5v14M5 12h14"/>,
@@ -44,11 +48,12 @@ const paths: Record<IconName, ReactNode> = {
   search: <><circle cx="11" cy="11" r="7"/><path d="m16.5 16.5 4 4"/></>,
   settings: <><path d="M10 3h4l.6 2.5 1.6.9 2.5-.7 2 3.5-1.9 1.8v2l1.9 1.8-2 3.5-2.5-.7-1.6.9L14 21h-4l-.6-2.5-1.6-.9-2.5.7-2-3.5 1.9-1.8v-2L3.3 9.2l2-3.5 2.5.7 1.6-.9L10 3Z"/><circle cx="12" cy="12" r="3.2"/></>,
   shield: <path d="M12 2.8 19 6v5.4c0 4.6-3 8.1-7 9.8-4-1.7-7-5.2-7-9.8V6l7-3.2Zm-3 9.1 2 2 4.5-4.5"/>,
+  star: <path d="m12 3.5 2.6 5.3 5.9.9-4.3 4.2 1 5.9-5.2-2.8-5.2 2.8 1-5.9-4.3-4.2 5.9-.9L12 3.5Z"/>,
   stop: <rect x="6" y="6" width="12" height="12" rx="2"/>,
   subtitle: <><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M6.5 11h5M6.5 15h3M13.5 11h4M11.5 15h6"/></>,
   tag: <><path d="M3.5 12.5V5.5a2 2 0 0 1 2-2h7l8 8-9 9-8-8Z"/><circle cx="8.25" cy="8.25" r="1.25"/></>,
   trash: <><path d="M4 7h16M9 3h6l1 4H8l1-4ZM7 7l1 14h8l1-14"/><path d="M10 11v6M14 11v6"/></>,
-  warning: <><path d="m12 3 10 18H2L12 3Z"/><path d="M12 9v5M12 18h.01"/></>,
+  warning: <><path d="m12 3 10 18H2L12 3Z"/><path d="M12 9v5"/><circle cx="12" cy="17.25" r="1.15" fill="currentColor" stroke="none"/></>,
   work: <><rect x="5" y="3" width="14" height="18" rx="2"/><path d="m10 9 5 3-5 3V9Z"/></>,
 };
 

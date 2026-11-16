@@ -33,7 +33,7 @@ export function LogicalBookDetail({group,root,revision,onBack,onRoot,onRead,onMe
   <header className="detail-toolbar"><button className="back-button" type="button" onClick={onBack}><Icon name="arrow-left"/>{t('detail.back')}</button><nav className="breadcrumb" aria-label={t('breadcrumb.location')}><button type="button" onClick={onRoot}>{root.displayName}</button><span className="breadcrumb-segment"><Icon name="chevron"/><span>{group.title}</span></span></nav></header>
   <div className="detail-content"><section className="detail-hero"><div className="detail-cover" ref={groupCover.coverFrameRef}>{groupCover.coverUrl&&!groupImageFailed?<PosterImage alt={group.title} cacheKey={groupCover.coverCacheKey} src={groupCover.coverUrl} onError={()=>{setGroupImageFailed(true);groupCover.onCoverError?.();}}/>:<BookPosterCover book={metadata.selectedBook??group.books[0]} revision={revision} detail title={group.title}/>}</div><div className="detail-copy"><p className="eyebrow">{t('smart.series')}</p><h1>{group.title}</h1><div className="detail-stats"><DetailCount count={group.books.length} message="comic.readableCount"/></div><div className="detail-actions"><ContinueReadingAction books={group.books} onRead={onRead}/>{metadata.actions}<button className="button ghost detail-more" type="button" onClick={onMenu} aria-label={t('detail.organize')} title={t('detail.organize')}><Icon name="more"/></button></div></div></section>
   <DetailUtility note={metadata.note}/>
-  <section className="content-section comic-reading-section"><div className="section-heading"><div><p className="eyebrow">{t('book.readableFiles')}</p><h2>{t('comic.doubleClickRead')}</h2></div><span>{t('comic.books',{count:group.books.length})}</span></div><ComicBookList books={group.books} onRead={onRead} onBookMenu={onBookMenu}/></section></div>
+  <section className="content-section comic-reading-section"><div className="section-heading"><div><h2>{t('book.readableFiles')}</h2></div><span>{t('comic.books',{count:group.books.length})}</span></div><ComicBookList books={group.books} onRead={onRead} onBookMenu={onBookMenu}/></section></div>
  </section>;
 }
 
@@ -85,10 +85,10 @@ export function ComicDetailPage(props: WorkDetailPageProps) {
       <section className="detail-hero">
         <div ref={coverFrameRef} className={`detail-cover ${coverUrl && !failed ? 'has-cover' : ''}`}>{coverUrl && !failed ? <PosterImage alt={t('detail.coverAlt', {title})} cacheKey={coverCacheKey} src={coverUrl} onError={() => {setImageFailed(true);onCoverError?.();}}/> : <><Icon name="work"/><span>{t(failed ? 'detail.coverFailed' : 'detail.noCover')}</span></>}</div>
         <div className="detail-copy">
-          <p className="eyebrow">{nodeTypeLabel(node.nodeType)}{node.manualTypeOverride&&` · ${t('node.manual')}`}</p><h1>{title}</h1><p className="detail-folder-name" title={node.folderName}>{node.folderName}</p><p className="detail-path" title={node.absolutePath}>{node.absolutePath}</p>
+          <p className="eyebrow">{nodeTypeLabel(node.nodeType)}{node.manualTypeOverride&&` · ${t('node.manual')}`}</p><h1>{title}</h1><p className="detail-folder-name" title={node.folderName}>{node.folderName}</p><p className="detail-path" title={`${node.absolutePath} (${t('menu.copyPath')})`} onClick={() => { void navigator.clipboard?.writeText(node.absolutePath); }}>{node.absolutePath}</p>
           <div className="detail-stats">{books === null ? <span>{t('common.unknown')}</span> : <DetailCount count={reading.count} message="comic.readableCount"/>}</div>
           <div className="detail-actions"><ContinueReadingAction books={books??[]} onRead={(book,list)=>onReadComic?.(book,list)}/>{metadata.actions}<button className="button ghost detail-more" onClick={event => onMenu(event, node)} aria-label={t('detail.organize')} title={t('detail.organize')} type="button"><Icon name="more"/></button></div>
-          {canBindBangumi(node)&&<MetadataBindingPanel provider="Bangumi" label={node.binding?t('detail.bound',{id:node.binding.providerSubjectId}):t('provider.bangumi')} title={node.binding?bindingDisplayTitle(node)??title:t('detail.unbound')} onOpen={node.binding?onOpenBangumi:undefined} openLabel={t('detail.openBangumi')} error={node.binding&&(failed||node.binding.coverDownloadError)?t('detail.bindingCoverFailed'):undefined}>
+          {canBindBangumi(node)&&<MetadataBindingPanel provider="Bangumi" subjectId={node.binding?.providerSubjectId} label={node.binding?t('detail.bound',{id:node.binding.providerSubjectId}):t('provider.bangumi')} title={node.binding?bindingDisplayTitle(node)??title:t('detail.unbound')} onOpen={node.binding?onOpenBangumi:undefined} openLabel={t('detail.openBangumi')} error={node.binding&&(failed||node.binding.coverDownloadError)?t('detail.bindingCoverFailed'):undefined}>
             <button className="button secondary" onClick={onBangumi} type="button">{t(node.binding?'detail.changeBinding':'detail.searchAdd')}</button>
             {node.binding&&(failed||node.binding.coverDownloadError)&&<button className="icon-button" aria-label={t('detail.retryCoverAria')} title={t('detail.retryCover')} onClick={()=>onRetryCover(imageFailed)} type="button"><Icon name="refresh"/></button>}
             {node.binding&&<button className="icon-button" aria-label={t('detail.clearBindingAria')} title={t('detail.clearBinding')} onClick={onClearBangumi} type="button"><Icon name="trash"/></button>}
@@ -98,15 +98,15 @@ export function ComicDetailPage(props: WorkDetailPageProps) {
       </section>
       <DetailUtility note={metadata.note}/>
       {(books === null || reading.count > 0 || !!error) && <section className="content-section comic-reading-section">
-        <div className="section-heading"><div><p className="eyebrow">{t(node.mediaKind === 'ARTBOOK' ? 'artbook.files' : node.mediaKind === 'EBOOK' ? 'ebook.files' : 'comic.files')}</p><h2>{t('comic.doubleClickRead')}</h2></div><span>{books === null ? '…' : t('comic.books', {count: reading.count})}</span></div>
+        <div className="section-heading"><div><h2>{t(node.mediaKind === 'ARTBOOK' ? 'artbook.files' : node.mediaKind === 'EBOOK' ? 'ebook.files' : 'comic.files')}</h2></div><span>{books === null ? '…' : t('comic.books', {count: reading.count})}</span></div>
         {error ? <p role="alert">{error}</p> : books === null ? <LoadingState label={t('comic.loading')}/> : <ComicBookList onBookMenu={props.onBookMenu} books={books} resources={reading.readable} onReadResource={onOpenResource} onRevealResource={onRevealResource} onRead={(book,list) => onReadComic?.(book,list)}/>}
       </section>}
       {books !== null && bookFolders.length > 0 && <section className="content-section comic-child-section">
-        <div className="section-heading"><div><p className="eyebrow">{t('detail.children')}</p><h2>{t('browse.continue')}</h2></div><span>{t('detail.itemCount', {count: bookFolders.length})}</span></div>
+        <div className="section-heading"><div><h2>{t('detail.children')}</h2></div><span>{t('detail.itemCount', {count: bookFolders.length})}</span></div>
         <PosterGrid nodes={bookFolders} viewMode="grid" onOpen={onOpenChild} onMenu={onMenu} onBangumi={props.onBangumiNode} onRetryCover={props.onRetryCoverNode} coverRevision={coverRevision}/>
       </section>}
       {books !== null && (reading.other.length > 0 || otherFolders.length > 0) && <section className="content-section comic-resource-section">
-        <div className="section-heading"><div><p className="eyebrow">{t('detail.otherResources')}</p><h2>{t('detail.workResources')}</h2></div><span>{t('detail.itemCount', {count: reading.other.length + otherFolders.length})}</span></div>
+        <div className="section-heading"><div><h2>{t('detail.otherResources')}</h2></div><span>{t('detail.itemCount', {count: reading.other.length + otherFolders.length})}</span></div>
         <OtherResourceList {...resourceListProps} files={reading.other} folders={otherFolders}/>
       </section>}
     </div>

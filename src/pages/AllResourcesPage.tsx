@@ -1,6 +1,7 @@
+import {isUnboundWork} from '../lib/round8UiCopy';
 import {useCollection} from '../lib/collectionState';
 import { CollectionSortControl } from "../components/CollectionSortControl";
-import { useMemo, useState, useEffect } from "react";
+import { useMemo, useState, useEffect, useId } from "react";
 import type { AllResourcesResult, CollectionSort, MediaNode, ViewMode } from "../types/media";
 import { EmptyState } from "../components/EmptyState";
 import { Icon } from "../components/Icon";
@@ -53,9 +54,11 @@ interface AllResourcesPageProps {
 
 export function AllResourcesPage({ onOpenBookEntry,onRevealBook,mediaKind='ALL',onMediaKind,grouping, data, loading, viewMode, onViewMode, filter, onFilter, tagFilterId, onTagFilter, sort, onSort, onOpenNode, onMenu, onBangumi, onRetryCover, onScan, onAddRoot, coverRevision, editMode, selectedNodeIds, matchBusy, onEditMode, onToggleSelection, onSelectAll, onClearSelection, onBatchTags, onBatchFavorites, onBatchMenu, onMatch }: AllResourcesPageProps) {
   const { language, number, t } = useI18n();
-  const collection=useCollection();const stateFilter=collection?.filters.all??'';
+  const tabsId = useId();
+  const collection=useCollection();const stateFilter=collection?.filters.all??'';const unboundOnly=collection?.unbound.all??false;
   const [bookMenu,setBookMenu]=useState<{x:number;y:number;book:ComicBook}|null>(null);
   useEffect(()=>setBookMenu(null),[data,grouping,editMode]);
+  const workSources=useMemo(()=>new Map(data?.works.map(work=>[work.node.id,work.sources])??[]),[data?.works]);
   const sourceEntries=useMemo(()=>allCollectionEntries(data,grouping,editMode),[data,grouping,editMode]);
   const sourceNodes=useMemo(()=>sourceEntries.flatMap(entry=>entry.node?[entry.node]:[]),[sourceEntries]);
   const effectiveTagFilterId = tagFilterId != null && sourceNodes.some((node) => node.userTags.some((tag) => tag.id === tagFilterId))
@@ -66,17 +69,18 @@ export function AllResourcesPage({ onOpenBookEntry,onRevealBook,mediaKind='ALL',
     const name=(entry:typeof sourceEntries[number])=>entry.node?nodeDisplayTitle(entry.node,language):entry.bookEntry?.name??'';
     const stamp=(entry:typeof sourceEntries[number])=>sort.startsWith('added-')?entry.node?.createdAt??entry.bookEntry?.root.createdAt:sort.startsWith('watched-')?entry.node?.lastWatchedAt??entry.bookEntry?.group?.books.map(b=>b.progress?.lastReadAt??'').sort().at(-1):entry.node?.latestFileModifiedAt??entry.bookEntry?.group?.books.map(b=>b.modifiedAt).sort().at(-1);
     return [...sourceEntries]
+      .filter(({node})=>!unboundOnly||isUnboundWork(node))
       .filter(({node,bookEntry})=>mediaKind==='ALL'||(bookEntry?.root.mediaKind??node?.mediaKind??'VIDEO')===mediaKind||node?.mediaKind==='VIDEO'&&(mediaKind==='ANIMATION'?node.binding?.providerSubjectType!==6:mediaKind==='LIVE_ACTION'&&node.binding?.providerSubjectType!==2))
-      .filter(({node,bookEntry})=>!query||!!node&&nodeMatchesQuery(node,query,language)||bookEntry?.name.toLocaleLowerCase().includes(query)||bookEntry?.group?.books.some(book=>`${book.displayName} ${book.sourcePath??''}`.toLocaleLowerCase().includes(query))||node?.workView&&data?.works.find(work=>work.node.id===node.id)?.sources.some(source=>nodeMatchesQuery(source,query,language)))
-      .filter(({node,bookEntry})=>!collection||collection.matches(bookEntry?.group?bookEntry.group.books.map(book=>({kind:'BOOK' as const,id:book.id})):node?.workView?(data?.works.find(work=>work.node.id===node.id)?.sources??[]).flatMap(source=>collection.nodeTargets(source)):node?collection.nodeTargets(node):[],stateFilter))
+      .filter(({node,bookEntry})=>!query||!!node&&nodeMatchesQuery(node,query,language)||bookEntry?.name.toLocaleLowerCase().includes(query)||bookEntry?.group?.books.some(book=>`${book.displayName} ${book.sourcePath??''}`.toLocaleLowerCase().includes(query))||node?.workView&&workSources.get(node.id)?.some(source=>nodeMatchesQuery(source,query,language)))
+      .filter(({node,bookEntry})=>!collection||collection.matches(bookEntry?.group?bookEntry.group.books.map(book=>({kind:'BOOK' as const,id:book.id})):node?.workView?(workSources.get(node.id)??[]).flatMap(source=>collection.nodeTargets(source)):node?collection.nodeTargets(node):[],stateFilter))
       .filter(({node})=>effectiveTagFilterId==null||node?.userTags.some(tag=>tag.id===effectiveTagFilterId))
       .sort((a,b)=>a.node&&b.node?compareMediaNodes(a.node,b.node,sort,language):(sort.startsWith('title-')?(sort.endsWith('-desc')?-1:1)*naturalCompare(name(a),name(b),language):compareFileModifiedTimes(stamp(a),stamp(b),sort))||naturalCompare(name(a),name(b),language)||a.key.localeCompare(b.key));
-  }, [collection,stateFilter,mediaKind,data?.works, sourceEntries, effectiveTagFilterId, filter, language, sort]);
+  }, [collection,stateFilter,unboundOnly,workSources,mediaKind, sourceEntries, effectiveTagFilterId, filter, language, sort]);
   const nodes=entries.flatMap(entry=>entry.node?[entry.node]:[]);
-  const hasActiveFilter = Boolean(filter.trim()) || effectiveTagFilterId != null || mediaKind!=='ALL'||!!stateFilter;
+  const hasActiveFilter = Boolean(filter.trim()) || effectiveTagFilterId != null || mediaKind!=='ALL'||!!stateFilter||unboundOnly;
 
   if (loading && !data) return <LoadingState label={t("all.loading")} />;
-  if (!data) return <EmptyState eyebrow={t("all.eyebrow")} title={t("all.emptyTitle")} description={t("all.emptyDescription")} action={<button className="button primary" onClick={onAddRoot} type="button"><Icon name="plus" />{t("app.addMediaDirectory")}</button>} />;
+  if (!data) return <EmptyState title={t("all.emptyTitle")} description={t("all.emptyDescription")} action={<button className="button primary" onClick={onAddRoot} type="button"><Icon name="plus" />{t("app.addMediaDirectory")}</button>} />;
 
   return (
     <section className="browse-page all-resources-page">
@@ -86,26 +90,28 @@ export function AllResourcesPage({ onOpenBookEntry,onRevealBook,mediaKind='ALL',
           <div className="collection-title"><h1>{t("all.title")}</h1><span className="collection-count" role="status">{t("app.projectCount", { count: number(entries.length) })}{hasActiveFilter && <span> / {number(sourceEntries.length)}</span>}</span></div>
           <div className="toolbar-actions">
             <button aria-pressed={editMode} className={`button secondary edit-mode-button ${editMode ? "is-active" : ""}`} onClick={() => onEditMode(!editMode)} type="button"><Icon name="edit" />{editMode ? t("selection.exit") : t("selection.editMode")}</button>
-            <button className="button secondary scan-button" aria-label={editMode?undefined:t("all.matchExisting")} title={t("all.matchExisting")} disabled={matchBusy || (editMode && selectedNodeIds.size === 0)} onClick={() => onMatch(editMode ? [...selectedNodeIds] : null, editMode)} type="button"><Icon name="bangumi" />{matchBusy ? t("selection.matching") : editMode ? t("selection.rematchSelectedCount", { count: number(selectedNodeIds.size) }) : t("layout.match")}</button>
+            <button className="button secondary scan-button" aria-label={editMode?undefined:t("all.matchExisting")} title={t("all.matchExisting")} disabled={matchBusy || (editMode && selectedNodeIds.size === 0)} onClick={() => onMatch(editMode ? [...selectedNodeIds] : null, editMode)} type="button"><Icon name="match" />{matchBusy ? t("selection.matching") : editMode ? t("selection.rematchSelectedCount", { count: number(selectedNodeIds.size) }) : t("layout.match")}</button>
             <button className="button secondary scan-button" aria-label={t("all.scanAndMatch")} title={t("all.scanAndMatch")} disabled={matchBusy} onClick={onScan} type="button"><Icon name="refresh" />{t("layout.scan")}</button>
           </div>
         </div>
         <div className="media-kind-tabs" role="tablist" aria-label={t("comic.kind")}>
-          {([['ALL', 'all.typeAll'], ['ANIMATION', 'comic.animation'], ['LIVE_ACTION', 'all.typeLiveAction'], ['COMIC', 'comic.name'], ['EBOOK', 'ebook.name'], ['DOUJIN', 'doujin.name'], ['ARTBOOK', 'artbook.name']] as const).map(([kind, label], index, items) => <button key={kind} type="button" role="tab" aria-selected={mediaKind === kind} tabIndex={mediaKind === kind ? 0 : -1} onClick={() => onMediaKind?.(kind)} onKeyDown={event => {
+          {([['ALL', 'all.typeAll'], ['ANIMATION', 'comic.animation'], ['LIVE_ACTION', 'all.typeLiveAction'], ['COMIC', 'comic.name'], ['EBOOK', 'ebook.name'], ['DOUJIN', 'doujin.name'], ['ARTBOOK', 'artbook.name']] as const).map(([kind, label], index, items) => <button key={kind} id={`${tabsId}-${kind}`} aria-controls={`${tabsId}-panel`} type="button" role="tab" aria-selected={mediaKind === kind} tabIndex={mediaKind === kind ? 0 : -1} onClick={() => onMediaKind?.(kind)} onKeyDown={event => {
+            if (event.defaultPrevented || event.nativeEvent.isComposing || event.ctrlKey || event.altKey || event.metaKey) return;
             const next = event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1 : event.key === 'ArrowRight' ? (index + 1) % items.length : event.key === 'ArrowLeft' ? (index + items.length - 1) % items.length : -1;
-            if (next < 0) return;
+            const target = event.currentTarget.parentElement?.children[next] as HTMLElement | undefined;
+            if (next < 0 || next === index || !target) return;
             event.preventDefault(); onMediaKind?.(items[next][0]);
-            (event.currentTarget.parentElement?.children[next] as HTMLElement)?.focus();
+            target.focus();target.scrollIntoView?.({block:'nearest',inline:'nearest'});
           }}>{t(label)}</button>)}
         </div>
           <div className="browse-controls collection-filters all-resources-filters">
             <label className="search-field"><Icon name="search" /><input aria-label={t("all.filterAria")} onChange={(event) => onFilter(event.target.value)} placeholder={t("all.filterPlaceholder")} value={filter} />{filter && <button aria-label={t("all.clearFilter")} onClick={() => onFilter("")} type="button"><Icon name="close" /></button>}</label>
-            <CollectionFilters nodes={sourceNodes} value={tagFilterId} onChange={onTagFilter} scope="all"/>
+            <CollectionFilters nodes={sourceNodes} value={tagFilterId} onChange={onTagFilter} scope="all" metadata/>
             <CollectionSortControl value={sort} onChange={onSort} />
             <div className="view-toggle" aria-label={t("common.displayMode")}><button className={viewMode === "grid" ? "is-active" : ""} onClick={() => onViewMode("grid")} title={t("common.grid")} type="button"><Icon name="grid" /></button><button className={viewMode === "list" ? "is-active" : ""} onClick={() => onViewMode("list")} title={t("common.list")} type="button"><Icon name="list" /></button></div>
           </div>
       </header>
-      <div className="page-content">
+      <div key={mediaKind} className="page-content collection-tab-panel" role="tabpanel" id={`${tabsId}-panel`} aria-labelledby={`${tabsId}-${mediaKind}`}>
         {editMode && <SelectionToolbar selectedCount={selectedNodeIds.size} visibleCount={nodes.length} busy={matchBusy} onSelectAll={() => onSelectAll(nodes.map((node) => node.id))} onClear={onClearSelection} onTags={onBatchTags} onFavorites={onBatchFavorites} onMore={onBatchMenu} onRematch={() => onMatch([...selectedNodeIds], true)} onExit={() => onEditMode(false)} />}
         {entries.length > 0 && <PosterGrid nodes={[]} viewMode={viewMode} onOpen={onOpenNode} onMenu={onMenu} onBangumi={onBangumi} onRetryCover={onRetryCover} coverRevision={coverRevision}>
           {entries.map(({key,node,bookEntry})=>node?<MediaCard key={key} showModifiedTime={sort.startsWith('modified-')} node={node} viewMode={viewMode} onOpen={()=>bookEntry?onOpenBookEntry(bookEntry):onOpenNode(node)} onMenu={onMenu} onBangumi={onBangumi} onRetryCover={onRetryCover} coverRevision={coverRevision} editMode={editMode} selected={selectedNodeIds.has(node.id)} onSelect={onToggleSelection}/>:bookEntry?.group&&<BookPosterCard key={key} book={bookEntry.group.books[0]} books={bookEntry.group.books} title={bookEntry.name} count={bookEntry.group.books.length} series={bookEntry.group.kind==='SERIES'} root={bookEntry.root} viewMode={viewMode} revision={coverRevision} onOpen={()=>onOpenBookEntry(bookEntry)} onMenu={event=>{event.preventDefault();setBookMenu({x:Math.max(8,Math.min(event.clientX,window.innerWidth-245)),y:Math.max(8,Math.min(event.clientY,window.innerHeight-100)),book:bookEntry.group!.books[0]});}} editMode={editMode}/>)}

@@ -10,6 +10,17 @@ vi.mock("../hooks/usePosterViewportLifecycle", () => ({ usePosterViewportLifecyc
 vi.mock("./PosterImage", () => ({ PosterImage: ({ alt, src, onError }: { alt: string; src: string; onError: () => void }) => <img alt={alt} src={src} onError={onError} /> }));
 afterEach(cleanup);
 
+it('uses the generic matching entrance for a live-action work and keeps Bangumi for animation', () => {
+  const onBangumi = vi.fn();
+  const props = { viewMode: 'grid' as const, coverRevision: 0, onOpen: vi.fn(), onMenu: vi.fn(), onBangumi, onRetryCover: vi.fn() };
+  const live = {...node, binding: null, mediaKind: 'LIVE_ACTION' as const};
+  const view = render(<I18nProvider><MediaCard {...props} node={live}/></I18nProvider>);
+  fireEvent.click(screen.getByRole('button', {name: '匹配'}));
+  expect(onBangumi).toHaveBeenCalledWith(live);
+  view.rerender(<I18nProvider><MediaCard {...props} node={{...live, mediaKind: 'ANIMATION'}}/></I18nProvider>);
+  expect(screen.getByRole('button', {name: 'Bangumi'})).toBeTruthy();
+});
+
 const node: MediaNode = {
   id: 12, displayName: "Fixture work", folderName: "Fixture work", nodeType: "WORK",
   libraryRootId: 1, parentNodeId: 100, absolutePath: "X:/Fixtures/Fixture work", manualTypeOverride: false,

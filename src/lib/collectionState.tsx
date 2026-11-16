@@ -13,7 +13,7 @@ interface CollectionContext {
  ready:boolean;failed:boolean;busy:boolean;refresh:()=>Promise<void>;
  get:(target:CollectionTarget)=>CollectionStatus|undefined;
  set:(target:CollectionTarget,value:CollectionStatus|null)=>Promise<void>;
- filters:Record<string,Filter>;filter:(scope:string,value:Filter)=>void;
+ unbound:Record<string,boolean>;filterUnbound:(scope:string,value:boolean)=>void; filters:Record<string,Filter>;filter:(scope:string,value:Filter)=>void;
  matches:(targets:CollectionTarget[],value:Filter)=>boolean;
  nodeTargets:(node:MediaNode)=>CollectionTarget[];
 }
@@ -21,14 +21,14 @@ const Context=createContext<CollectionContext|null>(null);
 export const useCollection=()=>useContext(Context);
 export function CollectionStateProvider({children}:{children:ReactNode}) {
  const [snapshot,setSnapshot]=useState<CollectionSnapshot>({entries:[],bookMemberships:[],nodeMemberships:[]});const [ready,setReady]=useState(!desktopAvailable),[busy,setBusy]=useState(false),[filters,setFilters]=useState<Record<string,Filter>>({});
- const generation=useRef(0),mutating=useRef(false);const [failed,setFailed]=useState(false);
+ const [unbound,setUnbound]=useState<Record<string,boolean>>({}); const generation=useRef(0),mutating=useRef(false);const [failed,setFailed]=useState(false);
  const refresh=useCallback(async()=>{const token=++generation.current;if(!desktopAvailable)return;try{const next=await api.collectionStatuses();if(token===generation.current){setSnapshot(next);setReady(true);setFailed(false);}}catch{if(token===generation.current){setReady(false);setFailed(true);}}},[]);
  useEffect(()=>{void refresh();return()=>{generation.current++;};},[refresh]);
  const map=useMemo(()=>new Map(snapshot.entries.map(entry=>[key(entry.target),entry.state])),[snapshot]);
  const books=useMemo(()=>new Map(snapshot.bookMemberships.map(entry=>[entry.nodeId,entry.bookIds])),[snapshot]);
  const nodes=useMemo(()=>new Map(snapshot.nodeMemberships.map(entry=>[entry.nodeId,entry.nodeIds])),[snapshot]);
  const set=useCallback(async(target:CollectionTarget,value:CollectionStatus|null)=>{if(mutating.current)return;mutating.current=true;generation.current++;setBusy(true);try{await api.setCollectionStatus(target,value);await refresh();}finally{mutating.current=false;setBusy(false);}},[refresh]);
- const context=useMemo<CollectionContext>(()=>({ready,failed,busy,refresh,get:target=>map.get(key(target)),set,filters,filter:(scope,value)=>setFilters(previous=>({...previous,[scope]:value})),matches:(targets,value)=>!value||targets.some(target=>value==='UNSET'?!map.has(key(target)):map.get(key(target))===value),nodeTargets:node=>!node.workView&&map.has(key({kind:'NODE',id:node.id}))?[{kind:'NODE',id:node.id}]:['COMIC','EBOOK','DOUJIN','ARTBOOK'].includes(node.mediaKind??'')?(books.get(node.id)??[]).map(id=>({kind:'BOOK',id})):!node.workView?(nodes.get(node.id)??[]).map(id=>({kind:'NODE',id})):[]}),[ready,failed,busy,refresh,map,set,filters,books,nodes]);
+ const context=useMemo<CollectionContext>(()=>({ready,failed,busy,refresh,get:target=>map.get(key(target)),set,filters,unbound,filterUnbound:(scope,value)=>setUnbound(previous=>({...previous,[scope]:value})),filter:(scope,value)=>setFilters(previous=>({...previous,[scope]:value})),matches:(targets,value)=>!value||targets.some(target=>value==='UNSET'?!map.has(key(target)):map.get(key(target))===value),nodeTargets:node=>!node.workView&&map.has(key({kind:'NODE',id:node.id}))?[{kind:'NODE',id:node.id}]:['COMIC','EBOOK','DOUJIN','ARTBOOK'].includes(node.mediaKind??'')?(books.get(node.id)??[]).map(id=>({kind:'BOOK',id})):!node.workView?(nodes.get(node.id)??[]).map(id=>({kind:'NODE',id})):[]}),[ready,failed,busy,refresh,map,set,filters,unbound,books,nodes]);
  return <Context.Provider value={context}>{children}</Context.Provider>;
 }
 export function CollectionStatusControl({target,readable=false}:{target:CollectionTarget;readable?:boolean}) {

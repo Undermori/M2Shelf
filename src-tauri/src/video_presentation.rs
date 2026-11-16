@@ -51,6 +51,9 @@ impl SourceEvidence {
         if !crate::episode_watch::supplemental(value) {
             return false;
         }
+        crate::episode_watch::supplemental(&self.without_title(value))
+    }
+    fn without_title(&self, value: &str) -> String {
         let mut remaining = normalized(value);
         for title in &self.titles {
             let latin_start = title.starts_with(|c: char| c.is_ascii_alphanumeric());
@@ -70,15 +73,63 @@ impl SourceEvidence {
                 remaining.replace_range(range, " ");
             }
         }
-        crate::episode_watch::supplemental(&remaining)
+        remaining
     }
     fn classify(&self, file: &MediaFile, owner: &MediaNode, relative: &str) -> VideoSection {
-        if self.supplemental(&file.file_name)
-            || relative.split(['/', '\\']).any(|s| self.supplemental(s))
+        if relative
+            .split(['/', '\\'])
+            .any(crate::scanner::is_cds_directory_name)
         {
+            return VideoSection::Cds;
+        }
+        // Ordinary episodes keep the inexpensive existing path. Only plausible music
+        // markers need Unicode title stripping and token allocation.
+        let lower_name = file.file_name.to_lowercase();
+        let filename = if [
+            "cd", "ost", "sound", "chara", "音乐", "音樂", "原声", "原聲",
+        ]
+        .iter()
+        .any(|marker| lower_name.contains(marker))
+        {
+            self.without_title(&file.file_name)
+        } else {
+            String::new()
+        };
+        let words = filename.split_whitespace().collect::<Vec<_>>();
+        let mut music_words = vec![false; words.len()];
+        for (i, word) in words.iter().enumerate() {
+            // A numbered main-disc filename is not an unnumbered music-extra marker.
+            let numbered_cd = *word == "cd"
+                && words
+                    .get(i + 1)
+                    .is_some_and(|next| next.chars().all(|c| c.is_ascii_digit()));
+            music_words[i] |= !numbered_cd && crate::scanner::is_cds_directory_name(word);
+            if i + 1 < words.len()
+                && crate::scanner::is_cds_directory_name(&format!("{}{}", word, words[i + 1]))
+            {
+                music_words[i] = true;
+                music_words[i + 1] = true;
+            }
+        }
+        let music_filename = music_words.iter().any(|matched| *matched);
+        let non_music = words
+            .iter()
+            .zip(&music_words)
+            .filter_map(|(word, matched)| (!matched).then_some(*word))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let special_filename = if music_filename {
+            crate::episode_watch::supplemental(&non_music)
+        } else {
+            self.supplemental(&file.file_name)
+        };
+        if special_filename || relative.split(['/', '\\']).any(|s| self.supplemental(s)) {
             return VideoSection::Sps;
         }
         let explicit = m2shelf_media_parser::explicit_season_episodes(&file.file_name);
+        if music_filename && explicit.as_ref().is_none_or(|(season, _)| *season != 0) {
+            return VideoSection::Cds;
+        }
         let direct_or_disc = relative.is_empty()
             || relative
                 .split(['/', '\\'])
@@ -118,6 +169,7 @@ impl SourceEvidence {
 pub enum VideoSection {
     Main,
     Sps,
+    Cds,
     Other,
 }
 #[derive(Debug, Clone, Serialize)]

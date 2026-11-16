@@ -337,16 +337,28 @@ export interface ScanStarted {
   scanId: string;
 }
 
+export type VideoSection = "MAIN" | "SPS" | "CDS" | "OTHER";
+
+export interface DetailViewState {
+  videoSection?: VideoSection;
+  metadataSource?: number | null;
+  sourcesOpen?: boolean;
+}
+
 export interface NodeDetail {
   episodeWatch?: import('./episodes').EpisodeWatchSnapshot;
   episodeWatchGeneration?: number;
   // Sparse deviations: omitted direct videos are MAIN, omitted nested videos are OTHER.
-  videoSections?:Array<{fileId:number;section:"MAIN"|"SPS"|"OTHER"}>;
+  videoSections?:Array<{fileId:number;section:VideoSection}>;
   comicBooks?: import('./comic').ComicBook[];
   workTarget?: WorkTarget | null;
   nestedMediaFiles?: NestedMediaFile[];
   expandedFolderIds?: number[];
   recognitionWarnings?: MediaNode[];
+  cdsFolders?: MediaNode[];
+  cdsFiles?: ResourceFile[];
+  spFolders?: MediaNode[];
+  spFiles?: ResourceFile[];
   node: MediaNode;
   children: MediaNode[];
   mediaFiles: MediaFile[];

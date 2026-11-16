@@ -1,0 +1,27 @@
+.command-palette [role="listbox"] { overflow: auto; overscroll-behavior: contain; min-height: 0; }
+.command-palette [role="option"] { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.knowledge-source { flex: 0 0 auto; font-size: 11px; color: var(--text-muted); border: 1px solid var(--border-normal); border-radius: 4px; padding: 2px 5px; }
+.knowledge-entry { display: grid; gap: 3px; min-width: 0; text-align: left; }
+.knowledge-entry strong, .knowledge-entry small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.knowledge-entry small { color: var(--text-muted); font-size: 12px; }
+.knowledge-entry mark { background: var(--accent-soft); color: var(--text-strong); }
+.knowledge-result { display: flex; min-width: 0; align-items: center; gap: 8px; }
+.knowledge-result > .search-hit { flex: 1; min-width: 0; }
+.knowledge-result > .button { flex: 0 0 auto; align-self: center; }
+.search-hit .note-excerpt { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; white-space: normal; line-height: 1.5; max-height: 3em; overflow-wrap: anywhere; }
+.search-hit .note-excerpt mark { background: var(--accent-soft); color: var(--text-strong); }
+.knowledge-results { display: grid; gap: 8px; margin-block: 16px; }
+.knowledge-results > button { display: flex; align-items: center; gap: 12px; padding: 12px; border: 1px solid var(--border-normal); border-radius: var(--radius-control); background: var(--surface-panel); color: var(--text-strong); text-align: left; min-width: 0; }
+.knowledge-results > button:hover { background: var(--surface-hover); }
+.studio-export-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.studio-note-sort > .styled-select { flex: 1; min-width: 0; }
+.studio-note-sort .select-trigger { width: 100%; }
+.studio-export-all { margin: 8px 0 0; flex: none; }
+@media (max-height: 700px) {
+ .notes-studio .studio-note-filters { grid-template-columns: minmax(0,1fr) minmax(0,1fr); }
+ .notes-studio .studio-note-row { padding-block: 8px; gap: 3px; }
+ .notes-studio .studio-note-row > span { -webkit-line-clamp: 1; }
+ .notes-studio .studio-note-row small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+}
+@media (max-width: 1100px) { .knowledge-result > .button { max-width: 130px; white-space: normal; } }
+@media (forced-colors: active) { .knowledge-source, .knowledge-results > button { border-color: ButtonText; } .knowledge-entry mark { color: HighlightText; background: Highlight; } }

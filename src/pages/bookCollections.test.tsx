@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import {render,screen,fireEvent,cleanup} from '@testing-library/react';
+import {render,screen,fireEvent,cleanup,within} from '@testing-library/react';
 import {afterEach,describe,it,expect,vi} from 'vitest';
 import {I18nProvider} from '../lib/i18n';
 import {SearchPage} from './SearchPage';
@@ -25,7 +25,10 @@ describe('book identity in search and recent',()=>{
   render(<I18nProvider><RecentlyWatchedPage entries={[...books.map(comicBook=>({node,comicBook,comicBookId:comicBook.id,watchedAt:'2026-10-01'})),{node:video,watchedAt:'2026-10-01'}]} loading={false} viewMode="grid" onViewMode={vi.fn()} onOpenNode={vi.fn()} onMenu={vi.fn()} onBangumi={vi.fn()} onRetryCover={vi.fn()} coverRevision={0} onReadBook={read} onRevealBook={reveal}/></I18nProvider>);
   expect(document.querySelectorAll('.media-card')).toHaveLength(5);expect(screen.queryByText('books')).toBeNull();
   fireEvent.click(screen.getByText('Book 2.epub').closest('button')!);expect(read).toHaveBeenCalledWith(books[1]);
-  fireEvent.contextMenu(screen.getByText('Book 4.epub'));fireEvent.click(screen.getByRole('menuitem'));expect(reveal).toHaveBeenCalledWith(books[3]);
+  fireEvent.contextMenu(screen.getByText('Book 4.epub'));
+  const actions=screen.getByRole('group',{name:'Book 4.epub'});
   expect(screen.queryByRole('menu')).toBeNull();
+  fireEvent.click(within(actions).getByRole('button',{name:'在资源管理器中显示'}));expect(reveal).toHaveBeenCalledWith(books[3]);
+  expect(screen.queryByRole('group',{name:'Book 4.epub'})).toBeNull();
  });
 });

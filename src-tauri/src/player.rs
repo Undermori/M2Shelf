@@ -1,7 +1,11 @@
 use std::{
     io::Read,
     path::Path,
-    process::{Command, Stdio},
+    process::{Child, Command, Stdio},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc, Arc,
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -71,6 +75,16 @@ pub fn test(path: &Path) -> AppResult<PlayerTestResult> {
         use std::os::windows::process::CommandExt;
         command.creation_flags(0x08000000);
     }
+    run_version_probe(&mut command, Duration::from_secs(5))
+}
+
+const PROBE_OUTPUT_LIMIT: u64 = 8192;
+const PROBE_SETTLE_TIMEOUT: Duration = Duration::from_millis(150);
+
+pub(crate) fn run_version_probe(
+    command: &mut Command,
+    timeout: Duration,
+) -> AppResult<PlayerTestResult> {
     let mut child = match command.spawn() {
         Ok(child) => child,
         Err(error) => {
@@ -83,18 +97,27 @@ pub fn test(path: &Path) -> AppResult<PlayerTestResult> {
     };
     // Drain both pipes concurrently. A noisy or misconfigured player must not deadlock
     // the five-second probe, grow IPC indefinitely or supply a diagnostic as its version.
-    let stdout = probe_output(child.stdout.take().expect("piped stdout"));
-    let stderr = probe_output(child.stderr.take().expect("piped stderr"));
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + timeout;
+    let stopped = Arc::new(AtomicBool::new(false));
+    let stdout = probe_process_output(
+        child.stdout.take().expect("piped stdout"),
+        deadline,
+        Arc::clone(&stopped),
+    );
+    let stderr = probe_process_output(
+        child.stderr.take().expect("piped stderr"),
+        deadline,
+        Arc::clone(&stopped),
+    );
     loop {
         match child.try_wait() {
             Ok(Some(status)) => {
-                let stdout = stdout
-                    .recv_timeout(Duration::from_millis(150))
-                    .unwrap_or_default();
-                let stderr = stderr
-                    .recv_timeout(Duration::from_millis(150))
-                    .unwrap_or_default();
+                stopped.store(true, Ordering::Relaxed);
+                // Both streams share one grace period. Descendants may hold either pipe open
+                // after the original process exits, so neither reader is ever joined here.
+                let drain_deadline = Instant::now() + PROBE_SETTLE_TIMEOUT;
+                let stdout = collect_probe_output(&stdout, drain_deadline);
+                let stderr = collect_probe_output(&stderr, drain_deadline);
                 return Ok(probe_result(
                     status.success(),
                     &status.to_string(),
@@ -102,10 +125,14 @@ pub fn test(path: &Path) -> AppResult<PlayerTestResult> {
                     &stderr,
                 ));
             }
-            Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(50)),
+            Ok(None) if Instant::now() < deadline => thread::sleep(
+                deadline
+                    .saturating_duration_since(Instant::now())
+                    .min(Duration::from_millis(50)),
+            ),
             Ok(None) => {
-                let _ = child.kill();
-                let _ = child.wait();
+                stopped.store(true, Ordering::Relaxed);
+                stop_probe(child);
                 return Ok(PlayerTestResult {
                     ok: false,
                     message: "播放器测试超时（5 秒）。".into(),
@@ -113,8 +140,8 @@ pub fn test(path: &Path) -> AppResult<PlayerTestResult> {
                 });
             }
             Err(error) => {
-                let _ = child.kill();
-                let _ = child.wait();
+                stopped.store(true, Ordering::Relaxed);
+                stop_probe(child);
                 return Ok(PlayerTestResult {
                     ok: false,
                     message: format!("检测播放器状态失败：{error}"),
@@ -125,12 +152,110 @@ pub fn test(path: &Path) -> AppResult<PlayerTestResult> {
     }
 }
 
-fn probe_output(stream: impl Read + Send + 'static) -> std::sync::mpsc::Receiver<Vec<u8>> {
-    let (send, receive) = std::sync::mpsc::channel();
+fn stop_probe(mut child: Child) {
+    let _ = child.kill();
+    // Reap on a detached worker: even failed termination must not turn the explicit test into
+    // an unbounded wait. No reader thread or process wait is joined by the caller.
+    let (send, receive) = mpsc::channel();
     thread::spawn(move || {
-        let mut bytes = Vec::new();
-        let _ = stream.take(8192).read_to_end(&mut bytes);
-        let _ = send.send(bytes);
+        let _ = send.send(child.wait());
+    });
+    let _ = receive.recv_timeout(PROBE_SETTLE_TIMEOUT);
+}
+
+pub(crate) fn collect_probe_output(output: &mpsc::Receiver<Vec<u8>>, deadline: Instant) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    while bytes.len() < PROBE_OUTPUT_LIMIT as usize {
+        match output.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+            Ok(chunk) => {
+                let remaining = PROBE_OUTPUT_LIMIT as usize - bytes.len();
+                bytes.extend_from_slice(&chunk[..chunk.len().min(remaining)]);
+            }
+            Err(_) => break,
+        }
+    }
+    // Retain all already-read bytes even when a descendant keeps its writer open.
+    bytes
+}
+
+#[cfg(windows)]
+fn probe_process_output(
+    mut stream: impl Read + std::os::windows::io::AsRawHandle + Send + 'static,
+    deadline: Instant,
+    stopped: Arc<AtomicBool>,
+) -> mpsc::Receiver<Vec<u8>> {
+    use windows_sys::Win32::System::Pipes::PeekNamedPipe;
+
+    let (send, receive) = mpsc::channel();
+    thread::spawn(move || {
+        let mut remaining = PROBE_OUTPUT_LIMIT as usize;
+        let mut buffer = [0; 1024];
+        while remaining > 0 && Instant::now() < deadline {
+            let mut available = 0_u32;
+            // These are the child's anonymous stdout/stderr pipes. Only this worker reads its
+            // stream, so consuming at most the peeked byte count cannot wait for another write.
+            let ready = unsafe {
+                PeekNamedPipe(
+                    stream.as_raw_handle(),
+                    std::ptr::null_mut(),
+                    0,
+                    std::ptr::null_mut(),
+                    &mut available,
+                    std::ptr::null_mut(),
+                )
+            };
+            if ready == 0 {
+                break;
+            }
+            if available == 0 {
+                if stopped.load(Ordering::Relaxed) {
+                    break;
+                }
+                thread::sleep(Duration::from_millis(10));
+                continue;
+            }
+            let count = buffer.len().min(remaining).min(available as usize);
+            match stream.read(&mut buffer[..count]) {
+                Ok(0) | Err(_) => break,
+                Ok(count) => {
+                    remaining -= count;
+                    if send.send(buffer[..count].to_vec()).is_err() {
+                        break;
+                    }
+                }
+            }
+        }
+    });
+    receive
+}
+
+#[cfg(not(windows))]
+fn probe_process_output(
+    stream: impl Read + Send + 'static,
+    _deadline: Instant,
+    _stopped: Arc<AtomicBool>,
+) -> mpsc::Receiver<Vec<u8>> {
+    probe_output(stream)
+}
+
+#[cfg(any(test, not(windows)))]
+pub(crate) fn probe_output(mut stream: impl Read + Send + 'static) -> mpsc::Receiver<Vec<u8>> {
+    let (send, receive) = mpsc::channel();
+    thread::spawn(move || {
+        let mut remaining = PROBE_OUTPUT_LIMIT as usize;
+        let mut buffer = [0; 1024];
+        while remaining > 0 {
+            let count = buffer.len().min(remaining);
+            match stream.read(&mut buffer[..count]) {
+                Ok(0) | Err(_) => break,
+                Ok(count) => {
+                    remaining -= count;
+                    if send.send(buffer[..count].to_vec()).is_err() {
+                        break;
+                    }
+                }
+            }
+        }
     });
     receive
 }
@@ -561,7 +686,7 @@ mod tests {
     fn probe_capture_is_bounded() {
         let capture = probe_output(std::io::Cursor::new(vec![b'x'; 100_000]));
         assert_eq!(
-            capture.recv_timeout(Duration::from_secs(1)).unwrap().len(),
+            collect_probe_output(&capture, Instant::now() + Duration::from_secs(1)).len(),
             8192
         );
     }

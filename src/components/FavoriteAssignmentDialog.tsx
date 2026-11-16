@@ -4,6 +4,7 @@ import { errorMessage } from "../lib/format";
 import { useI18n } from "../lib/i18n";
 import type { BatchMutationResult, FavoriteFolder } from "../types/media";
 import { Icon } from "./Icon";
+import { useModalFocus } from "../hooks/useModalFocus";
 
 interface FavoriteAssignmentDialogProps {
   nodeIds: number[];
@@ -15,6 +16,8 @@ interface FavoriteAssignmentDialogProps {
 export function FavoriteAssignmentDialog({ nodeIds, onClose, onApplied, onFoldersChanged }: FavoriteAssignmentDialogProps) {
   const { number, t } = useI18n();
   const inputRef = useRef<HTMLInputElement>(null);
+  const backdropRef = useRef<HTMLDivElement>(null);
+  const dialogRef = useRef<HTMLElement>(null);
   const [folders, setFolders] = useState<FavoriteFolder[] | null>(null);
   const [newName, setNewName] = useState("");
   const [busy, setBusy] = useState(false);
@@ -27,13 +30,7 @@ export function FavoriteAssignmentDialog({ nodeIds, onClose, onApplied, onFolder
   }, []);
 
   useEffect(() => { if (nodeIds.length > 0) void load(); }, [load, nodeIds.length]);
-  useEffect(() => { if (folders) inputRef.current?.focus(); }, [folders]);
-  useEffect(() => {
-    if (nodeIds.length === 0) return;
-    const key = (event: KeyboardEvent) => event.key === "Escape" && !busy && onClose();
-    window.addEventListener("keydown", key);
-    return () => window.removeEventListener("keydown", key);
-  }, [busy, nodeIds.length, onClose]);
+  useModalFocus(backdropRef, dialogRef, onClose, 'input', busy, nodeIds.length > 0);
 
   if (nodeIds.length === 0) return null;
 
@@ -72,11 +69,10 @@ export function FavoriteAssignmentDialog({ nodeIds, onClose, onApplied, onFolder
   };
 
   return (
-    <div className="modal-backdrop" onPointerDown={(event) => { if (event.currentTarget === event.target && !busy) onClose(); }}>
-      <section aria-labelledby="favorite-assignment-title" aria-modal="true" className="tag-manager-dialog favorite-assignment-dialog" role="dialog">
+    <div ref={backdropRef} className="modal-backdrop" onPointerDown={(event) => { if (event.currentTarget === event.target && !busy) onClose(); }}>
+      <section ref={dialogRef} tabIndex={-1} aria-labelledby="favorite-assignment-title" aria-modal="true" className="tag-manager-dialog favorite-assignment-dialog" role="dialog">
         <header className="modal-header">
-          <span className="modal-heading-icon"><Icon name="bookmark" /></span>
-          <div><p className="eyebrow">{t("favorites.organizeEyebrow")}</p><h2 id="favorite-assignment-title">{t("favorites.assignTitle")}</h2><p>{t("favorites.assignDescription", { count: number(nodeIds.length) })}</p></div>
+          <div><h2 id="favorite-assignment-title">{t("favorites.assignTitle")}</h2><p>{t("selection.selectedCount", { count: number(nodeIds.length) })}</p></div>
           <button aria-label={t("common.close")} className="modal-close" disabled={busy} onClick={onClose} type="button"><Icon name="close" /></button>
         </header>
         <form className="tag-create-form" onSubmit={(event) => void create(event)}>

@@ -63,19 +63,17 @@ export function FavoritesPage(props: FavoritesPageProps) {
   return (
     <section className="browse-page favorites-page">
       <header className="page-toolbar">
-        <div className="toolbar-topline">
-          {selectedFolder
-            ? <button className="all-resources-location favorites-location" onClick={props.onBack} type="button"><Icon name="arrow-left" />{t("favorites.back")}</button>
-            : <span className="all-resources-location favorites-location"><Icon name="bookmark" />{t("favorites.location")}</span>}
+        {selectedFolder && <div className="toolbar-topline">
+          <button className="all-resources-location favorites-location" onClick={props.onBack} type="button"><Icon name="arrow-left" />{t("favorites.back")}</button>
           <div className="toolbar-actions">
-            {selectedFolder && <button aria-pressed={props.editMode} className={`button secondary edit-mode-button ${props.editMode ? "is-active" : ""}`} onClick={() => props.onEditMode(!props.editMode)} type="button"><Icon name="edit" />{props.editMode ? t("selection.exit") : t("selection.editMode")}</button>}
-            {selectedFolder && <button className="button secondary" onClick={() => props.onRename(selectedFolder)} type="button"><Icon name="edit" />{t("favorites.rename")}</button>}
-            {selectedFolder && <button className="button secondary" onClick={() => props.onDelete(selectedFolder)} type="button"><Icon name="trash" />{t("favorites.delete")}</button>}
-            {!selectedFolder && <button className="button primary" onClick={props.onCreate} type="button"><Icon name="plus" />{t("favorites.create")}</button>}
+            <button aria-pressed={props.editMode} className={`button secondary edit-mode-button ${props.editMode ? "is-active" : ""}`} onClick={() => props.onEditMode(!props.editMode)} type="button"><Icon name="edit" />{props.editMode ? t("selection.exit") : t("selection.editMode")}</button>
+            <button className="button secondary" onClick={() => props.onRename(selectedFolder)} type="button"><Icon name="edit" />{t("favorites.rename")}</button>
+            <button className="button secondary" onClick={() => props.onDelete(selectedFolder)} type="button"><Icon name="trash" />{t("favorites.delete")}</button>
           </div>
-        </div>
+        </div>}
         <div className="page-title-row">
           <div className="page-heading-title"><h1>{selectedFolder?.name ?? t("favorites.title")}</h1>{selectedFolder && <span className="collection-count">{t("favorites.itemCount", { count: number(visibleNodes.length) })}</span>}</div>
+          {!selectedFolder && <div className="toolbar-actions"><button className="button primary" onClick={props.onCreate} type="button"><Icon name="plus" />{t("favorites.create")}</button></div>}
           {selectedFolder && <div className="browse-controls">
             <label className="search-field"><Icon name="search" /><input aria-label={t("favorites.filterAria")} onChange={(event) => props.onFilter(event.target.value)} placeholder={t("favorites.filterPlaceholder")} value={props.filter} />{props.filter && <button aria-label={t("common.clear")} onClick={() => props.onFilter("")} type="button"><Icon name="close" /></button>}</label>
             <CollectionSortControl value={props.sort} onChange={props.onSort} />

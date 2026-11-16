@@ -47,9 +47,6 @@ export function RecentlyWatchedPage({ onReadBook,onRevealBook,entries, loading, 
   return (
     <section className="browse-page recently-watched-page">
       <header className="page-toolbar">
-        <div className="toolbar-topline">
-          <span className="all-resources-location"><Icon name="clock" />{t('comic.recentTitle')}</span>
-        </div>
         <div className="page-title-row">
           <div className="page-heading-title"><h1>{t('comic.recentTitle')}</h1><span className="collection-count">{t("recent.count", { count: number(nodes.length) })}</span></div>
           <div className="browse-controls">

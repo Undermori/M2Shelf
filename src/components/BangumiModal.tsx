@@ -6,7 +6,7 @@ import {tmdbResult,tmdbErrorKey,type MatchResult} from "./TmdbMatch";
 import {MatchingResults} from "./MatchingResults";
 import {Select} from "./Select";
 import { Icon } from "./Icon";
-import {isolateModalSiblings} from "../lib/modalA11y";
+import {useModalFocus} from "../hooks/useModalFocus";
 import { useI18n } from "../lib/i18n";
 
 interface BangumiModalProps {
@@ -24,6 +24,7 @@ export function BangumiModal({ node, onClose, onBound, onStale, onMetadataChange
   const [configured,setConfigured]=useState<boolean|null>(null);
   const providerRef=useRef(provider);providerRef.current=provider;
   const backdropRef=useRef<HTMLDivElement>(null);
+  const dialogRef=useRef<HTMLElement>(null);
   const [keyword, setKeyword] = useState("");
   const [results, setResults] = useState<MatchResult[]>([]);
   const [loading, setLoading] = useState(false);
@@ -80,10 +81,7 @@ export function BangumiModal({ node, onClose, onBound, onStale, onMetadataChange
       setPrefill(value);
       setKeyword(value.extractedName || value.originalName);
     }).catch(() => undefined);
-    const animationFrame = requestAnimationFrame(() => {
-      if (requestIsCurrent(generation, nodeId)) inputRef.current?.focus();
-    });
-    return () => {cancelAnimationFrame(animationFrame);requestGenerationRef.current++;if(providerRef.current==='TMDB')void api.tmdbCancel().catch(()=>undefined);};
+    return () => {requestGenerationRef.current++;if(providerRef.current==='TMDB')void api.tmdbCancel().catch(()=>undefined);};
   }, [node?.id, requestIsCurrent]);
 
   useEffect(()=>{
@@ -92,13 +90,8 @@ export function BangumiModal({ node, onClose, onBound, onStale, onMetadataChange
   },[node?.id,provider,t]);
   const previousLanguage=useRef(language);
   useEffect(()=>{if(previousLanguage.current!==language){previousLanguage.current=language;requestGenerationRef.current++;setResults([]);setError(null);setSearched(false);setLoading(false);if(provider==='TMDB')void api.tmdbCancel().catch(()=>undefined);}},[language,provider]);
-  useEffect(()=>{
-    if(!node)return;const restore=isolateModalSiblings(backdropRef.current);const previous=document.activeElement as HTMLElement|null;
-    const key=(event:KeyboardEvent)=>{if(event.key==='Escape'){event.preventDefault();close();}else if(event.key==='Tab'){
-      const controls=Array.from(backdropRef.current?.querySelectorAll<HTMLElement>('button:not(:disabled),input:not(:disabled),[tabindex="0"]')??[]);const index=controls.indexOf(document.activeElement as HTMLElement);
-      if(controls.length&&(event.shiftKey&&index<=0||!event.shiftKey&&index===controls.length-1)){event.preventDefault();controls[event.shiftKey?controls.length-1:0].focus();}
-    }};window.addEventListener('keydown',key);return()=>{window.removeEventListener('keydown',key);restore();previous?.focus();};
-  },[node?.id,close]);
+  // Searches can be cancelled; binding mutations retain their busy guard.
+  useModalFocus(backdropRef, dialogRef, close, 'input:not(:disabled)', bindingId !== null, Boolean(node));
 
   if (!node) return null;
 
@@ -154,14 +147,17 @@ export function BangumiModal({ node, onClose, onBound, onStale, onMetadataChange
   const configure=async()=>{const generation=++requestGenerationRef.current,nodeId=node.id;setLoading(true);setError(null);try{const ok=await api.tmdbConfigure(t('tmdb.token'),t('tmdb.credentialsHelp'));if(requestIsCurrent(generation,nodeId)&&ok)setConfigured(true);}catch(value){if(requestIsCurrent(generation,nodeId))setError(t(tmdbErrorKey(value)));}finally{if(requestIsCurrent(generation,nodeId))setLoading(false);}};
   const providerName=provider==='TMDB'?'TMDb':'Bangumi';
   return (
-    <div className="modal-backdrop" ref={backdropRef} onMouseDown={(event) => event.target === event.currentTarget && close()} role="presentation">
-      <section className="bangumi-modal" role="dialog" aria-modal="true" aria-labelledby="bangumi-title">
+    <div className="modal-backdrop" ref={backdropRef} onMouseDown={(event) => event.target === event.currentTarget && bindingId === null && close()} role="presentation">
+      <section ref={dialogRef} tabIndex={-1} className="bangumi-modal" role="dialog" aria-modal="true" aria-labelledby="bangumi-title">
         <header className="modal-header">
-          <div><h2 id="bangumi-title">{t('match.title',{provider:providerName})}</h2><p>{t(provider==='TMDB'?'match.tmdbDescription':'bangumi.modalDescription', { name: nodeDisplayTitle(node) })}</p>{node.workTarget && <p>{t("works.wholeGroup", { count: node.workTarget.sourceNodeIds.length })}</p>}</div>
-          <button className="modal-close" aria-label={t("common.close")} onClick={close} type="button"><Icon name="close" /></button>
+          <div><h2 id="bangumi-title">{t('match.title',{provider:providerName})}</h2><p>{nodeDisplayTitle(node)}</p>{node.workTarget && <p>{t("works.wholeGroup", { count: node.workTarget.sourceNodeIds.length })}</p>}</div>
+          <button className="modal-close" disabled={bindingId !== null} aria-label={t("common.close")} onClick={close} type="button"><Icon name="close" /></button>
         </header>
 
-        {canBindTmdb(node)&&<div className="metadata-provider"><Select aria-label={t('match.provider')} value={provider} disabled={bindingId!==null} onChange={e=>{requestGenerationRef.current++;setLoading(false);setResults([]);setError(null);setSearched(false);setBindingId(null);if(provider==='TMDB')void api.tmdbCancel().catch(()=>undefined);setProvider(e.target.value as 'BANGUMI'|'TMDB');}}><option value="BANGUMI">Bangumi</option><option value="TMDB">TMDb</option></Select>{provider==='TMDB'&&node.nodeType!=='CONTAINER'&&<Select aria-label={t('match.tmdbType')} value={tmdbType} disabled={bindingId!==null} onChange={event=>{requestGenerationRef.current++;setLoading(false);setResults([]);setError(null);setSearched(false);void api.tmdbCancel().catch(()=>undefined);setTmdbType(event.target.value as 'AUTO'|'MOVIE'|'TV');}}><option value="AUTO">{t('match.typeAuto')}</option><option value="MOVIE">{t('match.typeMovie')}</option><option value="TV">{t('match.typeTv')}</option></Select>}</div>}
+        {canBindTmdb(node)&&<div className="metadata-provider">
+          <div className="metadata-provider-field"><span>{t('match.provider')}</span><div className="metadata-provider-control" data-provider={providerName}><span className="metadata-provider-icon"><Icon name={provider==='TMDB'?'tmdb':'bangumi'}/></span><Select aria-label={t('match.provider')} value={provider} disabled={bindingId!==null} onChange={e=>{requestGenerationRef.current++;setLoading(false);setResults([]);setError(null);setSearched(false);setBindingId(null);if(provider==='TMDB')void api.tmdbCancel().catch(()=>undefined);setProvider(e.target.value as 'BANGUMI'|'TMDB');}}><option value="BANGUMI">Bangumi</option><option value="TMDB">TMDb</option></Select></div></div>
+          {provider==='TMDB'&&node.nodeType!=='CONTAINER'&&<div className="metadata-provider-field"><span>{t('match.tmdbType')}</span><Select aria-label={t('match.tmdbType')} value={tmdbType} disabled={bindingId!==null} onChange={event=>{requestGenerationRef.current++;setLoading(false);setResults([]);setError(null);setSearched(false);void api.tmdbCancel().catch(()=>undefined);setTmdbType(event.target.value as 'AUTO'|'MOVIE'|'TV');}}><option value="AUTO">{t('match.typeAuto')}</option><option value="MOVIE">{t('match.typeMovie')}</option><option value="TV">{t('match.typeTv')}</option></Select></div>}
+        </div>}
         {prefill && <div className="bangumi-keyword-context">
           <div><span>{t("bangumi.originalName")}</span><strong title={prefill.originalName}>{prefill.originalName}</strong></div>
           <div><span>{t("bangumi.extractedName")}</span><button disabled={bindingId !== null} onClick={() => updateKeyword(prefill.extractedName)} type="button">{prefill.extractedName || t("bangumi.noExtracted")}</button></div>
@@ -170,7 +166,7 @@ export function BangumiModal({ node, onClose, onBound, onStale, onMetadataChange
         {provider==='TMDB'&&configured===false&&<div className="tmdb-credential-notice" role="status"><span>{t('tmdb.notConfigured')}</span><button className="button secondary" disabled={loading||bindingId!==null} onClick={()=>void configure()} type="button">{t('tmdb.configure')}</button></div>}
         <form className="bangumi-search" onSubmit={search}>
           <Icon name="search" />
-          <input ref={inputRef} aria-label={t('match.keywordAria',{provider:providerName})} disabled={bindingId !== null} onChange={(event) => updateKeyword(event.target.value)} placeholder={t("bangumi.keywordPlaceholder")} value={keyword} />
+          <input ref={inputRef} autoCorrect="off" autoCapitalize="none" spellCheck={false} aria-label={t('match.keywordAria',{provider:providerName})} disabled={bindingId !== null} onChange={(event) => updateKeyword(event.target.value)} placeholder={t("bangumi.keywordPlaceholder")} value={keyword} />
           {keyword && <button className="clear-input" aria-label={t("common.clear")} disabled={bindingId !== null} onClick={() => updateKeyword("")} type="button"><Icon name="close" /></button>}
           <button className="button primary" disabled={!keyword.trim() || loading || bindingId !== null || provider==='TMDB'&&configured!==true} type="submit">{loading ? t("common.searching") : t("common.search")}</button>
         </form>

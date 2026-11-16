@@ -146,6 +146,180 @@ pub struct CollectionSortPreferences {
     pub favorites: CollectionSort,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum WorkspaceFileSort {
+    #[default]
+    Name,
+    Type,
+    Size,
+    Modified,
+}
+
+impl WorkspaceFileSort {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Name => "NAME",
+            Self::Type => "TYPE",
+            Self::Size => "SIZE",
+            Self::Modified => "MODIFIED",
+        }
+    }
+
+    fn from_db(value: &str) -> Option<(Self, bool)> {
+        let (field, dir) = value.split_once(':')?;
+        let sort = match field {
+            "NAME" => Self::Name,
+            "TYPE" => Self::Type,
+            "SIZE" => Self::Size,
+            "MODIFIED" => Self::Modified,
+            _ => return None,
+        };
+        let descending = match dir {
+            "asc" => false,
+            "desc" => true,
+            _ => return None,
+        };
+        Some((sort, descending))
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ScreenshotSortField {
+    #[default]
+    Modified,
+    Name,
+    Size,
+}
+
+impl ScreenshotSortField {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Modified => "MODIFIED",
+            Self::Name => "NAME",
+            Self::Size => "SIZE",
+        }
+    }
+
+    fn from_db(value: &str) -> Option<(Self, bool)> {
+        let (field, dir) = value.split_once(':')?;
+        let sort = match field {
+            "MODIFIED" => Self::Modified,
+            "NAME" => Self::Name,
+            "SIZE" => Self::Size,
+            _ => return None,
+        };
+        let descending = match dir {
+            "asc" => false,
+            "desc" => true,
+            _ => return None,
+        };
+        Some((sort, descending))
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum WorkNotesSortField {
+    #[default]
+    Recent,
+    Title,
+}
+
+impl WorkNotesSortField {
+    fn as_db(self) -> &'static str {
+        match self {
+            Self::Recent => "recent",
+            Self::Title => "title",
+        }
+    }
+
+    fn from_db(value: &str) -> Self {
+        match value {
+            "title" => Self::Title,
+            _ => Self::Recent,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkbenchSortPreferences {
+    pub files_sort: WorkspaceFileSort,
+    pub files_descending: bool,
+    pub gallery_sort: ScreenshotSortField,
+    pub gallery_descending: bool,
+    pub notes_sort: WorkNotesSortField,
+}
+
+impl Default for WorkbenchSortPreferences {
+    fn default() -> Self {
+        Self {
+            files_sort: WorkspaceFileSort::Name,
+            files_descending: false,
+            gallery_sort: ScreenshotSortField::Modified,
+            // Gallery keeps newest screenshots first by default.
+            gallery_descending: true,
+            notes_sort: WorkNotesSortField::Recent,
+        }
+    }
+}
+
+impl WorkbenchSortPreferences {
+    pub const FILES_KEY: &'static str = "workbench_sort_files";
+    pub const GALLERY_KEY: &'static str = "workbench_sort_gallery";
+    pub const NOTES_KEY: &'static str = "workbench_sort_notes";
+
+    pub fn parse_files(raw: &str) -> (WorkspaceFileSort, bool) {
+        WorkspaceFileSort::from_db(raw).unwrap_or((WorkspaceFileSort::Name, false))
+    }
+
+    pub fn parse_gallery(raw: &str) -> (ScreenshotSortField, bool) {
+        ScreenshotSortField::from_db(raw).unwrap_or((ScreenshotSortField::Modified, true))
+    }
+
+    pub fn parse_notes(raw: &str) -> WorkNotesSortField {
+        WorkNotesSortField::from_db(raw)
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "scope", rename_all = "camelCase")]
+pub enum WorkbenchSortUpdate {
+    Files {
+        sort: WorkspaceFileSort,
+        descending: bool,
+    },
+    Gallery {
+        sort: ScreenshotSortField,
+        descending: bool,
+    },
+    Notes {
+        sort: WorkNotesSortField,
+    },
+}
+
+impl WorkbenchSortUpdate {
+    pub fn setting_key_and_value(self) -> (&'static str, String) {
+        let dir = |descending: bool| if descending { "desc" } else { "asc" };
+        match self {
+            Self::Files { sort, descending } => (
+                WorkbenchSortPreferences::FILES_KEY,
+                format!("{}:{}", sort.as_str(), dir(descending)),
+            ),
+            Self::Gallery { sort, descending } => (
+                WorkbenchSortPreferences::GALLERY_KEY,
+                format!("{}:{}", sort.as_str(), dir(descending)),
+            ),
+            Self::Notes { sort } => (
+                WorkbenchSortPreferences::NOTES_KEY,
+                sort.as_db().to_string(),
+            ),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum LibraryRecognitionMode {
@@ -540,6 +714,14 @@ pub struct NodeDetail {
     pub nested_media_files: Vec<NestedMediaFile>,
     pub expanded_folder_ids: Vec<i64>,
     pub recognition_warnings: Vec<MediaNode>,
+    #[serde(default)]
+    pub cds_folders: Vec<MediaNode>,
+    #[serde(default)]
+    pub cds_files: Vec<ResourceFile>,
+    #[serde(default)]
+    pub sp_folders: Vec<MediaNode>,
+    #[serde(default)]
+    pub sp_files: Vec<ResourceFile>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

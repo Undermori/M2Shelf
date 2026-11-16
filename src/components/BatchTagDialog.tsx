@@ -4,6 +4,7 @@ import { errorMessage } from "../lib/format";
 import { useI18n } from "../lib/i18n";
 import type { BatchMutationResult, UserTagMembership } from "../types/media";
 import { Icon } from "./Icon";
+import { useModalFocus } from "../hooks/useModalFocus";
 
 interface BatchTagDialogProps {
   nodeIds: number[];
@@ -14,6 +15,8 @@ interface BatchTagDialogProps {
 export function BatchTagDialog({ nodeIds, onClose, onApplied }: BatchTagDialogProps) {
   const { number, t } = useI18n();
   const inputRef = useRef<HTMLInputElement>(null);
+  const backdropRef = useRef<HTMLDivElement>(null);
+  const dialogRef = useRef<HTMLElement>(null);
   const [tags, setTags] = useState<UserTagMembership[] | null>(null);
   const [newName, setNewName] = useState("");
   const [busy, setBusy] = useState(false);
@@ -28,13 +31,7 @@ export function BatchTagDialog({ nodeIds, onClose, onApplied }: BatchTagDialogPr
   }, [firstNodeId]);
 
   useEffect(() => { void load(); }, [load]);
-  useEffect(() => { if (tags) inputRef.current?.focus(); }, [tags]);
-  useEffect(() => {
-    if (nodeIds.length === 0) return;
-    const key = (event: KeyboardEvent) => event.key === "Escape" && !busy && onClose();
-    window.addEventListener("keydown", key);
-    return () => window.removeEventListener("keydown", key);
-  }, [busy, nodeIds.length, onClose]);
+  useModalFocus(backdropRef, dialogRef, onClose, 'input', busy, nodeIds.length > 0);
 
   if (nodeIds.length === 0) return null;
 
@@ -60,11 +57,10 @@ export function BatchTagDialog({ nodeIds, onClose, onApplied }: BatchTagDialogPr
   };
 
   return (
-    <div className="modal-backdrop" onPointerDown={(event) => { if (event.currentTarget === event.target && !busy) onClose(); }}>
-      <section aria-labelledby="batch-tags-title" aria-modal="true" className="tag-manager-dialog batch-tag-dialog" role="dialog">
+    <div ref={backdropRef} className="modal-backdrop" onPointerDown={(event) => { if (event.currentTarget === event.target && !busy) onClose(); }}>
+      <section ref={dialogRef} tabIndex={-1} aria-labelledby="batch-tags-title" aria-modal="true" className="tag-manager-dialog batch-tag-dialog" role="dialog">
         <header className="modal-header">
-          <span className="modal-heading-icon"><Icon name="tag" /></span>
-          <div><p className="eyebrow">{t("selection.tagEyebrow")}</p><h2 id="batch-tags-title">{t("selection.tagTitle")}</h2><p>{t("selection.tagDescription", { count: number(nodeIds.length) })}</p></div>
+          <div><h2 id="batch-tags-title">{t("selection.tagTitle")}</h2><p>{t("selection.selectedCount", { count: number(nodeIds.length) })}</p></div>
           <button aria-label={t("common.close")} className="modal-close" disabled={busy} onClick={onClose} type="button"><Icon name="close" /></button>
         </header>
         <form className="tag-create-form" onSubmit={create}>
@@ -75,7 +71,7 @@ export function BatchTagDialog({ nodeIds, onClose, onApplied }: BatchTagDialogPr
         <div className="tag-memberships" aria-busy={tags === null || busy}>
           {tags === null && <p className="tag-empty"><Icon name="refresh" />{t("tags.loading")}</p>}
           {tags?.length === 0 && <p className="tag-empty"><Icon name="tag" />{t("selection.noExistingTags")}</p>}
-          {tags?.map((tag) => <button className="batch-tag-option" disabled={busy} key={tag.id} onClick={() => void run(() => api.batchAssignTag(nodeIds, tag.id))} type="button"><span><Icon name="tag" /></span><strong>{tag.name}</strong><small>{t("selection.applyExistingTag")}</small><Icon name="chevron" /></button>)}
+          {tags?.map((tag) => <button className="batch-tag-option" disabled={busy} key={tag.id} onClick={() => void run(() => api.batchAssignTag(nodeIds, tag.id))} type="button"><span><Icon name="tag" /></span><strong>{tag.name}</strong><Icon name="chevron" /></button>)}
         </div>
       </section>
     </div>

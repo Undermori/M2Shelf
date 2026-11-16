@@ -24,6 +24,7 @@ pub mod models;
 mod mpv_ipc;
 mod next_volume;
 mod notes;
+mod notes_export;
 mod organize;
 mod pdf_cover;
 mod player;
@@ -38,6 +39,7 @@ mod review_tests;
 mod scan_changes;
 mod scanner;
 mod scraper_metadata;
+mod screenshot_gallery;
 mod search_filters;
 mod single_instance;
 mod smart_mixed;
@@ -49,7 +51,10 @@ mod tmdb_credentials;
 pub mod update;
 mod video_presentation;
 mod window_state;
+mod workbench_cache;
 mod works;
+mod workspace_drag;
+mod workspace_files;
 
 use std::{
     io,
@@ -179,8 +184,10 @@ pub fn run() {
                         None
                     }
                 };
-            if let Ok(validated) = cache::validate_cache_location(&configured_cache, library_roots)
-            {
+            let source_roots = database
+                .read_only_source_paths()
+                .map_err(io::Error::other)?;
+            if let Ok(validated) = cache::validate_cache_location(&configured_cache, source_roots) {
                 let is_default = cache::is_equal_or_within(&validated, &default_cover_cache_dir)
                     && cache::is_equal_or_within(&default_cover_cache_dir, &validated);
                 if is_default {
@@ -260,6 +267,32 @@ pub fn run() {
             commands::validate_library_path,
             commands::get_private_note,
             commands::save_private_note,
+            commands::list_work_notes,
+            commands::export_work_note_entries,
+            commands::save_note_markdown,
+            commands::list_screenshot_folders,
+            commands::import_screenshot_folder,
+            commands::refresh_screenshot_folder,
+            commands::update_screenshot_folder,
+            commands::remove_screenshot_folder,
+            commands::list_screenshots,
+            commands::locate_screenshot,
+            commands::batch_update_screenshots,
+            commands::update_screenshot,
+            commands::read_screenshot_image,
+            commands::reveal_screenshot,
+            commands::auto_match_screenshots,
+            commands::list_workspace_folders,
+            commands::import_workspace_folder,
+            commands::update_workspace_folder,
+            commands::remove_workspace_folder,
+            commands::list_workspace_entries,
+            commands::read_workspace_thumbnail,
+            commands::open_workspace_file,
+            commands::reveal_workspace_file,
+            commands::workspace_file_path,
+            commands::drag_workspace_file,
+            commands::drag_screenshots,
             commands::collection_statuses,
             commands::set_collection_status,
             commands::export_collection_backup,
@@ -321,6 +354,8 @@ pub fn run() {
             commands::update_settings,
             commands::get_collection_sort_preferences,
             commands::update_collection_sort_preference,
+            commands::get_workbench_sort_preferences,
+            commands::update_workbench_sort_preference,
             commands::test_mpv,
             commands::tmdb_credential_status,
             commands::tmdb_select_source,
@@ -409,3 +444,6 @@ fn remember_main_window_size(
         app.state::<AppState>().window_size.remember(size);
     }
 }
+
+#[cfg(test)]
+mod codex_coverage_tests;

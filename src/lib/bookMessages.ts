@@ -25,7 +25,7 @@ const copy = {
  'artbook.name': ['设定集','Artbooks','設定資料集','설정집'],
  'artbook.files': ['设定集文件','Artbook files','設定資料ファイル','설정집 파일'],
  'library.noAutoBangumi': ['不自动关联 Bangumi（推荐）','Do not match Bangumi automatically (recommended)','Bangumi と自動照合しない（推奨）','Bangumi 자동 연결 안 함 (권장)'],
- 'library.noAutoHelp': ['不进行自动搜索与绑定。图片目录使用阅读顺序中的首张有效图片；其他书籍优先使用内置封面。创建后仍可手动关联或更换封面。','Skip automatic search and binding. Image folders use their first valid page; other books prefer embedded covers. Manual binding and covers remain available.','自動検索・紐付けを行いません。画像フォルダーは読書順の最初の有効な画像、他の本は内蔵表紙を優先します。作成後も手動で紐付け・表紙変更できます。','자동 검색과 연결을 하지 않습니다. 이미지 폴더는 읽기 순서상 첫 유효 이미지, 다른 책은 내장 표지를 우선합니다. 이후 수동 연결과 표지 변경이 가능합니다.'],
+ 'library.noAutoHelp': ['优先使用内置封面或首张图片，创建后仍可手动关联。','Prefer embedded covers or the first valid image; manual binding remains available.','内蔵表紙または最初の有効な画像を優先します。作成後も手動で紐付けできます。','내장 표지나 첫 유효 이미지를 우선하며, 생성 후에도 수동 연결이 가능합니다.'],
  'library.doujinAdvice': ['Bangumi 可能未收录部分同人作品，建议保持此选项开启。','Some doujinshi are not listed on Bangumi. Keeping this option enabled is recommended.','Bangumi に未登録の同人作品もあるため、この設定を推奨します。','Bangumi에 없는 동인지가 있으므로 이 설정을 권장합니다.'],
  'library.policySaved': ['资源库关联策略已保存','Library matching policy saved','ライブラリの照合設定を保存しました','라이브러리 연결 정책을 저장했습니다'],
  'book.drm': ['此书受 DRM 保护，无法内置阅读。请使用合法的未加密版本。','This book is DRM-protected. Use a legally obtained DRM-free edition.','DRM で保護された本です。正規の DRM なしの版を使用してください。','DRM으로 보호된 책입니다. 합법적인 DRM 없는 버전을 사용하세요.'],

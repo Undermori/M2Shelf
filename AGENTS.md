@@ -17,6 +17,8 @@ Repository documents, code, and tests are the durable source of context. Do not 
 
 ## Product identity
 
+- **Permanent brand color rule:** 全软件品牌强调色、主按钮、破坏性/确认弹窗按钮与核心警示统一采用森下红（Morishita Red）：`--logo-red: #a13436`、悬停 `#8f2d30`、纯白文字 `--on-brand: #ffffff`。亮暗主题均遵守；严禁使用高明度浅粉红 `#ef9290` 作为暗色确认按钮或核心警示色。错误正文可使用独立、可读的语义文字色，不得改变品牌按钮填充。
+
 - User-facing brand: **M²Shelf**
 - Technical / ASCII name: **M2Shelf**
 - Subtitle: **MORI MEDIA SHELF**

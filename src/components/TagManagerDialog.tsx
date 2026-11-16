@@ -4,6 +4,7 @@ import { nodeDisplayTitle } from "../lib/format";
 import { useI18n } from "../lib/i18n";
 import type { MediaNode, UserTagMembership } from "../types/media";
 import { Icon } from "./Icon";
+import { useModalFocus } from "../hooks/useModalFocus";
 
 interface TagManagerDialogProps {
   node: MediaNode | null;
@@ -14,6 +15,8 @@ interface TagManagerDialogProps {
 export function TagManagerDialog({ node, onClose, onChanged }: TagManagerDialogProps) {
   const { t } = useI18n();
   const inputRef = useRef<HTMLInputElement>(null);
+  const backdropRef = useRef<HTMLDivElement>(null);
+  const dialogRef = useRef<HTMLElement>(null);
   const loadSequence = useRef(0);
   const [memberships, setMemberships] = useState<UserTagMembership[] | null>(null);
   const [newName, setNewName] = useState("");
@@ -47,18 +50,7 @@ export function TagManagerDialog({ node, onClose, onChanged }: TagManagerDialogP
     return () => { loadSequence.current += 1; };
   }, [load, node]);
 
-  useEffect(() => {
-    if (!node) return;
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !busyKey) onClose();
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [busyKey, node, onClose]);
-
-  useEffect(() => {
-    if (memberships) inputRef.current?.focus();
-  }, [memberships]);
+  useModalFocus(backdropRef, dialogRef, onClose, '#new-user-tag', Boolean(busyKey), Boolean(node));
 
   if (!node) return null;
 
@@ -118,21 +110,22 @@ export function TagManagerDialog({ node, onClose, onChanged }: TagManagerDialogP
 
   return (
     <div
+      ref={backdropRef}
       className="modal-backdrop"
       onPointerDown={(event) => { if (event.currentTarget === event.target && !busyKey) onClose(); }}
     >
       <section
+        ref={dialogRef}
+        tabIndex={-1}
         aria-labelledby="tag-manager-title"
         aria-modal="true"
         className="tag-manager-dialog"
         role="dialog"
       >
         <header className="modal-header">
-          <span className="modal-heading-icon"><Icon name="tag" /></span>
           <div>
-            <p className="eyebrow">{t("tags.eyebrow")}</p>
             <h2 id="tag-manager-title">{t("tags.title")}</h2>
-            <p>{t("tags.description", { title: nodeDisplayTitle(node) })}</p>
+            <p>{nodeDisplayTitle(node)}</p>
           </div>
           <button aria-label={t("common.close")} className="modal-close" disabled={Boolean(busyKey)} onClick={onClose} type="button"><Icon name="close" /></button>
         </header>
@@ -150,7 +143,6 @@ export function TagManagerDialog({ node, onClose, onChanged }: TagManagerDialogP
             />
             <button className="button primary" disabled={Boolean(busyKey) || !newName.trim()} type="submit"><Icon name="plus" />{busyKey === "add" ? t("common.processing") : t("tags.add")}</button>
           </div>
-          <small>{t("tags.addHelp")}</small>
         </form>
 
         {error && <div className="inline-error tag-inline-error" role="alert"><Icon name="warning" /><span><strong>{t("tags.operationFailed")}</strong><small>{error}</small></span><button onClick={() => void load()} type="button">{t("common.retry")}</button></div>}
@@ -178,7 +170,6 @@ export function TagManagerDialog({ node, onClose, onChanged }: TagManagerDialogP
                   >
                     <span><Icon name={tag.assigned ? "check" : "plus"} /></span>
                     <strong>{tag.name}</strong>
-                    <small>{tag.assigned ? t("tags.assigned") : t("tags.notAssigned")}</small>
                   </button>
                   <button className="icon-button" aria-label={t("tags.editNamed", { name: tag.name })} disabled={Boolean(busyKey)} onClick={() => { setEditingId(tag.id); setEditingName(tag.name); setDeletingId(null); }} title={t("tags.edit")} type="button"><Icon name="edit" /></button>
                   <button className="icon-button is-danger" aria-label={t("tags.deleteNamed", { name: tag.name })} disabled={Boolean(busyKey)} onClick={() => { setDeletingId(tag.id); setEditingId(null); }} title={t("tags.delete")} type="button"><Icon name="trash" /></button>
@@ -194,8 +185,6 @@ export function TagManagerDialog({ node, onClose, onChanged }: TagManagerDialogP
             </div>
           ))}
         </div>
-
-        <footer className="modal-footer"><Icon name="shield" />{t("tags.footer")}</footer>
       </section>
     </div>
   );

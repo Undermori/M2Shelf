@@ -2,6 +2,10 @@ import {beginCardProgressSnapshot,seedCardProgressResponse} from './cardProgress
 import {invalidatePosterResources,observePosterCacheDirectory,markPosterNodesChanged} from './posterResource';
 import type {SearchFilters,TidyIssue,PdfCoverRequest} from "../types/incremental";
 import type {BookCatalogue,BookCorrection} from '../types/catalogue';
+import type {WorkNoteEntry, WorkNoteQuery, ScreenshotFolder, ScreenshotImage, ScreenshotQuery, StudioPage, WorkbenchSortPreferences, WorkbenchSortUpdate} from '../types/workbench';
+import type {CollectionTarget} from '../types/collection';
+import type {WorkspaceFolder, WorkspaceListing, WorkspaceSort} from '../types/workspace';
+import {workspaceCopy,workspaceError} from './workspaceCopy';
 import type {TmdbMovie,TmdbBinding,TmdbSearch,TmdbCredentialStatus} from '../types/tmdb';
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
@@ -39,7 +43,7 @@ import type {
   UpdateDownloadStatus,
   UpdateRecoveryNotice,
 } from "../types/media";
-import { translateActive } from "./i18n";
+import { getActiveLanguage, translateActive } from "./i18n";
 import {bookErrorKey} from './bookMessages';
 import type { ComicBook, ComicOpenResult, TextPosition } from '../types/comic';
 import type { LibraryMediaKind } from '../types/media';
@@ -155,6 +159,12 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
     }
     return result;
   } catch (error) {
+    if(String(error).includes('WORKSPACE_'))throw new M2ShelfError(workspaceError(error,getActiveLanguage()),error,command);
+    if (String(error).includes('SCREENSHOT_')) {
+      const code=String(error);
+      const key=code.includes('SCREENSHOT_PATH')?'studio.pathUnsafe':code.includes('SCREENSHOT_LIMIT')?'studio.imageLimit':code.includes('SCREENSHOT_FORMAT')?'studio.imageFormat':code.includes('SCREENSHOT_CHANGED')?'studio.imageChanged':'studio.imageUnavailable';
+      throw new M2ShelfError(translateActive(key),error,command);
+    }
     if (isScanBusyError(error)) throw new M2ShelfError(translateActive("app.scanAlreadyRunning"), error, command);
     if (String(error).includes('COMIC_') || String(error).includes('BOOK_KINDLE_') || String(error).includes('EPUB_')) {
       const key=bookErrorKey(error);
@@ -235,6 +245,32 @@ export const api = {
   applyCoverSelection:(token:string,options:{local?:string;index?:number;page?:number;raster?:string;clear?:boolean})=>call<void>("apply_cover_selection",{token,local:options.local??null,index:options.index??null,page:options.page??null,raster:options.raster??null,clear:options.clear??false}),
   validateLibraryPath:(path:string)=>call<string>("validate_library_path",{path}),
   getNote:(target:import('../types/collection').CollectionTarget)=>call<import("../types/next6").NoteResult>("get_private_note",{target}),
+  listWorkNotes: (query: WorkNoteQuery) => call<StudioPage<WorkNoteEntry>>('list_work_notes', {...query}),
+  exportWorkNoteEntries: () => call<WorkNoteEntry[]>('export_work_note_entries'),
+  saveNoteMarkdown: (destination: string, markdown: string) => call<void>('save_note_markdown', {destination, markdown}),
+  workspaceFolders: () => call<WorkspaceFolder[]>('list_workspace_folders'),
+  importWorkspaceFolder: (path:string) => call<WorkspaceFolder>('import_workspace_folder',{path}),
+  updateWorkspaceFolder: (folderId:number,alias:string,note:string,target:CollectionTarget|null) => call<WorkspaceFolder>('update_workspace_folder',{folderId,alias,note,target}),
+  removeWorkspaceFolder: (folderId:number) => call<void>('remove_workspace_folder',{folderId}),
+  workspaceEntries: (folderId:number,relativeDir:string,sortBy:WorkspaceSort='NAME',descending=false) => call<WorkspaceListing>('list_workspace_entries',{folderId,relativeDir,sortBy,descending}),
+  readWorkspaceThumbnail: (folderId:number,relativePath:string,revision:string) => call<ArrayBuffer>('read_workspace_thumbnail',{folderId,relativePath,revision}),
+  openWorkspaceFile: (folderId:number,relativePath:string) => call<void>('open_workspace_file',{folderId,relativePath}),
+  dragWorkspaceFile: (folderId:number,relativePath:string,revision:string) => isTauri() ? call<boolean>('drag_workspace_file',{folderId,relativePath,revision}) : Promise.resolve(false),
+  revealWorkspaceFile: (folderId:number,relativePath:string) => call<void>('reveal_workspace_file',{folderId,relativePath}),
+  workspaceFilePath: (folderId:number,relativePath:string) => call<string>('workspace_file_path',{folderId,relativePath}),
+  dragScreenshots: (selection:Array<{id:number;revision:string}>) => isTauri() ? call<boolean>('drag_screenshots',{selection}) : Promise.resolve(false),
+  autoMatchScreenshots: (folderId:number|null) => call<import('../types/workbench').AutoMatchScreenshotsResult>('auto_match_screenshots',{folderId}),
+  screenshotFolders: () => call<ScreenshotFolder[]>('list_screenshot_folders'),
+  importScreenshotFolder: (path: string) => call<ScreenshotFolder>('import_screenshot_folder', {path}),
+  refreshScreenshotFolder: (folderId: number) => call<ScreenshotFolder>('refresh_screenshot_folder', {folderId}),
+  updateScreenshotFolder: (folderId: number, alias: string, note: string, target: CollectionTarget | null) => call<ScreenshotFolder>('update_screenshot_folder', {folderId, alias, note, target}),
+  removeScreenshotFolder: (folderId: number) => call<void>('remove_screenshot_folder', {folderId}),
+  screenshots: (query: ScreenshotQuery) => call<StudioPage<ScreenshotImage>>('list_screenshots', {...query}),
+  locateScreenshot: (imageId: number, sort: import('../types/workbench').ScreenshotSort = 'MODIFIED', descending = true) => call<import('../types/workbench').ScreenshotLocation>('locate_screenshot', {imageId, sort, descending}),
+  batchUpdateScreenshots: (images: ScreenshotImage[], action: import('../types/workbench').ScreenshotBatchAction) => call<ScreenshotImage[]>('batch_update_screenshots', {selection: images.map(({id,revision,note,tags,starred,ownTarget})=>({id,revision,note,tags,starred,ownTarget:ownTarget??null})), action}),
+  updateScreenshot: (image: ScreenshotImage) => call<ScreenshotImage>('update_screenshot', {imageId: image.id, revision: image.revision, note: image.note, tags: image.tags, starred: image.starred, target: image.ownTarget??null}),
+  readScreenshot: (imageId: number, revision: string, thumbnail: boolean) => call<ArrayBuffer>('read_screenshot_image', {imageId, revision, thumbnail}),
+  revealScreenshot: (imageId: number, revision: string) => call<void>('reveal_screenshot', {imageId, revision}),
   saveNote:(target:import('../types/collection').CollectionTarget,body:string,revision:number)=>call<import("../types/next6").NoteResult>("save_private_note",{target,body,revision}),
   collectionStatuses:()=>call<import('../types/collection').CollectionSnapshot>("collection_statuses"),
   setCollectionStatus:(target:import('../types/collection').CollectionTarget,status:import('../types/collection').CollectionStatus|null)=>call<void>("set_collection_status",{target,status}),
@@ -301,6 +337,10 @@ export const api = {
     call<CollectionSortPreferences>("get_collection_sort_preferences"),
   updateCollectionSortPreference: (scope: CollectionSortScope, sort: CollectionSort) =>
     call<CollectionSort>("update_collection_sort_preference", { scope, sort }),
+  getWorkbenchSortPreferences: () =>
+    call<WorkbenchSortPreferences>("get_workbench_sort_preferences"),
+  updateWorkbenchSortPreference: (update: WorkbenchSortUpdate) =>
+    call<WorkbenchSortPreferences>("update_workbench_sort_preference", { update }),
   testMpv: (path?: string) => call<PlayerTestResult>("test_mpv", { path: path ?? null }),
   cacheStats: () => call<CacheStats>("get_cache_stats"),
   posterCacheStatus: () => call<PosterCacheStatus>("get_poster_cache_status"),
@@ -358,6 +398,18 @@ export async function chooseDirectory(): Promise<string | null> {
   if (!isTauri()) throw new DesktopOnlyError();
   const selected = await localizedOpen({ directory: true, multiple: false, title: translateActive("dialog.mediaDirectory") });
   return typeof selected === "string" ? selected : null;
+}
+
+export async function chooseScreenshotDirectories(): Promise<string[]> {
+  if (!isTauri()) throw new DesktopOnlyError();
+  const selected = await localizedOpen({directory: true, multiple: true, title: translateActive('studio.import')});
+  return typeof selected === 'string' ? [selected] : selected ?? [];
+}
+
+export async function chooseWorkspaceDirectory():Promise<string|null> {
+  if(!isTauri())throw new DesktopOnlyError();
+  const selected=await localizedOpen({directory:true,multiple:false,title:workspaceCopy[getActiveLanguage()].import});
+  return typeof selected==='string'?selected:null;
 }
 
 export async function choosePlayerExecutable(): Promise<string | null> {

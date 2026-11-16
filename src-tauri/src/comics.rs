@@ -441,6 +441,7 @@ pub(crate) fn open_archive(mut file: File) -> AppResult<zip::ZipArchive<File>> {
     }
     Ok(archive)
 }
+#[cfg(test)]
 pub(crate) fn archive_pages(
     path: &Path,
     control: Option<&ScanControl>,
@@ -448,6 +449,26 @@ pub(crate) fn archive_pages(
     let file = File::open(path).map_err(|_| "COMIC_READ_FAILED".to_string())?;
     archive_pages_file(file, control)
 }
+fn index_checked_source(
+    path: &Path,
+    root: &Path,
+    size: u64,
+    stamp: &str,
+    format: Option<&str>,
+    control: Option<&ScanControl>,
+) -> AppResult<Vec<IndexedPage>> {
+    // Enumeration metadata is only a snapshot. Validate the opened handle and use
+    // that handle throughout parsing, including the final revision/Root check.
+    let file = crate::comic_reader::checked_file(path, root, size, stamp)?;
+    let reader = file.try_clone().map_err(|_| "COMIC_READ_FAILED")?;
+    let pages = match format {
+        Some(format) => crate::ebooks::index_file(reader, format),
+        None => archive_pages_file(reader, control),
+    };
+    crate::comic_reader::validate_file_handle(&file, path, root, size, stamp)?;
+    pages
+}
+
 pub(crate) fn archive_pages_file(
     file: File,
     control: Option<&ScanControl>,
@@ -517,6 +538,11 @@ struct ComicScan<'a> {
     flat_root: Option<i64>,
 }
 
+enum BookDirectoryTask {
+    Enter(Option<i64>),
+    Finish { id: i64, errors_before: u64 },
+}
+
 pub(crate) fn scan_library(
     app: Option<&AppHandle>,
     connection: &Connection,
@@ -584,10 +610,49 @@ pub(crate) fn scan_library(
 
 impl ComicScan<'_> {
     fn directory(&mut self, path: &Path, parent: Option<i64>) -> Result<(), ScanAbort> {
+        let mut pending = vec![(path.to_path_buf(), true, BookDirectoryTask::Enter(parent))];
+        while let Some((path, is_target, task)) = pending.pop() {
+            scanner::check_cancel(self.control)?;
+            let result =
+                match task {
+                    BookDirectoryTask::Enter(parent) => {
+                        self.begin_directory(&path, parent).map(|prepared| {
+                            if let Some((id, errors_before, children)) = prepared {
+                                pending.push((
+                                    path.clone(),
+                                    is_target,
+                                    BookDirectoryTask::Finish { id, errors_before },
+                                ));
+                                pending.extend(children.into_iter().rev().map(|child| {
+                                    (child, false, BookDirectoryTask::Enter(Some(id)))
+                                }));
+                            }
+                        })
+                    }
+                    BookDirectoryTask::Finish { id, errors_before } => {
+                        self.finish_directory(id, errors_before)
+                    }
+                };
+            if let Err(error) = result {
+                if is_target || matches!(error, ScanAbort::Cancelled) {
+                    return Err(error);
+                }
+                // A failed child preserves unread rows and its parent's old cleanup boundary.
+                self.error(&path, "COMIC_READ_FAILED");
+            }
+        }
+        Ok(())
+    }
+
+    fn begin_directory(
+        &mut self,
+        path: &Path,
+        parent: Option<i64>,
+    ) -> Result<Option<(i64, u64, Vec<PathBuf>)>, ScanAbort> {
         scanner::check_cancel(self.control)?;
         let canonical = scanner::canonicalize_within_library_root(path, self.canonical_root)?;
         if !canonical.is_dir() || !self.visited.insert(canonical.clone()) {
-            return Ok(());
+            return Ok(None);
         }
         if self.flat_root.is_some()
             && self
@@ -598,7 +663,7 @@ impl ComicScan<'_> {
                 .contains(path)
         {
             self.retain_flat_subtree(path)?;
-            return Ok(());
+            return Ok(None);
         }
         let existing=self.connection.query_row("SELECT id,node_type FROM nodes WHERE library_root_id=?1 AND absolute_path=?2 COLLATE NOCASE",params![self.root_id,path.to_string_lossy()],|r|Ok((r.get::<_,i64>(0)?,r.get::<_,String>(1)?))).optional().map_err(|e|e.to_string())?;
         if let Some((id, kind)) = &existing {
@@ -620,7 +685,7 @@ impl ComicScan<'_> {
                 if self.flat_root.is_some() {
                     self.retain_flat_subtree(path)?;
                 }
-                return Ok(());
+                return Ok(None);
             }
         }
         // Observe the complete directory before pruning anything. Failed reads retain old rows.
@@ -771,11 +836,14 @@ impl ComicScan<'_> {
                     .map_err(|e| e.to_string())?;
             } else {
                 let document_format = crate::ebooks::format(&logical);
-                let indexed = if document_format.is_some() {
-                    crate::ebooks::index(&filesystem)
-                } else {
-                    archive_pages(&filesystem, Some(self.control))
-                };
+                let indexed = index_checked_source(
+                    &filesystem,
+                    self.canonical_root,
+                    metadata.len(),
+                    &stamp,
+                    document_format,
+                    Some(self.control),
+                );
                 scanner::check_cancel(self.control)?;
                 if let Err(error) = &indexed {
                     self.error(&logical, error);
@@ -825,14 +893,10 @@ impl ComicScan<'_> {
         directories.sort_by(|a, b| {
             db::natural_cmp(&a.to_string_lossy(), &b.to_string_lossy()).then_with(|| a.cmp(b))
         });
-        for child in directories {
-            if let Err(error) = self.directory(&child, Some(id)) {
-                if matches!(error, ScanAbort::Cancelled) {
-                    return Err(error);
-                }
-                self.error(&child, "COMIC_READ_FAILED");
-            }
-        }
+        Ok(Some((id, before, directories)))
+    }
+
+    fn finish_directory(&self, id: i64, before: u64) -> Result<(), ScanAbort> {
         scanner::check_cancel(self.control)?;
         if self.flat_root.is_none() && before == self.control.progress().errors {
             for (table, column) in [
@@ -1327,6 +1391,125 @@ mod tests {
             zip.write_all(&image()).unwrap();
         }
         zip.finish().unwrap();
+    }
+
+    #[test]
+    fn scan_index_uses_checked_handle_and_rejects_replaced_metadata() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("Root_合成");
+        fs::create_dir(&root).unwrap();
+        let canonical_root = fs::canonicalize(&root).unwrap();
+        let archive_path = root.join("book.cbz");
+        archive(&archive_path, &["01.png"]);
+        let before = fs::metadata(&archive_path).unwrap();
+        let stamp = modified(&before);
+        assert_eq!(
+            index_checked_source(
+                &archive_path,
+                &canonical_root,
+                before.len(),
+                &stamp,
+                None,
+                None
+            )
+            .unwrap()
+            .len(),
+            1
+        );
+        // Deterministically replace the enumerated source before the deferred open.
+        archive(&archive_path, &["01.png", "02.png"]);
+        assert_eq!(
+            index_checked_source(
+                &archive_path,
+                &canonical_root,
+                before.len(),
+                &stamp,
+                None,
+                None
+            )
+            .err()
+            .unwrap(),
+            "COMIC_PAGE_CHANGED"
+        );
+
+        let text_path = root.join("book.txt");
+        fs::write(&text_path, "Synthetic text chapter").unwrap();
+        let meta = fs::metadata(&text_path).unwrap();
+        assert!(!index_checked_source(
+            &text_path,
+            &canonical_root,
+            meta.len(),
+            &modified(&meta),
+            Some("TXT"),
+            None
+        )
+        .unwrap()
+        .is_empty());
+        let outside = temp.path().join("outside.txt");
+        fs::write(&outside, "outside").unwrap();
+        let meta = fs::metadata(&outside).unwrap();
+        assert_eq!(
+            index_checked_source(
+                &outside,
+                &canonical_root,
+                meta.len(),
+                &modified(&meta),
+                Some("TXT"),
+                None
+            )
+            .err()
+            .unwrap(),
+            "COMIC_PATH_OUTSIDE_ROOT"
+        );
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn scan_handle_validation_rejects_outside_handle_and_late_source_move() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("Root");
+        fs::create_dir(&root).unwrap();
+        let root = fs::canonicalize(&root).unwrap();
+        let logical = root.join("book.txt");
+        let outside = temp.path().join("outside.txt");
+        fs::write(&logical, "inside").unwrap();
+        fs::write(&outside, "outside").unwrap();
+        let file = File::open(&outside).unwrap();
+        let metadata = file.metadata().unwrap();
+        assert_eq!(
+            crate::comic_reader::validate_file_handle(
+                &file,
+                &logical,
+                &root,
+                metadata.len(),
+                &modified(&metadata)
+            )
+            .unwrap_err(),
+            "COMIC_PATH_OUTSIDE_ROOT"
+        );
+        let metadata = fs::metadata(&logical).unwrap();
+        let file = crate::comic_reader::checked_file(
+            &logical,
+            &root,
+            metadata.len(),
+            &modified(&metadata),
+        )
+        .unwrap();
+        // Windows opened-handle paths follow a rename: a path-only recheck would
+        // incorrectly accept the new in-Root placeholder below.
+        fs::rename(&logical, temp.path().join("moved.txt")).unwrap();
+        fs::write(&logical, "inside").unwrap();
+        assert_eq!(
+            crate::comic_reader::validate_file_handle(
+                &file,
+                &logical,
+                &root,
+                metadata.len(),
+                &modified(&metadata)
+            )
+            .unwrap_err(),
+            "COMIC_PATH_OUTSIDE_ROOT"
+        );
     }
     fn fixture() -> (tempfile::TempDir, Database, crate::models::LibraryRoot) {
         let temp = tempfile::tempdir().unwrap();

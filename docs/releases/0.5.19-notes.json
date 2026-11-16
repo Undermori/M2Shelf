@@ -1,0 +1,6 @@
+{
+  "zh-CN": "新增工作台（笔记、截图画廊、项目文件），支持 Markdown 笔记导出、按原比例看图、托管 mpv 截图自动关联，以及项目文件只读浏览、拖出副本和类型排序（文件夹后优先 PSD）。\n全局搜索支持笔记和截图，全部资源新增未绑定筛选，详情页支持定位首个未看视频，新增 ? 快捷键提示。\n统一工作台与列表控件风格、右下角自动消失通知及深浅主题森下红配色，所有页面和工作台排序保留记忆。",
+  "en-US": "Added the Workbench (Notes, Screenshot Gallery, Project Files) with Markdown note export, uncropped screenshot browsing, automatic screenshot linking for managed mpv sessions, read-only project folder browsing, file drag-out, and Type sorting (folders first, then PSD).\nGlobal search covers notes and screenshots; All Resources adds an unbound filter; detail pages can jump to the first unwatched video; added a ? shortcuts dialog.\nUnified controls, dark/light Morishita Red styling, auto-dismissing notifications, and persisted sort preferences across all views.",
+  "ja-JP": "ワークベンチ（ノート / スクリーンショット / プロジェクトファイル）を追加。Markdown 書き出し、原寸比率での閲覧、管理下 mpv のスクリーンショット自動関連付け、フォルダーの読み取り専用閲覧、ドラッグアウト、種類順（フォルダーの次に PSD 優先）に対応しました。\n全体検索がノートと画像に対応し、全リソースに未連携絞り込み、詳細に未視聴動画への移動、? ショートカット一覧を追加しました。\n配色・UI 寸法・右下の自動消去通知を統一し、すべての画面で並べ替え設定を記憶します。",
+  "ko-KR": "작업대(메모 / 스크린샷 갤러리 / 프로젝트 파일)를 추가했습니다. Markdown 내보내기, 원본 비율 보기, 관리되는 mpv 스크린샷 자동 연결, 프로젝트 폴더 읽기 전용 탐색, 파일 드래그 아웃 및 유형 정렬(폴더 다음 PSD 우선)을 지원합니다.\n전체 검색에 메모와 스크린샷을 포함하고, 전체 리소스에 미연결 필터, 상세 화면에 첫 미시청 영상 이동 및 ? 단축키 창을 추가했습니다.\nUI 크기, 다크/라이트 모리시타 레드 색상, 자동 닫힘 알림 및 모든 화면의 정렬 기억을 통일했습니다."
+}

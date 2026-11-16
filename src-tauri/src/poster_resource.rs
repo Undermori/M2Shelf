@@ -283,8 +283,26 @@ fn remember(key: String, payload: PosterPayload, epoch: u64) -> Arc<Raster> {
     raster
 }
 pub(crate) fn clear_memory() {
+    let mut cache = resources().lock().unwrap_or_else(|p| p.into_inner());
     RESOURCE_EPOCH.fetch_add(1, Ordering::AcqRel);
-    *resources().lock().unwrap_or_else(|p| p.into_inner()) = ResourceCache::default();
+    *cache = ResourceCache::default();
+}
+/// Classification can hide an entire subtree, including book covers. Revoke both raster and
+/// file leases only after the database mutation commits; no per-image SQL is added to RAM hits.
+pub(crate) fn mutate_visibility<T>(mutation: impl FnOnce() -> AppResult<T>) -> AppResult<T> {
+    let result = mutation()?;
+    clear_memory();
+    Ok(result)
+}
+fn raster_response_at_epoch(
+    request: &Request<Vec<u8>>,
+    raster: &Raster,
+    epoch: u64,
+) -> Response<Vec<u8>> {
+    if RESOURCE_EPOCH.load(Ordering::Acquire) != epoch {
+        return unavailable(StatusCode::NOT_FOUND);
+    }
+    raster_response(request, raster)
 }
 fn raster_response(request: &Request<Vec<u8>>, raster: &Raster) -> Response<Vec<u8>> {
     let cached = request
@@ -335,7 +353,7 @@ fn serve_with_reader(
     let epoch = RESOURCE_EPOCH.load(Ordering::Acquire);
     let key = resource_key(database, &request);
     if let Some(raster) = memory_hit(&key) {
-        return raster_response(&request, &raster);
+        return raster_response_at_epoch(&request, &raster, epoch);
     }
     // Windows WebView does not cache intercepted protocol responses like ordinary HTTP files.
     // A RAM miss reuses the exact checked derivative lease, with no SQL/source reopening.
@@ -357,7 +375,9 @@ fn serve_with_reader(
         read(database, default_cache, &resource)
     };
     match result {
-        Ok(Some(payload)) => raster_response(&request, &remember(key, payload, epoch)),
+        Ok(Some(payload)) => {
+            raster_response_at_epoch(&request, &remember(key, payload, epoch), epoch)
+        }
         _ => unavailable(StatusCode::NOT_FOUND),
     }
 }
@@ -383,8 +403,9 @@ pub(crate) fn register(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<ta
             responder.respond(unavailable(StatusCode::SERVICE_UNAVAILABLE));
             return;
         };
+        let epoch = RESOURCE_EPOCH.load(Ordering::Acquire);
         if let Some(raster) = memory_hit(&resource_key(&state.database, &request)) {
-            responder.respond(raster_response(&request, &raster));
+            responder.respond(raster_response_at_epoch(&request, &raster, epoch));
             return;
         }
         let database = state.database.clone();
@@ -438,6 +459,17 @@ mod tests {
         i64,
         std::path::PathBuf,
     ) {
+        fixture_with_kind(crate::models::LibraryMediaKind::Video)
+    }
+    fn fixture_with_kind(
+        kind: crate::models::LibraryMediaKind,
+    ) -> (
+        tempfile::TempDir,
+        Database,
+        std::path::PathBuf,
+        i64,
+        std::path::PathBuf,
+    ) {
         let temp = tempfile::tempdir().unwrap();
         let library = temp.path().join("library");
         let root = temp.path().join("cache");
@@ -445,7 +477,14 @@ mod tests {
         cache::ensure_directories(&root).unwrap();
         let database = Database::new(temp.path().join("index.db"));
         database.migrate().unwrap();
-        let library = database.add_root(&library, None).unwrap();
+        let library = database
+            .add_root_with_kind(
+                &library,
+                None,
+                kind,
+                crate::models::LibraryRecognitionMode::Folder,
+            )
+            .unwrap();
         let c = database.connect().unwrap();
         c.execute("INSERT INTO nodes(library_root_id,absolute_path,folder_name,display_name,node_type) VALUES(?1,?2,'Root','Root','CONTAINER')",rusqlite::params![library.id,library.path]).unwrap();
         let parent = c.last_insert_rowid();
@@ -566,6 +605,67 @@ mod tests {
         remember(key.clone(), raster, epoch);
         assert!(memory_hit(&key).is_none());
         assert!(file_hit(&key).is_none());
+    }
+    #[test]
+    fn visibility_mutations_revoke_descendant_node_and_book_rasters_and_file_leases() {
+        let _test = TEST_CACHE.lock().unwrap_or_else(|p| p.into_inner());
+        clear_memory();
+        let (_temp, db, root, node, original) =
+            fixture_with_kind(crate::models::LibraryMediaKind::Comic);
+        let c = db.connect().unwrap();
+        let parent: i64 = c
+            .query_row(
+                "SELECT parent_node_id FROM nodes WHERE id=?1",
+                [node],
+                |r| r.get(0),
+            )
+            .unwrap();
+        c.execute("INSERT INTO comic_books(id,node_id,source_path,source_kind,display_name,modified_at,page_count,revision) VALUES(12,?1,'synthetic.cbz','ZIP_ARCHIVE','Book','stamp',1,'test-revision')", [node]).unwrap();
+        c.execute(
+            "INSERT INTO book_manual_covers(book_id,cover_cache_path) VALUES(12,?1)",
+            [original.to_string_lossy()],
+        )
+        .unwrap();
+        drop(c);
+        let paths = [
+            format!("/node/{node}/256?v=0123456789abcdef"),
+            "/book/12/256?v=0123456789abcdef&revision=test-revision".into(),
+        ];
+        for path in &paths {
+            assert_eq!(serve(&db, &root, request(path)).status(), StatusCode::OK);
+        }
+        let epoch = RESOURCE_EPOCH.load(Ordering::Acquire);
+        let held = memory_hit(&resource_key(&db, &request(&paths[0]))).unwrap();
+        mutate_visibility(|| db.set_node_type(parent, crate::models::NodeType::Ignored)).unwrap();
+        for path in &paths {
+            let key = resource_key(&db, &request(path));
+            assert!(memory_hit(&key).is_none());
+            assert!(file_hit(&key).is_none());
+            assert_eq!(
+                serve(&db, &root, request(path)).status(),
+                StatusCode::NOT_FOUND
+            );
+        }
+        assert_eq!(
+            raster_response_at_epoch(&request(&paths[0]), &held, epoch).status(),
+            StatusCode::NOT_FOUND
+        );
+        mutate_visibility(|| db.set_node_type(parent, crate::models::NodeType::Container)).unwrap();
+        for path in &paths {
+            assert_eq!(serve(&db, &root, request(path)).status(), StatusCode::OK);
+        }
+        mutate_visibility(|| db.batch_set_node_type(&[node], crate::models::NodeType::Ignored))
+            .unwrap();
+        for path in &paths {
+            assert_eq!(
+                serve(&db, &root, request(path)).status(),
+                StatusCode::NOT_FOUND
+            );
+        }
+        mutate_visibility(|| db.batch_reset_node_type(&[node])).unwrap();
+        for path in &paths {
+            assert_eq!(serve(&db, &root, request(path)).status(), StatusCode::OK);
+        }
     }
     fn request(path: &str) -> Request<Vec<u8>> {
         Request::builder()

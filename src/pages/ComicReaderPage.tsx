@@ -111,11 +111,12 @@ export function ComicReaderPage({bookId,initialPage,onBack,onProgress,onMenuActi
  useEffect(()=>{if(!opened||opened.book.documentFormat)return;onMenuActions?.({previous:()=>void turn(-1),next:()=>void turn(1),fullscreen:()=>void fullscreen(),bookmark:()=>void toggleBookmark(),canPrevious:!!count&&(!paged||page>0),canNext:canTurnNext,canBookmark:!bookmarkBusy&&!!cache?.peek(page)});},[opened,onMenuActions,turn,fullscreen,toggleBookmark,count,paged,page,spreadIndex,spreads.length,bookmarkBusy,cache,revision,canSequenceNext,canTurnNext]);
  useEffect(()=>()=>onMenuActions?.(null),[onMenuActions]);
  useEffect(()=>{const key=(event:KeyboardEvent)=>{
-   if(opened?.book.documentFormat)return;
+   if(event.defaultPrevented||event.isComposing||document.querySelector('dialog[open]')||opened?.book.documentFormat)return;
    if(event.target instanceof HTMLElement&&event.target.closest('.reader-page-thumbnails')){if(event.key==='Escape'){event.preventDefault();event.stopImmediatePropagation();setOverview(false);}return;}
    if(event.target instanceof HTMLElement&&event.target.closest('[role=menu]'))return;
    if(event.target instanceof HTMLElement&&(event.target.isContentEditable||event.target.closest('input,textarea,select,[role=combobox],[role=listbox]')))return;
    if(event.altKey||event.ctrlKey||event.metaKey)return;
+   if(event.target instanceof HTMLElement&&event.target.closest('button,a,[role=button]')&&[' ','Enter'].includes(event.key))return;
    const step=readerKeyStep(event.key,settings.direction==='RTL');if(step){event.preventDefault();void turn(step);return;}
    if(event.key==='Home'||event.key==='End'){event.preventDefault();jump(event.key==='Home'?0:count-1);}
    else if(event.key.toLowerCase()==='f'){event.preventDefault();void fullscreen();}

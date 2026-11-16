@@ -1,0 +1,98 @@
+// @vitest-environment jsdom
+import {act,cleanup,fireEvent,render,screen,waitFor,within} from '@testing-library/react';
+import {afterEach,beforeEach,describe,expect,it,vi} from 'vitest';
+import {WorkspaceFiles} from '../components/WorkspaceFiles';
+import {OrganizePage} from '../pages/OrganizePage';
+import {CommandPalette} from '../components/CommandPalette';
+import {notifyToast} from './toast';
+import {workbenchThumbCache} from './workbenchThumbCache';
+vi.mock('./toast',()=>({notifyToast:vi.fn()}));
+import {I18nProvider} from './i18n';
+import {workspaceCopy,workspaceError} from './workspaceCopy';
+import {openStudio,takeStudioLink} from './openStudio';
+import type {WorkspaceEntry,WorkspaceListing} from '../types/workspace';
+const mocks=vi.hoisted(()=>({folders:vi.fn(),entries:vi.fn(),read:vi.fn(),open:vi.fn(),reveal:vi.fn(),path:vi.fn(),choose:vi.fn(),import:vi.fn(),update:vi.fn(),remove:vi.fn(),clipboard:vi.fn()}));
+vi.mock('./api',()=>({desktopAvailable:false,chooseWorkspaceDirectory:mocks.choose,api:{workspaceFolders:mocks.folders,workspaceEntries:mocks.entries,readWorkspaceThumbnail:mocks.read,openWorkspaceFile:mocks.open,revealWorkspaceFile:mocks.reveal,workspaceFilePath:mocks.path,importWorkspaceFolder:mocks.import,updateWorkspaceFolder:mocks.update,removeWorkspaceFolder:mocks.remove,listWorkNotes:async()=>({items:[],total:0}),getNote:async()=>({body:'',revision:0}),search:async()=>[],screenshots:async()=>({items:[],total:0})}}));
+vi.mock('../components/ScreenshotStudio',()=>({ScreenshotStudio:()=> <input aria-label="Gallery state"/>,WorkPicker:()=> <span>Linked work picker</span>}));
+const folder={id:1,path:'X:/Synthetic/Creative',alias:'Creative Project',note:'A Blue production',target:null,nodeId:null,createdAt:'2026-11-16T00:00:00Z'};
+const entry=(name:string,kind:WorkspaceEntry['kind']='DOCUMENT',parent=''):WorkspaceEntry=>({relativePath:parent+name,fileName:name,extension:kind==='FOLDER'?'':name.split('.').at(-1)!,kind,canOpenDefault:!name.endsWith('.exe'),fileSize:1024,modifiedAt:'2026-11-16T12:00:00Z',revision:'r1'});
+const rootEntries=[entry('素材','FOLDER'),entry('A very long creative project source.psd','PSD'),entry('文稿.md'),entry('image.jpg','IMAGE'),entry('unsafe.exe','OTHER')];
+const listing=(folderId=1,relativeDir='',items=rootEntries):WorkspaceListing=>({folderId,relativeDir,entries:items,breadcrumbs:[{name:'Creative Project',relativePath:''},...(relativeDir?[{name:relativeDir,relativePath:relativeDir}]:[])],total:items.length,truncated:false});
+const onError=vi.fn(),onOpenTarget=vi.fn();
+function mount(props={}){return render(<I18nProvider><WorkspaceFiles busy={false} active request={null} onError={onError} onOpenTarget={onOpenTarget} {...props}/></I18nProvider>);}
+beforeEach(()=>{workbenchThumbCache.clear();vi.resetAllMocks();mocks.folders.mockResolvedValue([folder]);mocks.entries.mockImplementation(async(id,dir)=>listing(id,dir,dir?[entry('nested.txt','DOCUMENT',`${dir}/`)]:rootEntries));mocks.read.mockResolvedValue(new Uint8Array([137,80,78,71]).buffer);mocks.open.mockResolvedValue(undefined);mocks.reveal.mockResolvedValue(undefined);mocks.path.mockResolvedValue('X:/Synthetic/Creative/文稿.md');mocks.choose.mockResolvedValue('X:/Synthetic/New');mocks.import.mockResolvedValue({...folder,id:2});mocks.update.mockResolvedValue(folder);mocks.remove.mockResolvedValue(undefined);Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:mocks.clipboard.mockResolvedValue(undefined)}});vi.stubGlobal('IntersectionObserver',undefined);URL.createObjectURL=vi.fn(()=>`blob:workspace-${Math.random()}`);URL.revokeObjectURL=vi.fn();});
+afterEach(()=>{cleanup();workbenchThumbCache.clear();vi.unstubAllGlobals();takeStudioLink();});
+describe('Round 9 Project Files',()=>{
+ it('keeps only reveal/copy on folder cards and rows while Enter still enters the folder',async()=>{
+  mount();const folderButton=await screen.findByRole('button',{name:'素材'});
+  const card=folderButton.closest('article')!;expect(card.querySelectorAll('.workspace-entry-actions button')).toHaveLength(2);expect(within(card).queryByRole('button',{name:'用默认软件打开: 素材'})).toBeNull();expect(card.querySelector('[title="返回上一级"]')).toBeNull();
+  expect(screen.getByRole('button',{name:'文稿.md'}).closest('article')?.querySelectorAll('.workspace-entry-actions button')).toHaveLength(3);
+  fireEvent.click(screen.getByRole('button',{name:'列表视图'}));const row=screen.getByRole('button',{name:'素材'}).closest('tr')!;expect(row.querySelectorAll('.workspace-entry-actions button')).toHaveLength(2);fireEvent.keyDown(within(row).getByRole('button',{name:'素材'}),{key:'Enter'});await screen.findByRole('button',{name:'nested.txt'});expect(mocks.entries).toHaveBeenLastCalledWith(1,'素材','NAME',false);
+ });
+ it.each([false,true])('keeps a detached thumbnail URL until its pending decode settles (reject=%s)',async(reject)=>{
+  const view=mount();await waitFor(()=>expect(document.querySelector('.workspace-thumbnail img')).not.toBeNull());
+  const image=document.querySelector('.workspace-thumbnail img') as HTMLImageElement,url=image.src;
+  let finish!:()=>void;const decoding=new Promise<void>((resolve,fail)=>{finish=()=>reject?fail(new Error('Cancelled decode')):resolve();});
+  Object.defineProperty(image,'complete',{value:false});image.decode=vi.fn(()=>decoding);
+  view.unmount();workbenchThumbCache.clear();expect(image.decode).toHaveBeenCalledOnce();expect(URL.revokeObjectURL).not.toHaveBeenCalledWith(url);
+  await act(async()=>{finish();await decoding.catch(()=>{});});await waitFor(()=>expect(URL.revokeObjectURL).toHaveBeenCalledWith(url));
+ });
+ it('keeps full filename text and extension, displays kinds and uses native binary previews',async()=>{mount();await screen.findByRole('button',{name:'A very long creative project source.psd'});const filename=document.querySelector('[data-kind=PSD] .workspace-filename')!;expect(filename.textContent).toBe('A very long creative project source.psd');expect(filename.getAttribute('title')).toBe(filename.textContent);expect(filename.querySelector('span')?.textContent).toBe('A very long creative project source');await waitFor(()=>expect(mocks.read).toHaveBeenCalledWith(1,'image.jpg','r1'));expect(document.querySelector('img')?.src).toMatch(/^blob:/);expect(document.querySelector('[src^="file:"]')).toBeNull();});
+ it('drills down only on double-click or Enter and returns through semantic breadcrumbs to an exact ancestor',async()=>{
+  mount();
+  const folderButton=await screen.findByRole('button',{name:'素材'});
+  fireEvent.click(folderButton);
+  expect(folderButton.closest('article')?.classList.contains('is-selected')).toBe(true);
+  expect(mocks.entries).toHaveBeenCalledTimes(1);
+  fireEvent.doubleClick(folderButton);
+  await screen.findByRole('button',{name:'nested.txt'});expect(mocks.entries).toHaveBeenLastCalledWith(1,'素材','NAME',false);const nav=screen.getByRole('navigation',{name:'项目文件路径'});expect(nav.querySelector('ol a[aria-current=page]')?.textContent).toBe('素材');fireEvent.click(within(nav).getByRole('link',{name:'Creative Project'}));await screen.findByRole('button',{name:'文稿.md'});expect(mocks.entries).toHaveBeenLastCalledWith(1,'','NAME',false);
+ });
+ it('fences an older directory response after a newer root navigation',async()=>{let resolve!:(value:WorkspaceListing)=>void;mount();await screen.findByRole('button',{name:'素材'});mocks.entries.mockImplementationOnce(()=>new Promise(done=>{resolve=done;}));fireEvent.doubleClick(screen.getByRole('button',{name:'素材'}));await waitFor(()=>expect(mocks.entries).toHaveBeenLastCalledWith(1,'素材','NAME',false));fireEvent.click(screen.getByRole('link',{name:'Creative Project'}));await screen.findByRole('button',{name:'文稿.md'});await act(async()=>resolve(listing(1,'素材',[entry('obsolete.txt')])));expect(screen.queryByText('obsolete.txt')).toBeNull();expect(screen.getByRole('button',{name:'文稿.md'})).toBeTruthy();});
+ it('sorts with one aria-sort and stable row identities while preserving header focus and without sort toast spam',async()=>{mount();await screen.findByRole('button',{name:'文稿.md'});fireEvent.click(screen.getByRole('button',{name:'列表视图'}));const row=screen.getByRole('button',{name:'文稿.md'}).closest('tr');const size=screen.getByRole('button',{name:'大小'});size.focus();fireEvent.click(size);await waitFor(()=>expect(mocks.entries).toHaveBeenLastCalledWith(1,'','SIZE',false));expect(document.querySelectorAll('th[aria-sort]')).toHaveLength(1);expect(size.parentElement?.getAttribute('aria-sort')).toBe('ascending');expect(document.activeElement).toBe(size);expect(screen.getByRole('button',{name:'文稿.md'}).closest('tr')).toBe(row);fireEvent.click(size);await waitFor(()=>expect(mocks.entries).toHaveBeenLastCalledWith(1,'','SIZE',true));expect(size.parentElement?.getAttribute('aria-sort')).toBe('descending');expect(notifyToast).not.toHaveBeenCalled();});
+ it('filters current directory by type and full filename without scanning the disk again',async()=>{mount();await screen.findByRole('button',{name:'文稿.md'});fireEvent.click(screen.getByRole('button',{name:'PS / 工程'}));expect(screen.queryByRole('button',{name:'文稿.md'})).toBeNull();expect(screen.getByRole('button',{name:'A very long creative project source.psd'})).toBeTruthy();fireEvent.click(screen.getByRole('button',{name:'全部'}));fireEvent.change(screen.getByRole('searchbox'),{target:{value:'.md'}});expect(screen.getByRole('button',{name:'文稿.md'})).toBeTruthy();expect(screen.queryByRole('button',{name:'素材'})).toBeNull();expect(mocks.entries).toHaveBeenCalledTimes(1);});
+ it('opens only on explicit file activation without redundant opened toast, blocks dangerous types and copies validated native paths',async()=>{mount();expect(screen.queryByText(/双击文件或按 Enter/)).toBeNull();const file=await screen.findByRole('button',{name:'文稿.md'});fireEvent.click(file);expect(mocks.open).not.toHaveBeenCalled();fireEvent.doubleClick(file);await waitFor(()=>expect(mocks.open).toHaveBeenCalledWith(1,'文稿.md'));await waitFor(()=>expect(file).toHaveProperty('disabled',false));expect(notifyToast).not.toHaveBeenCalled();fireEvent.click(screen.getByRole('button',{name:'用默认软件打开: unsafe.exe'}));expect(notifyToast).toHaveBeenCalledWith('warning',workspaceCopy['zh-CN'].blocked);expect(mocks.open).toHaveBeenCalledTimes(1);fireEvent.click(screen.getByRole('button',{name:'复制路径: 文稿.md'}));await waitFor(()=>expect(mocks.clipboard).toHaveBeenCalledWith('X:/Synthetic/Creative/文稿.md'));expect(notifyToast).toHaveBeenLastCalledWith('success',workspaceCopy['zh-CN'].copied);expect(mocks.path).toHaveBeenCalledWith(1,'文稿.md');});
+ it('opens a focused file with Enter and respects a busy mutation guard',async()=>{const view=mount({busy:true});const file=await screen.findByRole('button',{name:'文稿.md'});fireEvent.keyDown(file,{key:'Enter'});expect(mocks.open).not.toHaveBeenCalled();view.rerender(<I18nProvider><WorkspaceFiles busy={false} active request={null} onError={onError} onOpenTarget={onOpenTarget}/></I18nProvider>);fireEvent.keyDown(file,{key:'Enter'});await waitFor(()=>expect(mocks.open).toHaveBeenCalledWith(1,'文稿.md'));});
+ it('changes application folder metadata and confirms database-only removal',async()=>{mount();await screen.findByRole('button',{name:'文稿.md'});fireEvent.click(screen.getByRole('button',{name:'管理文件夹'}));fireEvent.click(within(screen.getByRole('dialog')).getByRole('button',{name:/Creative Project/}));fireEvent.change(screen.getByRole('textbox',{name:'文件夹名称'}),{target:{value:'Renamed in app'}});fireEvent.click(screen.getByRole('button',{name:'保存'}));await waitFor(()=>expect(mocks.update).toHaveBeenCalledWith(1,'Renamed in app',folder.note,null));await waitFor(()=>expect(screen.queryByRole('dialog')).toBeNull());fireEvent.click(screen.getByRole('button',{name:'管理文件夹'}));fireEvent.click(within(screen.getByRole('dialog')).getByRole('button',{name:/Creative Project/}));fireEvent.click(screen.getByRole('button',{name:'移除登记'}));expect(screen.getByRole('dialog').textContent).toContain(workspaceCopy['zh-CN'].removeHint);expect(mocks.remove).not.toHaveBeenCalled();mocks.folders.mockResolvedValue([]);fireEvent.click(screen.getByRole('button',{name:'确认'}));await waitFor(()=>expect(mocks.remove).toHaveBeenCalledWith(1));});
+ it('removes DOM image references before disposing native-read Blob URLs',async()=>{URL.revokeObjectURL=vi.fn(url=>expect(document.querySelector(`img[src="${url}"]`)).toBeNull());const view=mount();await waitFor(()=>expect(document.querySelector('.workspace-thumbnail img')).not.toBeNull());view.rerender(<I18nProvider><WorkspaceFiles busy={false} active={false} request={null} onError={onError} onOpenTarget={onOpenTarget}/></I18nProvider>);workbenchThumbCache.clear();await waitFor(()=>expect(URL.revokeObjectURL).toHaveBeenCalled());expect(document.querySelector('.workspace-thumbnail img')).toBeNull();});
+ it('preserves all three tab sessions, independent scroll positions and Ctrl+3 focus',async()=>{render(<I18nProvider><div className="content-scroll"><OrganizePage roots={[]} revision={0} busy={false} onOpenTarget={onOpenTarget} onError={onError}/></div></I18nProvider>);const scroller=document.querySelector('.content-scroll') as HTMLElement;await screen.findByRole('tab',{name:'项目文件'});scroller.scrollTop=67;fireEvent.keyDown(window,{key:'3',ctrlKey:true});const projectTab=screen.getByRole('tab',{name:'项目文件'});expect(document.activeElement).toBe(projectTab);await screen.findByRole('button',{name:'文稿.md'});fireEvent.change(screen.getByRole('searchbox',{name:'搜索当前文件夹'}),{target:{value:'psd'}});scroller.scrollTop=195;fireEvent.keyDown(projectTab,{key:'Home'});expect(scroller.scrollTop).toBe(67);fireEvent.keyDown(window,{key:'3',ctrlKey:true});expect(scroller.scrollTop).toBe(195);expect(screen.getByRole('searchbox',{name:'搜索当前文件夹'})).toHaveProperty('value','psd');expect(document.querySelectorAll('.studio-panel')).toHaveLength(3);expect(document.querySelectorAll('.studio-panel[hidden]')).toHaveLength(2);});
+ it('opens registered folder hits through Ctrl+K with a fenced metadata-only query',async()=>{render(<I18nProvider><CommandPalette enabled actions={[]} onHit={vi.fn()}/></I18nProvider>);fireEvent.keyDown(window,{key:'k',ctrlKey:true});fireEvent.change(screen.getByRole('combobox'),{target:{value:'Blue'}});fireEvent.click(await screen.findByRole('option',{name:/项目文件 Creative Project/}));expect(takeStudioLink()).toEqual({view:'files',folderId:1});expect(mocks.entries).not.toHaveBeenCalled();});
+ it('honors a project-folder deep link when arriving from another view',async()=>{openStudio({view:'files',folderId:1});render(<I18nProvider><OrganizePage roots={[]} revision={0} busy={false} onOpenTarget={onOpenTarget} onError={onError}/></I18nProvider>);await screen.findByRole('button',{name:'文稿.md'});expect(screen.getByRole('tab',{name:'项目文件'}).getAttribute('aria-selected')).toBe('true');});
+ it.each(['zh-CN','en-US','ja-JP','ko-KR'] as const)('localizes native workspace failures for %s',locale=>{expect(workspaceError(new Error('WORKSPACE_OPEN_BLOCKED'),locale)).toBe(workspaceCopy[locale].blocked);expect(workspaceError(new Error('WORKSPACE_CHANGED'),locale)).toBe(workspaceCopy[locale].changedError);expect(workspaceError(new Error('WORKSPACE_LIMIT'),locale)).toBe(workspaceCopy[locale].limitError);expect(workspaceError(new Error('WORKSPACE_PATH'),locale)).toBe(workspaceCopy[locale].pathError);});
+ it('highlights grid and list selection without red checkmark badge, keeps toolbar enabled while opening, and keeps sort across subdirectories',async()=>{
+  let finishOpen!:()=>void;mocks.open.mockImplementationOnce(()=>new Promise<void>(resolve=>{finishOpen=resolve;}));
+  const onSortChange=vi.fn();
+  mount({sortPreference:{sort:'MODIFIED',descending:true},onSortChange});
+  const doc=await screen.findByRole('button',{name:'文稿.md'});
+  fireEvent.click(doc);
+  expect(doc.closest('article')?.classList.contains('is-selected')).toBe(true);
+  expect(document.querySelector('.workspace-selection-badge')).toBeNull();
+  expect(document.querySelector('.workspace-selected-name')).toBeNull();
+  expect(document.querySelector('.view-toggle > button.is-active')).not.toBeNull();
+  fireEvent.click(screen.getByRole('button',{name:'用默认软件打开: 文稿.md'}));
+  expect(screen.getByRole('button',{name:'导入项目文件夹'})).toHaveProperty('disabled',false);
+  expect(screen.getByRole('button',{name:'刷新'})).toHaveProperty('disabled',false);
+  expect(screen.getByRole('button',{name:'image.jpg'})).toHaveProperty('disabled',false);
+  await act(async()=>finishOpen());
+  fireEvent.click(screen.getByRole('combobox',{name:'排序方式'}));fireEvent.click(screen.getByRole('option',{name:'大小'}));
+  expect(onSortChange).toHaveBeenLastCalledWith('SIZE',true);
+  await waitFor(()=>expect(mocks.entries).toHaveBeenLastCalledWith(1,'','SIZE',true));
+  fireEvent.doubleClick(screen.getByRole('button',{name:'素材'}));
+  await screen.findByRole('button',{name:'nested.txt'});
+  expect(mocks.entries).toHaveBeenLastCalledWith(1,'素材','SIZE',true);
+  fireEvent.click(screen.getByRole('button',{name:'列表视图'}));
+  const nestedRow=await screen.findByRole('button',{name:'nested.txt'});
+  fireEvent.click(nestedRow);
+  expect(nestedRow.closest('tr')?.classList.contains('is-selected')).toBe(true);
+ });
+ it('keeps folder double-click semantics in list view too',async()=>{
+  mount();
+  await screen.findByRole('button',{name:'素材'});
+  fireEvent.click(screen.getByRole('button',{name:'列表视图'}));
+  const rowBtn=await screen.findByRole('button',{name:'素材'});
+  fireEvent.click(rowBtn);
+  expect(rowBtn.closest('tr')?.classList.contains('is-selected')).toBe(true);
+  expect(mocks.entries).toHaveBeenCalledTimes(1);
+  fireEvent.doubleClick(rowBtn.closest('tr')!);
+  await screen.findByRole('button',{name:'nested.txt'});
+ });
+});

@@ -1,4 +1,7 @@
 // @vitest-environment jsdom
+import {useEffect,useState} from 'react';
+import {subscribeToasts} from './toast';
+import {ToastStack,type ToastMessage} from '../components/Toast';
 import {cleanup,fireEvent,render,screen,waitFor} from '@testing-library/react';
 import {afterEach,beforeEach,expect,it,vi} from 'vitest';
 import {I18nProvider} from './i18n';
@@ -20,7 +23,8 @@ vi.mock('../hooks/useCoverDataUrl',()=>({useCoverDataUrl:()=>({coverUrl:null})})
 vi.mock('../hooks/usePosterViewportLifecycle',()=>({usePosterViewportLifecycle:()=>({coverRequested:false,coverVisible:false})}));
 const book:ComicBook={id:5,nodeId:12,displayName:'Book',sourcePath:'X:/Synthetic/Book.pdf',sourceKind:'ZIP_ARCHIVE',documentFormat:'PDF',revision:'r',pageCount:3,modifiedAt:'2026-10-22',indexError:null,progress:null};
 const node:MediaNode={id:5,libraryRootId:1,parentNodeId:1,absolutePath:'X:/Synthetic/Movie',folderName:'Movie',displayName:'Movie',nodeType:'WORK',mediaKind:'ANIMATION',manualTypeOverride:false,coverSource:'PLACEHOLDER',coverCachePath:null,totalVideoCount:2,createdAt:'2026-10-22',updatedAt:'2026-10-22',lastSeenAt:'2026-10-22',userTags:[]};
-const mount=(children:React.ReactNode)=>render(<I18nProvider>{children}</I18nProvider>);
+function ReceiptHarness(){const [items,setItems]=useState<ToastMessage[]>([]);useEffect(()=>subscribeToasts(notice=>setItems(current=>[...current,{...notice,id:current.length+1}])),[]);return <ToastStack toasts={items} onDismiss={id=>setItems(current=>current.filter(item=>item.id!==id))}/>;}
+const mount=(children:React.ReactNode)=>render(<I18nProvider><ReceiptHarness/>{children}</I18nProvider>);
 beforeEach(()=>{vi.resetAllMocks();mocks.notice.mockResolvedValue(null);mocks.flush.mockResolvedValue(undefined);mocks.snapshot.mockResolvedValue({entries:[],bookMemberships:[],nodeMemberships:[]});Element.prototype.scrollIntoView=vi.fn();});
 afterEach(cleanup);
 

@@ -4,6 +4,8 @@ import { nodeDisplayTitle } from "../lib/format";
 import { useI18n } from "../lib/i18n";
 import type { AllResourcesResult, LibraryRoot, MediaNode } from "../types/media";
 import { Icon } from "./Icon";
+import { useModalFocus } from "../hooks/useModalFocus";
+import {notifyToast} from '../lib/toast';
 
 interface HiddenNodesDialogProps {
   roots: LibraryRoot[];
@@ -19,11 +21,12 @@ export function HiddenNodesDialog({ roots, refreshKey, onClose, onRestored }: Hi
   const [loading, setLoading] = useState(false);
   const [busyId, setBusyId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
   const sequence = useRef(0);
   const mutationBusy = useRef(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const dialogRef = useRef<HTMLElement>(null);
+  const backdropRef = useRef<HTMLDivElement>(null);
+  useModalFocus(backdropRef, dialogRef, onClose, 'input', busyId !== null);
 
   const load = useCallback(async () => {
     const request = ++sequence.current;
@@ -45,25 +48,18 @@ export function HiddenNodesDialog({ roots, refreshKey, onClose, onRestored }: Hi
     return () => { sequence.current += 1; };
   }, [load, refreshKey]);
 
-  useEffect(() => {
-    const previousFocus = document.activeElement;
-    inputRef.current?.focus();
-    return () => { if (previousFocus instanceof HTMLElement) previousFocus.focus(); };
-  }, []);
-
   const restore = async (node: MediaNode) => {
     if (mutationBusy.current) return;
     mutationBusy.current = true;
     setBusyId(node.id);
     setError(null);
-    setNotice(null);
     try {
       await api.resetNodeType(node.id);
       // A pending pre-mutation list must never put this row back.
       sequence.current += 1;
       setLoading(false);
       setNodes((current) => current?.filter((item) => item.id !== node.id) ?? null);
-      setNotice(t("hidden.restored", { name: nodeDisplayTitle(node, language) }));
+      notifyToast('success', t("hidden.restored", { name: nodeDisplayTitle(node, language) }));
       try {
         await onRestored();
       } catch {
@@ -83,29 +79,13 @@ export function HiddenNodesDialog({ roots, refreshKey, onClose, onRestored }: Hi
     node.folderName, node.absolutePath, roots.find((root) => root.id === node.libraryRootId)?.displayName ?? ""]
     .some((value) => value.toLocaleLowerCase(language).includes(normalized))) ?? [];
 
-  return <div className="modal-backdrop" onPointerDown={(event) => {
+  return <div ref={backdropRef} className="modal-backdrop" onPointerDown={(event) => {
     if (event.target === event.currentTarget && !mutationBusy.current) onClose();
   }}>
     <section ref={dialogRef} className="hidden-nodes-dialog" role="dialog" aria-modal="true"
-      aria-labelledby="hidden-nodes-title" aria-describedby="hidden-nodes-help" tabIndex={-1}
-      onKeyDown={(event) => {
-        if (event.key === "Escape") {
-          event.stopPropagation();
-          if (!mutationBusy.current) onClose();
-        }
-        if (event.key !== "Tab") return;
-        const controls = dialogRef.current?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled)');
-        if (!controls?.length) return;
-        const first = controls[0], last = controls[controls.length - 1];
-        if (event.shiftKey && (document.activeElement === first || document.activeElement === dialogRef.current)) {
-          event.preventDefault(); last.focus();
-        } else if (!event.shiftKey && document.activeElement === last) {
-          event.preventDefault(); first.focus();
-        }
-      }}>
+      aria-labelledby="hidden-nodes-title" tabIndex={-1}>
       <header className="modal-header">
-        <span className="modal-heading-icon"><Icon name="eye-off" /></span>
-        <div><h2 id="hidden-nodes-title">{t("hidden.title")}</h2><p id="hidden-nodes-help">{t("hidden.description")}</p></div>
+        <div><h2 id="hidden-nodes-title">{t("hidden.title")}</h2></div>
         <button className="modal-close" aria-label={t("common.close")} disabled={busyId !== null} onClick={onClose} type="button"><Icon name="close" /></button>
       </header>
       <div className="hidden-nodes-controls">
@@ -114,7 +94,6 @@ export function HiddenNodesDialog({ roots, refreshKey, onClose, onRestored }: Hi
         <button className="button secondary" disabled={loading || busyId !== null} onClick={() => void load()} type="button"><Icon name="refresh" />{t("hidden.refresh")}</button>
       </div>
       <p className="hidden-nodes-help">{t("hidden.parentHelp")}</p>
-      {notice && <p className="hidden-nodes-notice" role="status">{notice}</p>}
       {error && <div className="inline-error hidden-nodes-error" role="alert"><span>{error}</span><button disabled={loading || busyId !== null} onClick={() => void load()} type="button">{t("common.retry")}</button></div>}
       <div className="hidden-nodes-list" aria-busy={loading || busyId !== null}>
         {loading && nodes === null && <p className="tag-empty">{t("hidden.loading")}</p>}

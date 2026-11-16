@@ -4,8 +4,31 @@ import {api,chooseDirectory,desktopAvailable} from '../lib/api';
 import {useI18n} from '../lib/i18n';
 import {FeatureModal} from './FeatureModal';
 export function LibraryDropImport({enabled,onFolders,onError}:{enabled:boolean;onFolders:(paths:string[])=>void;onError:(message:string)=>void}){
- const{t}=useI18n();const[over,setOver]=useState(false);const latest=useRef({enabled,onFolders,onError});latest.current={enabled,onFolders,onError};
- useEffect(()=>{if(!desktopAvailable)return;let disposed=false;let stop:(()=>void)|undefined;let view;try{view=getCurrentWebviewWindow();}catch{return;}void view.onDragDropEvent(event=>{const {enabled,onFolders,onError}=latest.current;if(!enabled||document.querySelector('[aria-modal="true"]')){setOver(false);return;}const e=event.payload;setOver(e.type==='enter'||e.type==='over');if(e.type==='drop'){const unique=[...new Set(e.paths)].slice(0,20);void (async()=>{const accepted:string[]=[];for(const path of unique){try{const actual=await api.validateLibraryPath(path);if(!accepted.some(p=>p.toLowerCase()===actual.toLowerCase()))accepted.push(actual);}catch{onError(t('drop.invalid'));}}if(!disposed&&accepted.length&&latest.current.enabled&&!document.querySelector('[aria-modal="true"]'))onFolders(accepted);})();}}).then(f=>{if(disposed)f();else stop=f;}).catch(()=>undefined);return()=>{disposed=true;stop?.();};},[t]);
+ const{t}=useI18n();const[over,setOver]=useState(false);const latest=useRef({enabled,onFolders,onError,epoch:0});latest.current={enabled,onFolders,onError,epoch:latest.current.epoch+(enabled!==latest.current.enabled?1:0)};
+ useEffect(()=>{
+  if(!desktopAvailable)return;
+  let disposed=false;let stop:(()=>void)|undefined;let view;
+  try{view=getCurrentWebviewWindow();}catch{return;}
+  const available=()=>latest.current.enabled&&!document.querySelector('[aria-modal="true"],dialog[open]');
+  void view.onDragDropEvent(event=>{
+   if(!available()){setOver(false);return;}
+   const e=event.payload;setOver(e.type==='enter'||e.type==='over');
+   if(e.type!=='drop')return;
+   const epoch=++latest.current.epoch;
+   const current=()=>!disposed&&epoch===latest.current.epoch&&available();
+   const unique=[...new Set(e.paths)].slice(0,20);
+   void (async()=>{
+    const accepted:string[]=[];
+    for(const path of unique){
+     if(!current())return;
+     try{const actual=await api.validateLibraryPath(path);if(!accepted.some(p=>p.toLowerCase()===actual.toLowerCase()))accepted.push(actual);}
+     catch{if(current())latest.current.onError(t('drop.invalid'));}
+    }
+    if(current()&&accepted.length)latest.current.onFolders(accepted);
+   })();
+  }).then(f=>{if(disposed)f();else stop=f;}).catch(()=>undefined);
+  return()=>{disposed=true;stop?.();};
+ },[t]);
  useEffect(()=>{if(!enabled)setOver(false);},[enabled]);
  return over&&enabled?<div className="library-drop-target" aria-live="polite">{t('drop.title')}</div>:null;
 }

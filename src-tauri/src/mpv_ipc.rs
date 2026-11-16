@@ -80,18 +80,34 @@ impl Monitor {
         media: &MediaFile,
         emit: impl Fn(PlaybackEvent) + Send + Sync + 'static,
     ) -> AppResult<()> {
+        validate_launch_media(db, media)?;
         #[cfg(windows)]
         if let Some(executable) = executable.filter(|p| is_mpv(p)) {
             return self.launch_mpv(db, executable, media, Arc::new(emit));
         }
-        #[cfg(not(windows))]
-        let _ = db;
         player::play_selected(executable, Path::new(&media.absolute_path))?;
         if let Some(session_id) = self.stop_session() {
             emit(PlaybackEvent::Ended { session_id });
         }
         Ok(())
     }
+}
+
+/// Every player mode uses the current indexed identity and ancestor visibility
+/// before any process/Shell side effect. A stale detail cannot launch a moved row.
+pub(crate) fn validate_launch_media(db: &Database, media: &MediaFile) -> AppResult<()> {
+    db.read_snapshot(|c| {
+        crate::db::ensure_node_visible_conn(c, media.node_id)?;
+        let current: bool = c.query_row(
+            "SELECT EXISTS(SELECT 1 FROM media_files WHERE id=?1 AND node_id=?2 AND absolute_path=?3 AND file_size=?4 AND modified_at=?5)",
+            rusqlite::params![media.id, media.node_id, media.absolute_path, media.file_size, media.modified_at],
+            |r| r.get(0),
+        ).map_err(|e| e.to_string())?;
+        if !current {
+            return Err("PLAYER_LAUNCH_FAILED".into());
+        }
+        Ok(())
+    })
 }
 fn is_mpv(path: &Path) -> bool {
     path.file_name()
@@ -153,6 +169,77 @@ fn indexed_paths(path: &str, cwd: &str) -> Vec<String> {
     values.sort();
     values.dedup();
     values
+}
+
+// This is a recording of this application's verified mpv connection, never an
+// inference from scans or a connection to a separately launched player.
+fn timestamp_ms() -> i64 {
+    chrono::Utc::now().timestamp_millis().max(0)
+}
+fn screenshot_directory(path: &str, cwd: &str) -> Option<String> {
+    if path.starts_with('~') || path.contains("://") {
+        return None;
+    }
+    indexed_paths(if path.is_empty() { cwd } else { path }, cwd)
+        .into_iter()
+        .find(|p| !p.starts_with(r"\\?\"))
+}
+fn screenshot_expansion(path: &str) -> Option<Value> {
+    // mpv, rather than a guessed USERPROFILE/Desktop path, knows redirected
+    // Windows known folders and its own ~~/~~desktop/~/ expansion semantics.
+    // This command only expands text; it never enumerates or reads that folder.
+    (path.starts_with('~') && path.len() <= 32768 && !path.contains(['\0', '\n', '\r']))
+        .then(|| json!({"command":["expand-path",path],"request_id":-9002}))
+}
+fn start_window(
+    db: &Database,
+    token: &str,
+    root: (i64, &str),
+    media: (i64, i64),
+    directory: Option<&str>,
+    now: i64,
+) -> AppResult<i64> {
+    let mut c = db.connect()?;
+    let tx = c
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .map_err(|e| e.to_string())?;
+    crate::db::ensure_node_visible_conn(&tx, media.1)?;
+    // Recheck the actual file's Root and the logical owner while saving; a stale
+    // asynchronous IPC reply cannot create a new session for a relocated index.
+    let (source,title): (i64,String) = tx.query_row(
+        "SELECT source.id,owner.display_name FROM media_files m JOIN nodes source ON source.id=m.node_id JOIN nodes owner ON owner.id=?2 JOIN library_roots r ON r.id=source.library_root_id WHERE m.id=?1 AND source.library_root_id=?3 AND owner.library_root_id=?3 AND r.path=?4",
+        rusqlite::params![media.0, media.1, root.0,root.1], |r| Ok((r.get(0)?,r.get(1)?)),
+    ).map_err(|e| e.to_string())?;
+    crate::db::ensure_node_visible_conn(&tx, source)?;
+    let index = crate::logical_works::LogicalWorkIndex::load_for_detail(&tx)?;
+    if index.owners.get(&source).copied().unwrap_or(source) != media.1 {
+        return Err("PLAYER_STATE_FAILED".into());
+    }
+    tx.execute(
+        "UPDATE mpv_playback_sessions SET ended_at=max(started_at,CASE WHEN session_token=?2 THEN min(?1,heartbeat_at+15000) ELSE heartbeat_at END) WHERE ended_at IS NULL AND (session_token=?2 OR heartbeat_at<?1-30000)",
+        rusqlite::params![now,token],
+    ).map_err(|e| e.to_string())?;
+    tx.execute(
+        "INSERT INTO mpv_playback_sessions(session_token,node_id,media_file_id,started_at,heartbeat_at,screenshot_directory,video_title) VALUES(?1,?2,?3,?4,?4,?5,?6)",
+        rusqlite::params![token,media.1,media.0,now,directory,title],
+    ).map_err(|e| e.to_string())?;
+    let id = tx.last_insert_rowid();
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(id)
+}
+fn touch_window(db: &Database, id: i64, token: &str, now: i64) -> AppResult<()> {
+    db.connect()?.execute(
+        "UPDATE mpv_playback_sessions SET heartbeat_at=max(heartbeat_at,?1) WHERE id=?2 AND session_token=?3 AND ended_at IS NULL",
+        rusqlite::params![now,id,token],
+    ).map_err(|e| e.to_string())?;
+    Ok(())
+}
+fn close_window(db: &Database, id: i64, token: &str, now: i64) -> AppResult<()> {
+    db.connect()?.execute(
+        "UPDATE mpv_playback_sessions SET ended_at=max(started_at,min(?1,heartbeat_at+15000)) WHERE id=?2 AND session_token=?3 AND ended_at IS NULL",
+        rusqlite::params![now,id,token],
+    ).map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 #[derive(Default)]
@@ -374,6 +461,11 @@ mod windows {
         first: bool,
         last_reported: Option<Vec<String>>,
         last_file: Option<(i64, i64)>,
+        playback_window: Option<i64>,
+        screenshot_requested: bool,
+        screenshot_setting: Option<String>,
+        current_cwd: String,
+        heartbeat: Instant,
         timing: Timing,
     }
     impl Session {
@@ -444,7 +536,110 @@ mod windows {
                 sleep(Duration::from_millis(40)).await;
             }
         }
+        async fn finish_window(&mut self) {
+            if let Some(id) = self.playback_window.take() {
+                let db = self.db.clone();
+                let token = self.token.clone();
+                let now = timestamp_ms();
+                let _ = tauri::async_runtime::spawn_blocking(move || {
+                    close_window(&db, id, &token, now)
+                })
+                .await;
+            }
+        }
+        async fn update_heartbeat(&mut self) {
+            if self.heartbeat.elapsed() < Duration::from_secs(5) {
+                return;
+            }
+            self.heartbeat = Instant::now();
+            if let Some(id) = self.playback_window {
+                let db = self.db.clone();
+                let token = self.token.clone();
+                let now = timestamp_ms();
+                let _ = tauri::async_runtime::spawn_blocking(move || {
+                    touch_window(&db, id, &token, now)
+                })
+                .await;
+            }
+        }
+        async fn record_window(&mut self, media: (i64, i64), cwd: &str) {
+            self.current_cwd = cwd.to_owned();
+            let directory = self
+                .screenshot_setting
+                .as_deref()
+                .and_then(|v| screenshot_directory(v, cwd));
+            let db = self.db.clone();
+            let root = self.root;
+            let root_path = self.path.clone();
+            let token = self.token.clone();
+            let gate = self.active.clone();
+            let now = timestamp_ms();
+            self.playback_window = tauri::async_runtime::spawn_blocking(move || {
+                let guard = gate.lock().map_err(|_| "PLAYER_STATE_FAILED")?;
+                if guard.as_deref() != Some(token.as_str()) {
+                    return Err("PLAYER_STATE_FAILED".into());
+                }
+                start_window(
+                    &db,
+                    &token,
+                    (root, &root_path),
+                    media,
+                    directory.as_deref(),
+                    now,
+                )
+            })
+            .await
+            .ok()
+            .and_then(Result::ok);
+            self.heartbeat = Instant::now();
+        }
+        async fn receive_screenshot_setting(
+            &mut self,
+            packet: &Value,
+            pipe: &mut NamedPipeClient,
+        ) -> bool {
+            let request = packet.get("request_id").and_then(Value::as_i64);
+            if !matches!(request, Some(-9001 | -9002)) {
+                return false;
+            }
+            self.screenshot_setting = (packet.get("error").and_then(Value::as_str)
+                == Some("success"))
+            .then(|| packet.get("data").and_then(Value::as_str))
+            .flatten()
+            .filter(|s| s.len() <= 32768 && !s.contains('\0'))
+            .filter(|s| request != Some(-9002) || Path::new(s).is_absolute())
+            .map(str::to_owned);
+            if request == Some(-9001) {
+                if let Some(command) = self
+                    .screenshot_setting
+                    .as_deref()
+                    .and_then(screenshot_expansion)
+                {
+                    // An unsupported expansion remains None at the directory
+                    // boundary, retaining the conservative unique-time fallback.
+                    let _ = send(pipe, vec![command]).await;
+                }
+            }
+            if let Some(id) = self.playback_window {
+                let directory = self
+                    .screenshot_setting
+                    .as_deref()
+                    .and_then(|v| screenshot_directory(v, &self.current_cwd));
+                let db = self.db.clone();
+                let token = self.token.clone();
+                let _ = tauri::async_runtime::spawn_blocking(move || -> AppResult<()> {
+                    db.connect()?.execute("UPDATE mpv_playback_sessions SET screenshot_directory=?1 WHERE id=?2 AND session_token=?3 AND ended_at IS NULL", rusqlite::params![directory,id,token]).map_err(|e|e.to_string())?;
+                    Ok(())
+                }).await;
+            }
+            true
+        }
         async fn run(mut self) -> Result<(), FailureReason> {
+            let result = self.run_inner().await;
+            self.finish_window().await;
+            result
+        }
+        async fn run_inner(&mut self) -> Result<(), FailureReason> {
             let mut recovering = false;
             let mut consecutive_losses = 0;
             loop {
@@ -494,6 +689,12 @@ mod windows {
                 return Ok(ConnectionEnd::Lost { healthy });
             }
             if observed {
+                // Query once for this launched session. Failure is deliberately
+                // optional and cannot disable playback or progress synchronization.
+                if !self.screenshot_requested {
+                    self.screenshot_requested = true;
+                    let _ = send(pipe, vec![json!({"command":["get_property","screenshot-directory"],"request_id":-9001})]).await;
+                }
                 if let Action::Query(commands) = self.protocol.query() {
                     if send(pipe, commands).await.is_err() && !self.stopped()? {
                         return Ok(ConnectionEnd::Lost { healthy });
@@ -510,6 +711,7 @@ mod windows {
                 if !self.current() {
                     return Ok(ConnectionEnd::Ended);
                 }
+                self.update_heartbeat().await;
                 match timeout(Duration::from_millis(100), pipe.readable()).await {
                     Err(_) => {
                         if self.stopped()? {
@@ -550,6 +752,15 @@ mod windows {
                             continue;
                         }
                     };
+                    if self.receive_screenshot_setting(&packet, pipe).await {
+                        continue;
+                    }
+                    if matches!(
+                        packet.get("event").and_then(Value::as_str),
+                        Some("start-file" | "end-file")
+                    ) {
+                        self.finish_window().await;
+                    }
                     match self.protocol.receive(packet) {
                         Action::None => {}
                         Action::Stop => return Ok(ConnectionEnd::Ended),
@@ -576,12 +787,18 @@ mod windows {
                             healthy = true;
                             let paths = indexed_paths(&file, &cwd);
                             if paths.is_empty() {
+                                self.finish_window().await;
                                 continue;
                             }
                             let duplicate =
                                 recovery_snapshot && self.last_reported.as_ref() == Some(&paths);
                             recovery_snapshot = false;
                             if duplicate {
+                                if self.playback_window.is_none() {
+                                    if let Some(media) = self.last_file {
+                                        self.record_window(media, &cwd).await;
+                                    }
+                                }
                                 continue;
                             } // Preserve manual clear through reconnecting the same file.
                             let db = self.db.clone();
@@ -605,6 +822,7 @@ mod windows {
                             self.last_reported = Some(paths);
                             self.last_file = result;
                             if let Some((file_id, owner_node_id)) = result {
+                                self.record_window((file_id, owner_node_id), &cwd).await;
                                 self.emit(PlaybackEvent::File {
                                     session_id: self.session_id,
                                     file_id,
@@ -658,6 +876,11 @@ mod windows {
             first: true,
             last_reported: None,
             last_file: None,
+            playback_window: None,
+            screenshot_requested: false,
+            screenshot_setting: None,
+            current_cwd: String::new(),
+            heartbeat: Instant::now(),
             timing: Timing::default(),
         }
         .run()
@@ -732,6 +955,11 @@ mod windows {
                 first: true,
                 last_reported: None,
                 last_file: None,
+                playback_window: None,
+                screenshot_requested: false,
+                screenshot_setting: None,
+                current_cwd: String::new(),
+                heartbeat: Instant::now(),
                 timing: Timing {
                     connect: Duration::from_secs(5),
                     exit: Duration::from_secs(2),
@@ -797,6 +1025,129 @@ mod windows {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn managed_playback_windows_switch_close_heartbeat_and_reject_stale_root() {
+        let temp = crate::db::test_temp_dir();
+        let db = Database::new(temp.path().join("sessions.db"));
+        db.migrate().unwrap();
+        let c = db.connect().unwrap();
+        c.execute_batch("INSERT INTO library_roots(id,path,display_name) VALUES(1,'synthetic-library','Library'),(2,'other-library','Other'); INSERT INTO nodes(id,library_root_id,parent_node_id,absolute_path,folder_name,display_name,node_type,total_video_count) VALUES(1,1,NULL,'synthetic-library','Root','Root','CONTAINER',2),(2,1,1,'synthetic-library/a','A','A','WORK',2); INSERT INTO media_files(id,node_id,absolute_path,file_name,extension,file_size,modified_at) VALUES(1,2,'synthetic-library/a/01.mkv','01.mkv','mkv',1,'synthetic'),(2,2,'synthetic-library/a/02.mkv','02.mkv','mkv',1,'synthetic');").unwrap();
+        let first = start_window(
+            &db,
+            "session-a",
+            (1, "synthetic-library"),
+            (1, 2),
+            Some("C:/Synthetic/Shots"),
+            100_000,
+        )
+        .unwrap();
+        touch_window(&db, first, "wrong-token", 110_000).unwrap();
+        assert_eq!(
+            c.query_row(
+                "SELECT heartbeat_at FROM mpv_playback_sessions WHERE id=?1",
+                [first],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+            100_000
+        );
+        touch_window(&db, first, "session-a", 110_000).unwrap();
+        let second = start_window(
+            &db,
+            "session-a",
+            (1, "synthetic-library"),
+            (2, 2),
+            None,
+            112_000,
+        )
+        .unwrap();
+        assert_eq!(
+            c.query_row(
+                "SELECT ended_at FROM mpv_playback_sessions WHERE id=?1",
+                [first],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+            112_000
+        );
+        close_window(&db, second, "session-a", 500_000).unwrap();
+        assert_eq!(
+            c.query_row(
+                "SELECT ended_at FROM mpv_playback_sessions WHERE id=?1",
+                [second],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+            127_000
+        );
+        assert!(
+            start_window(&db, "bad-root", (2, "other-library"), (1, 2), None, 600_000).is_err()
+        );
+        let crashed = start_window(
+            &db,
+            "crashed",
+            (1, "synthetic-library"),
+            (1, 2),
+            None,
+            700_000,
+        )
+        .unwrap();
+        start_window(
+            &db,
+            "new-session",
+            (1, "synthetic-library"),
+            (2, 2),
+            None,
+            800_000,
+        )
+        .unwrap();
+        assert_eq!(
+            c.query_row(
+                "SELECT ended_at FROM mpv_playback_sessions WHERE id=?1",
+                [crashed],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+            700_000
+        );
+    }
+    #[test]
+    fn screenshot_directory_uses_only_bounded_lexical_local_paths() {
+        assert_eq!(
+            screenshot_directory("shots", r"C:\Synthetic").map(|path| path.replace('/', "\\")),
+            Some(r"C:\Synthetic\shots".into())
+        );
+        assert_eq!(
+            screenshot_directory("", r"C:\Synthetic").map(|path| path.replace('/', "\\")),
+            Some(r"C:\Synthetic".into())
+        );
+        assert_eq!(screenshot_directory("~~desktop/", r"C:\Synthetic"), None);
+        assert_eq!(
+            screenshot_directory("https://invalid", r"C:\Synthetic"),
+            None
+        );
+        assert_eq!(screenshot_directory("bad\0path", r"C:\Synthetic"), None);
+        assert_eq!(screenshot_directory("x", "relative"), None);
+    }
+    #[test]
+    fn round10_mpv_expands_known_folders_itself_without_reading_the_user_profile() {
+        for raw in ["~~desktop/", "~/Pictures", "~~home/screenshots"] {
+            let command = screenshot_expansion(raw).unwrap();
+            assert_eq!(command["command"], json!(["expand-path", raw]));
+            assert_eq!(command["request_id"], -9002);
+            assert_eq!(screenshot_directory(raw, r"C:\Synthetic"), None);
+        }
+        // Synthetic reply also covers a redirected Desktop, rather than guessing
+        // USERPROFILE/Desktop and accidentally rejecting its registered folder.
+        assert_eq!(
+            screenshot_directory(r"D:\Synthetic\Redirected Desktop", r"C:\Synthetic")
+                .map(|p| p.replace('/', "\\")),
+            Some(r"D:\Synthetic\Redirected Desktop".into())
+        );
+        assert!(screenshot_expansion("~/bad\0path").is_none());
+        assert!(screenshot_expansion(&format!("~/{}", "x".repeat(32768))).is_none());
+        assert!(screenshot_expansion("shots").is_none());
+    }
     fn confirmed_protocol() -> Protocol {
         let mut p = Protocol::default();
         p.query();

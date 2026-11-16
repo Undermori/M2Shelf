@@ -1,15 +1,23 @@
+import {canImportLibraryDrop} from './lib/libraryDrop';
+import {subscribeToasts} from './lib/toast';
+import type {WorkbenchLocation} from './types/workspace';
+import {menuPoint} from './lib/menuPoint';
 import type {ReaderSessionPreferences} from './types/readerFeatures';
 import {mpvNoticeTransition,type MpvNoticeState} from './lib/mpvPlaybackState';
+import {NavigationStage, type NavigationDirection} from './components/NavigationStage';
 import {CoverSelector} from './components/CoverSelector';
 import {CommandPalette} from './components/CommandPalette';
+import {ShortcutHelp} from './components/ShortcutHelp';
 import {LibraryDropImport,LibraryPathDialog} from './components/LibraryDropImport';
 import {useCollection} from './lib/collectionState';
 import {OrganizePage} from "./pages/OrganizePage";
+import type {StudioLink} from './lib/openStudio';
+import {DEFAULT_WORKBENCH_SORT_PREFERENCES, type WorkbenchSortPreferences, type WorkbenchSortUpdate} from './types/workbench';
 import type {SearchFilters} from "./types/incremental";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import {RecentActivityStore} from './lib/recentActivity';
 import {ScrollCommitBoundary} from './components/ScrollCommitBoundary';
-import type { AllResourcesResult, AppBootstrap, AppSettings, AppTheme, BatchMutationResult, BrowseResult, CollectionSort, CollectionSortPreferences, CollectionSortScope, FavoriteFolder, LibraryRecognitionMode, LibraryRoot, MediaFile, MediaNode, MetadataBinding, NodeDetail, ResourceFile, ScanProgress, SearchHit, UpdateCheckResult, UpdateDownloadStatus, UpdateRecoveryNotice, ViewMode } from "./types/media";
+import type { AllResourcesResult, AppBootstrap, AppSettings, AppTheme, BatchMutationResult, BrowseResult, CollectionSort, CollectionSortPreferences, CollectionSortScope, DetailViewState, FavoriteFolder, LibraryRecognitionMode, LibraryRoot, MediaFile, MediaNode, MetadataBinding, NodeDetail, ResourceFile, ScanProgress, SearchHit, UpdateCheckResult, UpdateDownloadStatus, UpdateRecoveryNotice, ViewMode } from "./types/media";
 import { api, isScanBusyError, isStaleWorkError, isUnavailableNodeError, chooseDirectory, desktopAvailable, onScanFinished, onScanProgress } from "./lib/api";
 import { canBindBangumi, errorMessage } from "./lib/format";
 import { SettingsSaveError, useAppSettings } from "./lib/settingsStore";
@@ -48,10 +56,12 @@ import {WindowTitlebar} from "./components/WindowTitlebar";
 import type {ReaderMenuActions} from "./types/readerMenu";
 import { WorkDetailPage } from "./pages/WorkDetailPage";
 import { ComicDetailPage } from './pages/ComicDetailPage';
-import { ComicReaderPage } from './pages/ComicReaderPage';
+import { LoadingState } from "./components/LoadingState";
 import type {ComicBook} from './types/comic';
 import { useI18n } from "./lib/i18n";
 import {allCollectionEntries, type BookDestination, type BookCollectionEntry} from './lib/bookCollection';
+
+const ComicReaderPage = lazy(() => import('./pages/ComicReaderPage').then(m => ({ default: m.ComicReaderPage })));
 
 type ContextState = { node: MediaNode; x: number; y: number } | null;
 type RootContextState = { root: LibraryRoot; x: number; y: number } | null;
@@ -59,6 +69,8 @@ type BatchContextState = { x: number; y: number } | null;
 type ConfirmState = { title: string; description: string; confirmLabel?: string; destructive?: boolean; run: () => Promise<void> } | null;
 type PendingRootAdd = { path: string; onboarding: boolean; playerPath: string | null } | null;
 type NavigationSnapshot = {
+  sectionKey: BrowsingSectionKey;
+  workbenchLocation: WorkbenchLocation;
   readerBookId:number|null;
   readerBookList?:ComicBook[];
   allMediaKind: 'ALL'|'ANIMATION'|'LIVE_ACTION'|'COMIC'|'EBOOK'|'DOUJIN'|'ARTBOOK';
@@ -68,6 +80,7 @@ type NavigationSnapshot = {
   currentNode: MediaNode | null;
   detail: NodeDetail | null;
   searchFilters?:SearchFilters;
+  searchSource?:string;
   searchQuery: string;
   searchRootId: number | null;
   viewMode: ViewMode;
@@ -82,8 +95,10 @@ type NavigationSnapshot = {
   favoriteFilter: string;
   favoriteSort: CollectionSort;
   scrollTop: number;
+  detailViewState?: DetailViewState;
+  capturedAtDirtyEpoch?: number;
 };
-type BrowsingSectionKey = "all" | "search" | "recent" | "favorites" | `library:${number}`;
+type BrowsingSectionKey = "all" | "search" | "recent" | "favorites" | "organize" | "settings" | `library:${number}`;
 type HydratedNavigation = { snapshot: NavigationSnapshot; favoriteFolders?: FavoriteFolder[] };
 
 const idleUpdateStatus: UpdateDownloadStatus = {
@@ -112,6 +127,7 @@ function withoutRemovedRoot(snapshot: NavigationSnapshot, rootId: number): Navig
     return {
       ...snapshot,
       page: "all",
+      sectionKey: "all",
       selectedRootId: null,
       browseData: null,
       currentNode: null,
@@ -169,15 +185,11 @@ function nodeWithRefreshedCover(current: MediaNode, refreshed: MediaNode): Media
   };
 }
 
-function browsingSectionKey(snapshot: NavigationSnapshot): BrowsingSectionKey | null {
-  if (snapshot.page === "library") {
-    return snapshot.detail == null && snapshot.selectedRootId != null
-      ? `library:${snapshot.selectedRootId}`
-      : null;
-  }
-  return snapshot.page === "all" || snapshot.page === "search" || snapshot.page === "recent" || snapshot.page === "favorites"
-    ? snapshot.page
-    : null;
+function browsingSectionKey(snapshot: NavigationSnapshot): BrowsingSectionKey { return snapshot.sectionKey; }
+function isSectionTop(snapshot: NavigationSnapshot): boolean {
+  return !snapshot.readerBookId && !snapshot.detail && (snapshot.page !== 'library' || !snapshot.currentNode)
+    && (snapshot.page !== 'favorites' || snapshot.selectedFavoriteFolderId === null)
+    && (snapshot.page !== 'organize' || snapshot.workbenchLocation.view !== 'files' || !snapshot.workbenchLocation.workspace.relativeDir);
 }
 
 function patchNavigationSnapshot(snapshot: NavigationSnapshot, nodeId: number, update: (node: MediaNode) => MediaNode): NavigationSnapshot {
@@ -207,6 +219,7 @@ function App() {
   const [roots, setRoots] = useState<LibraryRoot[]>([]);
   const [rootsLoading, setRootsLoading] = useState(desktopAvailable);
   const [page, setPage] = useState<AppPage>("all");
+  const [navDirection, setNavDirection] = useState<NavigationDirection>('section');
   const [selectedRootId, setSelectedRootId] = useState<number | null>(null);
   const [browseData, setBrowseData] = useState<BrowseResult | null>(null);
   const [logicalCounts,setLogicalCounts]=useState<Record<number,number>>({});
@@ -231,6 +244,8 @@ function App() {
   const [favoriteSort, setFavoriteSort] = useState<CollectionSort>("title-asc");
   const [currentNode, setCurrentNode] = useState<MediaNode | null>(null);
   const [detail, setDetail] = useState<NodeDetail | null>(null);
+  const [detailViewState, setDetailViewState] = useState<DetailViewState>({});
+  const detailMutationEpochRef = useRef(0);
   const [aboutRequest,setAboutRequest]=useState(0);
   const [readerBookId,setReaderBookId]=useState<number|null>(null);
   const [readerBookList,setReaderBookList]=useState<ComicBook[]|undefined>();
@@ -310,8 +325,17 @@ function App() {
   const contentScrollRef = useRef<HTMLDivElement>(null);
   const navigationSnapshots = useRef<Map<number, NavigationSnapshot>>(new Map());
   const sectionSnapshots = useRef<Map<BrowsingSectionKey, NavigationSnapshot>>(new Map());
+  const sectionTopSnapshots = useRef<Map<BrowsingSectionKey, NavigationSnapshot>>(new Map());
+  const [searchSource,setSearchSource]=useState('');
+  const [sectionKey,setSectionKey]=useState<BrowsingSectionKey>('all');
+  const [workbenchLocation,setWorkbenchLocation]=useState<WorkbenchLocation>({view:'notes',workspace:{folderId:null,relativeDir:''}});
+  const visitedWorkbench=useRef(false),visitedSettings=useRef(false);
+  if(page==='organize')visitedWorkbench.current=true;
+  if(page==='settings')visitedSettings.current=true;
   const historyTrail = useRef<number[]>([0]);
   const historyCursor = useRef(0);
+  const historySeek=useRef<number|null>(null);
+  const modalHistoryGuard = useRef<{ snapshot: string | null; returning: { snapshot: string | null; sequence: number; direction: 1 | -1; resume?:()=>void } | null }>({ snapshot: null, returning: null });
   const navigationSequence = useRef(0);
   const navigationGeneration = useRef(0);
   const rootsLoadGeneration = useRef(0);
@@ -333,9 +357,12 @@ function App() {
   displayedSortPreferences.current = { all: allSort, browse: browseSort, favorites: favoriteSort };
   const sortSaveRevisions = useRef<Record<CollectionSortScope, number>>({ all: 0, browse: 0, favorites: 0 });
   const sortSaveQueue = useRef<Promise<void>>(Promise.resolve());
-  const activeSectionKey = page === "library"
-    ? detail == null && selectedRootId != null ? `library:${selectedRootId}` as BrowsingSectionKey : null
-    : page === "all" || page === "search" || page === "recent" || page === "favorites" ? page : null;
+  const [workbenchSort, setWorkbenchSort] = useState<WorkbenchSortPreferences>(DEFAULT_WORKBENCH_SORT_PREFERENCES);
+  const persistedWorkbenchSort = useRef<WorkbenchSortPreferences>(DEFAULT_WORKBENCH_SORT_PREFERENCES);
+  const currentWorkbenchSort = useRef<WorkbenchSortPreferences>(DEFAULT_WORKBENCH_SORT_PREFERENCES);
+  const workbenchSortSaveRevisions = useRef<{ files: number; gallery: number; notes: number }>({ files: 0, gallery: 0, notes: 0 });
+  const workbenchSortSaveQueue = useRef<Promise<void>>(Promise.resolve());
+  const activeSectionKey = sectionKey;
   const activeSectionKeyRef = useRef<BrowsingSectionKey | null>(activeSectionKey);
   activeSectionKeyRef.current = activeSectionKey;
 
@@ -375,13 +402,14 @@ function App() {
   }, []);
 
   const captureNavigation = useCallback((): NavigationSnapshot => ({
+    sectionKey,workbenchLocation,
     readerBookId,readerBookList,allMediaKind,
     page,
     selectedRootId,
     browseData,
     currentNode,
     detail,
-    searchFilters,searchQuery,
+    searchSource,searchFilters,searchQuery,
     searchRootId,
     viewMode,
     allFilter,
@@ -395,16 +423,20 @@ function App() {
     favoriteFilter,
     favoriteSort,
     scrollTop: contentScrollRef.current?.scrollTop ?? 0,
-  }), [readerBookId,readerBookList,allMediaKind,allFilter, allSort, allTagFilterId, browseData, browseFilter, browseSort, browseTagFilterId, currentNode, detail, favoriteFilter, favoriteNodes, favoriteSort, page, searchFilters, searchQuery, searchRootId, selectedFavoriteFolderId, selectedRootId, viewMode]);
+    detailViewState,
+    capturedAtDirtyEpoch: detailMutationEpochRef.current,
+  }), [searchSource,sectionKey,workbenchLocation,readerBookId,readerBookList,allMediaKind,allFilter, allSort, allTagFilterId, browseData, browseFilter, browseSort, browseTagFilterId, currentNode, detail, detailViewState, favoriteFilter, favoriteNodes, favoriteSort, page, searchFilters, searchQuery, searchRootId, selectedFavoriteFolderId, selectedRootId, viewMode]);
   const captureNavigationRef = useRef(captureNavigation);
   captureNavigationRef.current = captureNavigation;
 
   const rememberSectionNavigation = useCallback((snapshot: NavigationSnapshot) => {
     const key = browsingSectionKey(snapshot);
-    if (key) sectionSnapshots.current.set(key, snapshot);
+    sectionSnapshots.current.set(key, snapshot);
+    if(isSectionTop(snapshot))sectionTopSnapshots.current.set(key,snapshot);
   }, []);
 
-  const rememberNavigation = useCallback((snapshot: NavigationSnapshot) => {
+  const rememberNavigation = useCallback((snapshot: NavigationSnapshot, direction: NavigationDirection = 'forward') => {
+    setNavDirection(direction);
     rememberSectionNavigation(snapshot);
     const currentSequence = historyTrail.current[historyCursor.current];
     navigationSnapshots.current.set(currentSequence, snapshot);
@@ -422,78 +454,46 @@ function App() {
   }, [rememberSectionNavigation]);
 
   const restorePreviousNavigation = useCallback((previous: NavigationSnapshot) => {
+    setSectionKey(previous.sectionKey);
+    if(previous.page==='organize')setWorkbenchLocation(previous.workbenchLocation);
     setReaderBookId(previous.readerBookId);setReaderBookList(previous.readerBookList);setAllMediaKind(previous.allMediaKind);
     setPage(previous.page);
     setSelectedRootId(previous.selectedRootId);
     setBrowseData(previous.browseData);
     setCurrentNode(previous.currentNode);
     setDetail(previous.detail);
-    setSearchFilters(previous.searchFilters??{});
+    setDetailViewState(previous.detailViewState ?? {});
+    setSearchSource(previous.searchSource??'');setSearchFilters(previous.searchFilters??{});
     setSearchQuery(previous.searchQuery);
     setSearchRootId(previous.searchRootId);
     setViewMode(previous.viewMode);
     setAllFilter(previous.allFilter);
     setAllTagFilterId(previous.allTagFilterId);
-    setAllSort(previous.allSort);
+    setAllSort(currentSortPreferences.current.all);
     setBrowseFilter(previous.browseFilter);
     setBrowseTagFilterId(previous.browseTagFilterId);
-    setBrowseSort(previous.browseSort);
+    setBrowseSort(currentSortPreferences.current.browse);
     setSelectedFavoriteFolderId(previous.selectedFavoriteFolderId);
     setFavoriteNodes(previous.favoriteNodes);
     setFavoriteFilter(previous.favoriteFilter);
-    setFavoriteSort(previous.favoriteSort);
+    setFavoriteSort(currentSortPreferences.current.favorites);
     queueScroll(previous.scrollTop);
   }, [queueScroll]);
 
   const restoreSectionNavigation = useCallback((previous: NavigationSnapshot) => {
-    setReaderBookId(null);setAllMediaKind(previous.allMediaKind);
-    setPage(previous.page);
-    setViewMode(previous.viewMode);
-    setDetail(null);
-    if (previous.page === "all") {
-      setCurrentNode(null);
-      setSearchRootId(null);
-      setAllFilter(previous.allFilter);
-      setAllTagFilterId(previous.allTagFilterId);
-      setAllSort(previous.allSort);
-    } else if (previous.page === "search") {
-      setCurrentNode(null);
-      const validSearchRootId = previous.searchRootId != null && roots.some((root) => root.id === previous.searchRootId)
-        ? previous.searchRootId
-        : null;
-      setSelectedRootId(validSearchRootId ?? (previous.selectedRootId != null && roots.some((root) => root.id === previous.selectedRootId) ? previous.selectedRootId : roots[0]?.id ?? null));
-      setSearchFilters(previous.searchFilters??{});
-    setSearchQuery(previous.searchQuery);
-      setSearchRootId(validSearchRootId);
-    } else if (previous.page === "recent") {
-      setCurrentNode(null);
-      setSearchRootId(null);
-    } else if (previous.page === "favorites") {
-      setCurrentNode(null);
-      setSearchRootId(null);
-      setSelectedFavoriteFolderId(previous.selectedFavoriteFolderId);
-      setFavoriteNodes(previous.favoriteNodes);
-      setFavoriteFilter(previous.favoriteFilter);
-      setFavoriteSort(previous.favoriteSort);
-    } else if (previous.page === "library") {
-      setSelectedRootId(previous.selectedRootId);
-      setBrowseData(previous.browseData);
-      setCurrentNode(previous.currentNode);
-      setBrowseFilter(previous.browseFilter);
-      setBrowseTagFilterId(previous.browseTagFilterId);
-      setBrowseSort(previous.browseSort);
-    }
-    queueScroll(previous.scrollTop);
-  }, [queueScroll, roots]);
+    setNavDirection('section');
+    restorePreviousNavigation(previous);
+  }, [restorePreviousNavigation]);
 
   useLayoutEffect(() => {
     if (page === "search") return;
     if ((page === "all" && allResourcesLoading)
       || (page === "recent" && recentlyWatchedLoading)
       || (page === "favorites" && favoritesLoading)
-      || (page === "library" && contentLoading)) return;
+      || (page === "library" && contentLoading)
+      || (page === "organize" && workbenchLocation.view === "files")) return;
     applyPendingScroll();
-  }, [allResourcesLoading, applyPendingScroll, contentLoading, currentNode?.id, detail?.node.id, favoritesLoading, page, recentlyWatchedLoading, scrollRestoreEpoch]);
+  }, [allResourcesLoading, applyPendingScroll, contentLoading, currentNode?.id, detail?.node.id, favoritesLoading, page, recentlyWatchedLoading, scrollRestoreEpoch,workbenchLocation.view]);
 
   useLayoutEffect(() => {
     const media = window.matchMedia("(prefers-color-scheme: dark)");
@@ -540,7 +540,6 @@ function App() {
   const toast = useCallback((text: string, kind: ToastKind = "info") => {
     const id = ++toastSequence.current;
     setToasts((items) => [...items, { id, text, kind }].slice(-4));
-    window.setTimeout(() => setToasts((items) => items.filter((item) => item.id !== id)), 5000);
     return id;
   }, []);
 
@@ -837,7 +836,45 @@ function App() {
     persistCollectionSort("favorites", sort, setFavoriteSort);
   }, [persistCollectionSort]);
 
+  const applyWorkbenchSortUpdate = (prefs: WorkbenchSortPreferences, update: WorkbenchSortUpdate): WorkbenchSortPreferences => {
+    if (update.scope === "files") return { ...prefs, filesSort: update.sort, filesDescending: update.descending };
+    if (update.scope === "gallery") return { ...prefs, gallerySort: update.sort, galleryDescending: update.descending };
+    return { ...prefs, notesSort: update.sort };
+  };
+
+  const copyWorkbenchSortScope = (target: WorkbenchSortPreferences, source: WorkbenchSortPreferences, scope: WorkbenchSortUpdate["scope"]): WorkbenchSortPreferences => {
+    if (scope === "files") return { ...target, filesSort: source.filesSort, filesDescending: source.filesDescending };
+    if (scope === "gallery") return { ...target, gallerySort: source.gallerySort, galleryDescending: source.galleryDescending };
+    return { ...target, notesSort: source.notesSort };
+  };
+
+  const changeWorkbenchSort = useCallback((update: WorkbenchSortUpdate) => {
+    const scope = update.scope;
+    const revision = ++workbenchSortSaveRevisions.current[scope];
+    currentWorkbenchSort.current = applyWorkbenchSortUpdate(currentWorkbenchSort.current, update);
+    setWorkbenchSort((current) => applyWorkbenchSortUpdate(current, update));
+    if (update.scope === "gallery") {
+      setWorkbenchLocation((current) => current.gallery ? { ...current, gallery: { ...current.gallery, sort: update.sort, descending: update.descending } } : current);
+    }
+    if (!desktopAvailable || typeof api.updateWorkbenchSortPreference !== "function") return;
+    workbenchSortSaveQueue.current = workbenchSortSaveQueue.current
+      .catch(() => undefined)
+      .then(async () => {
+        try {
+          const saved = await api.updateWorkbenchSortPreference(update);
+          persistedWorkbenchSort.current = copyWorkbenchSortScope(persistedWorkbenchSort.current, saved, scope);
+        } catch (error) {
+          if (workbenchSortSaveRevisions.current[scope] !== revision) return;
+          const persisted = persistedWorkbenchSort.current;
+          currentWorkbenchSort.current = copyWorkbenchSortScope(currentWorkbenchSort.current, persisted, scope);
+          setWorkbenchSort((current) => copyWorkbenchSortScope(current, persisted, scope));
+          toast(errorMessage(error), "error");
+        }
+      });
+  }, [toast]);
+
   const patchNodeEverywhere = useCallback((nodeId: number, update: (node: MediaNode) => MediaNode, refreshGroups = true) => {
+    detailMutationEpochRef.current += 1;
     setTidyRevision(v=>v+1);
     setAllResources((current) => {
       if (!current) return current;
@@ -868,9 +905,9 @@ function App() {
       const patched = patchNavigationSnapshot(snapshot, nodeId, update);
       if (patched !== snapshot) navigationSnapshots.current.set(sequence, patched);
     }
-    for (const [key, snapshot] of sectionSnapshots.current) {
+    for (const cache of [sectionSnapshots.current,sectionTopSnapshots.current]) for (const [key, snapshot] of cache) {
       const patched = patchNavigationSnapshot(snapshot, nodeId, update);
-      if (patched !== snapshot) sectionSnapshots.current.set(key, patched);
+      if (patched !== snapshot) cache.set(key, patched);
     }
     // A binding can split or join a work. Recompute that projection while keeping the ordinary
     // source-node patch path (including exact cover revisions) intact.
@@ -902,10 +939,10 @@ function App() {
   const openNodeMenu = useCallback((event: React.MouseEvent, node: MediaNode) => {
     if (editMode) {
       setSelectedNodeIds((current) => current.has(node.id) ? current : new Set([...current, node.id]));
-      setBatchContext({ x: event.clientX, y: event.clientY });
+      setBatchContext({ ...menuPoint(event) });
       return;
     }
-    setContext({ node, x: event.clientX, y: event.clientY });
+    setContext({ node, ...menuPoint(event) });
   }, [editMode]);
 
   const openBatchMenu = useCallback((event: React.MouseEvent<HTMLButtonElement>) => {
@@ -953,7 +990,10 @@ function App() {
   const loadRecentlyWatched = useCallback(() => recentActivity.refresh(), [recentActivity]);
 
   useEffect(() => {
-    const invalidate = () => recentActivity.invalidate();
+    const invalidate = () => {
+      detailMutationEpochRef.current += 1;
+      recentActivity.invalidate();
+    };
     window.addEventListener('m2shelf-progress-changed', invalidate);
     return () => window.removeEventListener('m2shelf-progress-changed', invalidate);
   }, [recentActivity]);
@@ -1043,8 +1083,12 @@ function App() {
     );
     const rootsGeneration = ++rootsLoadGeneration.current;
     const initialSortRevisions = { ...sortSaveRevisions.current };
-    void Promise.all([bootstrapPromise, api.listRoots(), settingsPromise, api.getCollectionSortPreferences(), api.scanStatus()])
-      .then(([_app, nextRoots, _settings, sortPreferences, activeScan]) => {
+    const initialWorkbenchSortRevisions = { ...workbenchSortSaveRevisions.current };
+    const workbenchSortPromise = typeof api.getWorkbenchSortPreferences === "function"
+      ? api.getWorkbenchSortPreferences().catch(() => DEFAULT_WORKBENCH_SORT_PREFERENCES)
+      : Promise.resolve(DEFAULT_WORKBENCH_SORT_PREFERENCES);
+    void Promise.all([bootstrapPromise, api.listRoots(), settingsPromise, api.getCollectionSortPreferences(), api.scanStatus(), workbenchSortPromise])
+      .then(([_app, nextRoots, _settings, sortPreferences, activeScan, workbenchSortPreferences]) => {
         if (!active) return;
         if (rootsGeneration === rootsLoadGeneration.current) {
           setRoots(nextRoots);
@@ -1058,6 +1102,12 @@ function App() {
           if (scope === "all") setAllSort(sortPreferences[scope]);
           else if (scope === "browse") setBrowseSort(sortPreferences[scope]);
           else setFavoriteSort(sortPreferences[scope]);
+        }
+        for (const scope of ["files", "gallery", "notes"] as const) {
+          if (workbenchSortSaveRevisions.current[scope] !== initialWorkbenchSortRevisions[scope]) continue;
+          persistedWorkbenchSort.current = copyWorkbenchSortScope(persistedWorkbenchSort.current, workbenchSortPreferences, scope);
+          currentWorkbenchSort.current = copyWorkbenchSortScope(currentWorkbenchSort.current, workbenchSortPreferences, scope);
+          setWorkbenchSort((current) => copyWorkbenchSortScope(current, workbenchSortPreferences, scope));
         }
         if (activeScan?.status === "RUNNING" || activeScan?.status === "CANCELLING") setScan(activeScan);
       })
@@ -1242,7 +1292,7 @@ function App() {
     };
   }, []);
 
-  const selectRoot = useCallback(async (rootId: number, recordHistory = true, destination?:BookDestination) => {
+  const selectRoot = useCallback(async (rootId: number, recordHistory = true, destination?:BookDestination, direction: NavigationDirection = 'section') => {
     const returnSnapshot = recordHistory ? captureNavigation() : null;
     const requestGeneration = ++navigationGeneration.current;
     invalidateFavoritesLoads();
@@ -1250,9 +1300,10 @@ function App() {
     try {
       const next = await api.browse(rootId, null);
       if (requestGeneration !== navigationGeneration.current) return;
-      if (returnSnapshot) rememberNavigation(returnSnapshot);
+      if (returnSnapshot) rememberNavigation(returnSnapshot, direction);
+      else setNavDirection(direction);
       if(destination)window.history.replaceState({...window.history.state,smartMixed:{root:rootId,destination,depth:1,scrollTop:0}},'');
-      setPage("library");
+      setPage("library");setSectionKey(`library:${rootId}`);
       setSelectedRootId(rootId);
       setDetail(null);
       setCurrentNode(null);
@@ -1272,6 +1323,18 @@ function App() {
     }
   }, [captureNavigation, invalidateFavoritesLoads, queueScroll, rememberNavigation, toast]);
 
+  const seekPreviousNavigation=useCallback((matches:(snapshot:NavigationSnapshot)=>boolean)=>{
+    if(historySeek.current!==null)return true;
+    for(let index=historyCursor.current-1;index>=0;index--){
+      const sequence=historyTrail.current[index],snapshot=navigationSnapshots.current.get(sequence);
+      if(snapshot&&matches(snapshot)){
+        historySeek.current=sequence;
+        window.history.back();return true;
+      }
+    }
+    return false;
+  },[]);
+
   const navigateRootSection = useCallback((rootId: number) => {
     const current = captureNavigation();
     const targetKey: BrowsingSectionKey = `library:${rootId}`;
@@ -1279,6 +1342,7 @@ function App() {
       navigationGeneration.current++;
       invalidateFavoritesLoads();
       setContentLoading(false);
+      if(!isSectionTop(current)&&!seekPreviousNavigation(snapshot=>snapshot.sectionKey===targetKey&&isSectionTop(snapshot)))void selectRoot(rootId,false);
       return;
     }
     const previous = sectionSnapshots.current.get(targetKey);
@@ -1302,92 +1366,69 @@ function App() {
       .catch((error) => {
         if (requestGeneration === navigationGeneration.current) toast(errorMessage(error), "error");
       });
-  }, [captureNavigation, hydrateNavigationSnapshot, invalidateFavoritesLoads, rememberNavigation, restoreSectionNavigation, selectRoot, toast]);
+  }, [captureNavigation, hydrateNavigationSnapshot, invalidateFavoritesLoads, rememberNavigation, restoreSectionNavigation, seekPreviousNavigation, selectRoot, toast]);
 
   const navigate = useCallback((next: AppPage) => {
-    const current = captureNavigation();
-    const targetKey: BrowsingSectionKey | null = next === "all" || next === "search" || next === "recent" || next === "favorites" ? next : null;
-    if (targetKey && browsingSectionKey(current) === targetKey) {
-      navigationGeneration.current++;
-      invalidateFavoritesLoads();
-      setContentLoading(false);
-      if (next === "search") setSearchRootId(null);
-      return;
-    }
-    if (!targetKey && next === page) {
-      navigationGeneration.current++;
-      invalidateFavoritesLoads();
-      setContentLoading(false);
-      return;
-    }
-    const requestGeneration = ++navigationGeneration.current;
-    invalidateFavoritesLoads();
-    setContentLoading(false);
-    if (next === "recent") {
-      const commit = () => {
-        if (requestGeneration !== navigationGeneration.current) return;
-        rememberNavigation(captureNavigationRef.current());
-        const previous = sectionSnapshots.current.get("recent");
-        if (previous) restoreSectionNavigation(previous);
-        else {
-          queueScroll(0);
-          setPage("recent"); setDetail(null); setCurrentNode(null); setSearchRootId(null);
-        }
-      };
-      // Never expose an empty/loading page or an outdated navigation snapshot.
-      if (recentActivity.getSnapshot().fresh) commit();
-      else void recentActivity.ensureFresh().then(commit).catch(error => {
-        if (requestGeneration === navigationGeneration.current) toast(errorMessage(error), "error");
-      });
-      return;
-    }
-    const previous = targetKey ? sectionSnapshots.current.get(targetKey) : null;
-    if (previous) {
-      if (previous.page === "favorites") {
-        void hydrateNavigationSnapshot(previous)
-          .then(({ snapshot, favoriteFolders: folders }) => {
-            if (requestGeneration !== navigationGeneration.current) return;
-            rememberNavigation(captureNavigationRef.current());
-            if (folders) setFavoriteFolders(folders);
-            sectionSnapshots.current.set("favorites", snapshot);
-            restoreSectionNavigation(snapshot);
-          })
-          .catch((error) => {
-            if (requestGeneration === navigationGeneration.current) toast(errorMessage(error), "error");
-          });
-      } else {
-        rememberNavigation(current);
-        restoreSectionNavigation(next === "search" ? { ...previous, searchRootId: null } : previous);
+    if(next==='library')return;
+    const current=captureNavigation(),targetKey:BrowsingSectionKey=next;
+    const requestGeneration=++navigationGeneration.current;
+    invalidateFavoritesLoads();setContentLoading(false);
+    if(current.sectionKey===targetKey){
+      if(isSectionTop(current))return;
+      if(seekPreviousNavigation(snapshot=>snapshot.sectionKey===targetKey&&isSectionTop(snapshot)))return;
+      if(next==='organize'&&current.page==='organize'){
+        setWorkbenchLocation(value=>({...value,workspace:{...value.workspace,relativeDir:''}}));queueScroll(0);return;
       }
+      const top=sectionTopSnapshots.current.get(targetKey);
+      if(top)restoreSectionNavigation(top);
       return;
     }
-    rememberNavigation(current);
-    queueScroll(0);
-    if (next === "all") {
-      setPage("all");
-      setDetail(null);
-      setCurrentNode(null);
-      setSearchRootId(null);
-      void loadAllResources().catch((error) => toast(errorMessage(error), "error"));
-      return;
+    const previous=sectionSnapshots.current.get(targetKey);
+    const commit=(snapshot?:NavigationSnapshot,folders?:FavoriteFolder[])=>{
+      if(requestGeneration!==navigationGeneration.current)return;
+      rememberNavigation(captureNavigationRef.current(),'section');
+      if(folders)setFavoriteFolders(folders);
+      if(snapshot){sectionSnapshots.current.set(targetKey,snapshot);restoreSectionNavigation(snapshot);return;}
+      setSectionKey(targetKey);setPage(next);setReaderBookId(null);setDetail(null);setCurrentNode(null);setDetailViewState({});queueScroll(0);
+      if(next==='favorites'){setSelectedFavoriteFolderId(null);setFavoriteNodes(null);setFavoriteFilter('');void loadFavoriteFolders().catch(error=>toast(errorMessage(error),'error'));}
+      if(next==='search'){setSearchQuery('');setSearchRootId(null);}
+      if(next==='all')void loadAllResources().catch(error=>toast(errorMessage(error),'error'));
+    };
+    if(previous){
+      if(!previous.detail&&['all','settings','organize'].includes(previous.page)){commit(previous);return;}
+      const epoch=detailMutationEpochRef.current;
+      void hydrateNavigationSnapshot(previous).then(async result=>{
+        // Mutations completed while fetching cannot be overwritten by that older snapshot.
+        if(epoch!==detailMutationEpochRef.current)result=await hydrateNavigationSnapshot(previous);
+        commit(result.snapshot,result.favoriteFolders);
+      }).catch(error=>{if(requestGeneration===navigationGeneration.current)toast(errorMessage(error),'error');});
+    }else if(next==='recent'){
+      void recentActivity.ensureFresh().then(()=>commit()).catch(error=>{if(requestGeneration===navigationGeneration.current)toast(errorMessage(error),'error');});
+    }else commit();
+  },[captureNavigation,hydrateNavigationSnapshot,invalidateFavoritesLoads,loadAllResources,loadFavoriteFolders,recentActivity,queueScroll,rememberNavigation,restoreSectionNavigation,seekPreviousNavigation,toast]);
+
+  const changeWorkbenchLocation=useCallback((next:WorkbenchLocation,mode:'push'|'replace'|'parent'='push')=>{
+    const current=captureNavigationRef.current();
+    if(JSON.stringify(current.workbenchLocation)===JSON.stringify(next))return;
+    if(current.page==='organize'&&mode!=='replace'){
+      if(mode==='parent'){
+        if(seekPreviousNavigation(previous=>previous.page==='organize'&&previous.workbenchLocation.view==='files'
+          &&previous.workbenchLocation.workspace.folderId===next.workspace.folderId&&previous.workbenchLocation.workspace.relativeDir===next.workspace.relativeDir))return;
+        // A location reached without a recorded ancestor is replaced in place, never pushed as Back.
+      }else rememberNavigation(current,'forward');
+      queueScroll(0);
     }
-    if (next === "favorites") {
-      setPage("favorites");
-      setDetail(null);
-      setCurrentNode(null);
-      setSearchRootId(null);
-      setSelectedFavoriteFolderId(null);
-      setFavoriteNodes(null);
-      setFavoriteFilter("");
-      void loadFavoriteFolders().catch((error) => toast(errorMessage(error), "error"));
-      return;
-    }
-    if (next === "search") {
-      setSearchQuery("");
-      setSearchRootId(null);
-    }
-    setPage(next);
-  }, [captureNavigation, hydrateNavigationSnapshot, invalidateFavoritesLoads, loadAllResources, loadFavoriteFolders, page, recentActivity, queueScroll, rememberNavigation, restoreSectionNavigation, selectedRootId, toast]);
+    setWorkbenchLocation(next);
+  },[queueScroll,rememberNavigation,seekPreviousNavigation]);
+
+  useEffect(() => {
+    const open = (event: Event) => {
+      const link = (event as CustomEvent<StudioLink>).detail;
+      if (link && page !== 'organize') navigate('organize');
+    };
+    window.addEventListener('m2shelf-open-studio', open);
+    return () => window.removeEventListener('m2shelf-open-studio', open);
+  }, [navigate, page]);
 
   const openFavoriteFolder = useCallback(async (folderId: number) => {
     const returnSnapshot = captureNavigation();
@@ -1436,13 +1477,14 @@ function App() {
         setPage("library");
         setSelectedRootId(node.libraryRootId);
         setDetail(next); setCurrentNode(next.node);
+        setDetailViewState({});
       } else {
         const next = await api.browse(node.libraryRootId, node.id);
         if (requestGeneration !== navigationGeneration.current) return;
         rememberNavigation(returnSnapshot);
         setPage("library");
         setSelectedRootId(node.libraryRootId);
-        setBrowseData(next); setCurrentNode(node); setDetail(null);
+        setBrowseData(next); setCurrentNode(node); setDetail(null); setDetailViewState({});
         setBrowseFilter("");
         setBrowseTagFilterId(null);
         setBrowseSort(currentSortPreferences.current.browse);
@@ -1467,12 +1509,13 @@ function App() {
       const opensDetail = nextDetail.node.nodeType === "WORK" || nextDetail.node.nodeType === "AUTO_WORK" || nextDetail.node.nodeType === "CONTAINER";
       const nextBrowse = opensDetail ? null : await api.browse(nextDetail.node.libraryRootId, nodeId);
       if (requestGeneration !== navigationGeneration.current) return;
-      if (returnSnapshot) rememberNavigation(returnSnapshot);
+      if (returnSnapshot) rememberNavigation(returnSnapshot, 'backward');
+      else setNavDirection('backward');
       setSelectedRootId(nextDetail.node.libraryRootId);
       if (opensDetail) {
-        setDetail(nextDetail); setCurrentNode(nextDetail.node);
+        setDetail(nextDetail); setCurrentNode(nextDetail.node); setDetailViewState({});
       } else {
-        setBrowseData(nextBrowse); setCurrentNode(nextDetail.node); setDetail(null);
+        setBrowseData(nextBrowse); setCurrentNode(nextDetail.node); setDetail(null); setDetailViewState({});
         setBrowseFilter("");
         setBrowseTagFilterId(null);
         setBrowseSort(currentSortPreferences.current.browse);
@@ -1486,9 +1529,20 @@ function App() {
     }
   }, [captureNavigation, invalidateFavoritesLoads, queueScroll, rememberNavigation, toast]);
 
-  const goRoot = useCallback((recordHistory = true) => { if (selectedRootId) void selectRoot(selectedRootId, recordHistory); }, [selectRoot, selectedRootId]);
+  const goRoot = useCallback((recordHistory = true) => { if (selectedRootId) void selectRoot(selectedRootId, recordHistory, undefined, 'backward'); }, [selectRoot, selectedRootId]);
   const goBack = useCallback(() => {
+    if(document.querySelector('[aria-modal="true"],dialog[open]'))return;
     if(!window.dispatchEvent(new Event('m2shelf-logical-back',{cancelable:true})))return;
+    const current=captureNavigationRef.current();
+    if(current.page==='organize'&&current.workbenchLocation.view==='files'&&current.workbenchLocation.workspace.relativeDir){
+      changeWorkbenchLocation({...current.workbenchLocation,workspace:{...current.workbenchLocation.workspace,relativeDir:current.workbenchLocation.workspace.relativeDir.split('/').slice(0,-1).join('/')}},'parent');return;
+    }
+    const previous=navigationSnapshots.current.get(historyTrail.current[historyCursor.current-1]);
+    if(!isSectionTop(current)&&previous?.sectionKey!==current.sectionKey){
+      const top=sectionTopSnapshots.current.get(current.sectionKey);
+      if(seekPreviousNavigation(snapshot=>snapshot.sectionKey===current.sectionKey&&isSectionTop(snapshot)))return;
+      if(top){restoreSectionNavigation(top);return;}
+    }
     navigationGeneration.current += 1;
     invalidateFavoritesLoads();
     setContentLoading(false);
@@ -1500,7 +1554,7 @@ function App() {
     const breadcrumbs = detail?.breadcrumbs ?? browseData?.breadcrumbs ?? [];
     const parent = breadcrumbs.length > 1 ? breadcrumbs[breadcrumbs.length - 2] : null;
     if (parent) void openBreadcrumb(parent.id, false);
-  }, [browseData?.breadcrumbs, detail?.breadcrumbs, invalidateFavoritesLoads, openBreadcrumb, page]);
+  }, [browseData?.breadcrumbs, changeWorkbenchLocation, detail?.breadcrumbs, invalidateFavoritesLoads, openBreadcrumb, page, rememberNavigation, restoreSectionNavigation, seekPreviousNavigation]);
 
   useEffect(() => {
     window.history.replaceState(
@@ -1514,13 +1568,64 @@ function App() {
   }, []);
 
   useEffect(() => {
+    const hasModal = () => Boolean(document.querySelector('[aria-modal="true"],dialog[open]'));
+    const rememberModalHistory = () => {
+      const guard = modalHistoryGuard.current;
+      if (guard.returning) return;
+      if (!hasModal()) guard.snapshot = null;
+      else if (guard.snapshot === null) guard.snapshot = JSON.stringify(window.history.state);
+    };
+    // Custom modals are body portals; the native shortcut dialog only changes `open`.
+    // Do not observe the application subtree or scan it on each list/card mutation.
+    const modalObserver = new MutationObserver(() => {
+      document.querySelectorAll('dialog').forEach(dialog => modalObserver.observe(dialog, { attributes: true, attributeFilter: ['open'] }));
+      rememberModalHistory();
+    });
+    modalObserver.observe(document.body, { childList: true });
+    document.querySelectorAll('dialog').forEach(dialog => modalObserver.observe(dialog, { attributes: true, attributeFilter: ['open'] }));
+    rememberModalHistory();
     const onPopState = (event: PopStateEvent) => {
       const state = event.state as { m2ShelfNavigation?: boolean; sequence?: number } | null;
+      const guard = modalHistoryGuard.current;
+      if (guard.returning) {
+        event.stopImmediatePropagation();
+        const returning = guard.returning;
+        if (state?.sequence === returning.sequence && (returning.snapshot === null || JSON.stringify(state) === returning.snapshot)) {
+          guard.returning = null;
+          guard.snapshot = hasModal() ? JSON.stringify(state) : null;
+          returning.resume?.();
+        } else window.history.go(returning.direction);
+        return;
+      }
       if (!state?.m2ShelfNavigation || typeof state.sequence !== "number") return;
+      if(historySeek.current!==null){
+        if(state.sequence!==historySeek.current){event.stopImmediatePropagation();window.history.back();return;}
+        historySeek.current=null;
+      }
       const targetIndex = historyTrail.current.indexOf(state.sequence);
-      if (targetIndex < 0 || targetIndex === historyCursor.current) return;
+      if (targetIndex < 0) return;
+      if (targetIndex === historyCursor.current) {
+        if (hasModal()) guard.snapshot = JSON.stringify(state);
+        return;
+      }
+      if (hasModal()) {
+        // A browser/side-button traversal has already moved the real history cursor.
+        // Walk back to the exact saved entry: SmartMixed may add several entries with
+        // one app sequence, so app-history index deltas are not browser-history deltas.
+        event.stopImmediatePropagation();
+        const direction = targetIndex < historyCursor.current ? 1 : -1;
+        guard.returning = { snapshot: guard.snapshot, sequence: historyTrail.current[historyCursor.current], direction };
+        window.history.go(direction);
+        return;
+      }
       const previous = navigationSnapshots.current.get(state.sequence);
       if (!previous) return;
+      const leaving=captureNavigationRef.current();
+      if(targetIndex<historyCursor.current&&previous.sectionKey!==leaving.sectionKey&&!isSectionTop(leaving)){
+        event.stopImmediatePropagation();
+        guard.returning={snapshot:null,sequence:historyTrail.current[historyCursor.current],direction:1,resume:()=>goBack()};
+        window.history.go(1);return;
+      }
       const requestGeneration = ++navigationGeneration.current;
       invalidateFavoritesLoads();
       setContentLoading(false);
@@ -1528,9 +1633,13 @@ function App() {
       const current = captureNavigation();
       navigationSnapshots.current.set(currentSequence, current);
       rememberSectionNavigation(current);
+      setNavDirection(targetIndex < historyCursor.current ? 'backward' : 'forward');
       historyCursor.current = targetIndex;
       restorePreviousNavigation(previous);
-      if (previous.page === "library" || previous.page === "favorites" || previous.page === "search") {
+      const canReusePreviousDetail = previous.page === "library"
+        && previous.detail != null
+        && previous.capturedAtDirtyEpoch === detailMutationEpochRef.current;
+      if (!canReusePreviousDetail && (previous.page === "library" || previous.page === "favorites" || previous.page === "search")) {
         void hydrateNavigationSnapshot(previous)
           .then(({ snapshot, favoriteFolders: folders }) => {
             if (requestGeneration !== navigationGeneration.current) return;
@@ -1565,15 +1674,20 @@ function App() {
       }
     };
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.altKey && !event.ctrlKey && !event.metaKey && event.key === "ArrowLeft") {
+      if (!event.defaultPrevented && !event.isComposing && event.altKey && !event.ctrlKey && !event.metaKey && event.key === "ArrowLeft") {
         event.preventDefault();
         goBack();
       }
     };
-    window.addEventListener("popstate", onPopState);
+    const sideDown=(event:MouseEvent)=>{if(event.button===3){event.preventDefault();event.stopImmediatePropagation();goBack();}};
+    const sideUp=(event:MouseEvent)=>{if(event.button===3){event.preventDefault();event.stopImmediatePropagation();}};
+    window.addEventListener('mousedown',sideDown,true);window.addEventListener('mouseup',sideUp,true);window.addEventListener('auxclick',sideUp,true);
+    window.addEventListener("popstate", onPopState, true);
     window.addEventListener("keydown", onKeyDown, true);
     return () => {
-      window.removeEventListener("popstate", onPopState);
+      window.removeEventListener('mousedown',sideDown,true);window.removeEventListener('mouseup',sideUp,true);window.removeEventListener('auxclick',sideUp,true);
+      modalObserver.disconnect();
+      window.removeEventListener("popstate", onPopState, true);
       window.removeEventListener("keydown", onKeyDown, true);
     };
   }, [captureNavigation, goBack, hydrateNavigationSnapshot, invalidateFavoritesLoads, queueScroll, rememberSectionNavigation, restorePreviousNavigation, toast]);
@@ -1690,13 +1804,14 @@ function App() {
     catch (error) { toast(errorMessage(error), "error"); }
   };
 
-  const retryCover = useCallback(async (node: MediaNode, imageDecodeFailed = false) => {
+  const retryCover = useCallback(async (node: MediaNode, imageDecodeFailed = false, propagateFailure = false) => {
     try {
       const binding = node.workTarget ? await api.retryWorkBangumiCover(node.workTarget, imageDecodeFailed ? [node.id] : []) : await api.retryBangumiCover(node.id);
       if (node.workTarget) await refreshCurrentAndAllResources();
       patchNodeEverywhere(node.id, (current) => nodeWithBinding(current, binding));
+      if (propagateFailure && binding.coverDownloadError) throw new Error(t('error.coverFailed'));
       toast(binding.coverDownloadError ? t("app.coverBindingKept", { error: t("error.coverFailed") }) : t("app.coverRetrieved"), binding.coverDownloadError ? "info" : "success");
-    } catch (error) { if (isStaleWorkError(error)) await refreshCurrentAndAllResources(); toast(t("app.coverRetryFailed", { error: errorMessage(error) }), "error"); }
+    } catch (error) { if (isStaleWorkError(error)) await refreshCurrentAndAllResources(); if (propagateFailure) throw error; toast(t("app.coverRetryFailed", { error: errorMessage(error) }), "error"); }
   }, [patchNodeEverywhere, refreshCurrentAndAllResources, t, toast]);
 
   const refreshAfterBatch = useCallback(async () => {
@@ -1705,9 +1820,9 @@ function App() {
     if (page !== "recent") void loadRecentlyWatched().catch(() => undefined);
   }, [loadAllResources, loadRecentlyWatched, loadRoots, page, refreshCurrent, selectedRootId]);
 
-  const matchExisting = useCallback(async (nodeIds: number[] | null, rematchExisting: boolean) => {
-    if (scan) { toast(t("app.scanAlreadyRunning"), "info"); return; }
-    if (matchBusy || (nodeIds && nodeIds.length === 0)) return;
+  const matchExisting = useCallback(async (nodeIds: number[] | null, rematchExisting: boolean, propagateFailure = false) => {
+    if (scan) { if (propagateFailure) throw new Error(t('app.scanAlreadyRunning')); toast(t("app.scanAlreadyRunning"), "info"); return; }
+    if (matchBusy || (nodeIds && nodeIds.length === 0)) { if (propagateFailure) throw new Error(t('app.scanAlreadyRunning')); return; }
     setMatchBusy(true);
     setBatchContext(null);
     try {
@@ -1723,6 +1838,7 @@ function App() {
         setScan(currentStatus);
       }
     } catch (error) {
+      if (propagateFailure) throw error;
       toast(errorMessage(error), "error");
     } finally {
       setMatchBusy(false);
@@ -1784,6 +1900,7 @@ function App() {
         setContentLoading(false);
         const favoriteSnapshot = sectionSnapshots.current.get("favorites");
         if (favoriteSnapshot) sectionSnapshots.current.set("favorites", withoutRemovedFavoriteFolder(favoriteSnapshot, folder.id));
+      const favoriteTop=sectionTopSnapshots.current.get("favorites");if(favoriteTop)sectionTopSnapshots.current.set("favorites",withoutRemovedFavoriteFolder(favoriteTop,folder.id));
         for (const [sequence, snapshot] of navigationSnapshots.current) {
           const safeSnapshot = withoutRemovedFavoriteFolder(snapshot, folder.id);
           if (safeSnapshot !== snapshot) navigationSnapshots.current.set(sequence, safeSnapshot);
@@ -1866,9 +1983,9 @@ function App() {
     setContentLoading(false);
     rememberNavigation(captureNavigation());
     setSearchFilters(f=>({...f,scanRootId:undefined}));
-    setSearchQuery(query);
+    setSearchQuery(query);setSearchSource('');
     setSearchRootId(rootId);
-    setPage("search");
+    setPage("search");setSectionKey("search");
     queueScroll(0);
   }, [captureNavigation, invalidateFavoritesLoads, queueScroll, rememberNavigation]);
 
@@ -1895,6 +2012,7 @@ function App() {
       case "cover": setCoverTarget({kind:'NODE',id:node.id});break;
       case "clear-cover": try { const refreshed = await api.clearNodeCover(node.id); patchNodeEverywhere(node.id, (current) => nodeWithRefreshedCover(current, refreshed)); toast(t("app.customCoverCleared"), "success"); } catch (error) { toast(errorMessage(error), "error"); } break;
       case "explorer": try { await api.openInExplorer(node.id); } catch (error) { toast(errorMessage(error), "error"); } break;
+      case "copy-path": try { await navigator.clipboard.writeText(node.absolutePath); toast(t("app.pathCopied"), "success"); } catch (error) { toast(errorMessage(error), "error"); } break;
       case "scan": await startScan(node.libraryRootId, node.id); break;
     }
   };
@@ -1913,10 +2031,10 @@ function App() {
       const deletionGeneration = ++navigationGeneration.current;
       invalidateFavoritesLoads();
       setContentLoading(false);
-      sectionSnapshots.current.delete(`library:${root.id}`);
-      for (const [key, snapshot] of sectionSnapshots.current) {
+      sectionSnapshots.current.delete(`library:${root.id}`);sectionTopSnapshots.current.delete(`library:${root.id}`);
+      for (const cache of [sectionSnapshots.current,sectionTopSnapshots.current]) for (const [key, snapshot] of cache) {
         const safeSnapshot = withoutRemovedRoot(snapshot, root.id);
-        if (safeSnapshot !== snapshot) sectionSnapshots.current.set(key, safeSnapshot);
+        if (safeSnapshot !== snapshot) cache.set(key, safeSnapshot);
       }
       for (const [sequence, snapshot] of navigationSnapshots.current) {
         const safeSnapshot = withoutRemovedRoot(snapshot, root.id);
@@ -1933,7 +2051,7 @@ function App() {
       }
       const next = await loadRoots();
       await loadAllResources();
-      if (!next.length && navigationGeneration.current === deletionGeneration) setPage("all");
+      if (!next.length && navigationGeneration.current === deletionGeneration) setPage("all");setSectionKey("all");
       toast(t("app.rootRemoved"), "success");
     },
   });
@@ -2003,8 +2121,9 @@ function App() {
     }).then(unlisten=>{if(active)stop=unlisten;else unlisten();}).catch(()=>undefined);
     return()=>{active=false;clearTimeout(timer);stop?.();};
   },[recentActivity]);
-  useEffect(()=>{const refresh=()=>{void refreshCurrentAndAllResources();};window.addEventListener('m2shelf-metadata-changed',refresh);return()=>window.removeEventListener('m2shelf-metadata-changed',refresh);},[refreshCurrentAndAllResources]);
-  useEffect(()=>{const refreshed=()=>{void Promise.all([loadRoots(),refreshCurrentAndAllResources()]);};window.addEventListener('m2shelf-library-relocated',refreshed);return()=>window.removeEventListener('m2shelf-library-relocated',refreshed);},[loadRoots,refreshCurrentAndAllResources]);
+  useEffect(()=>{const refresh=()=>{detailMutationEpochRef.current+=1;void refreshCurrentAndAllResources();};window.addEventListener('m2shelf-metadata-changed',refresh);return()=>window.removeEventListener('m2shelf-metadata-changed',refresh);},[refreshCurrentAndAllResources]);
+  useEffect(()=>{const refreshed=()=>{detailMutationEpochRef.current+=1;void Promise.all([loadRoots(),refreshCurrentAndAllResources()]);};window.addEventListener('m2shelf-library-relocated',refreshed);return()=>window.removeEventListener('m2shelf-library-relocated',refreshed);},[loadRoots,refreshCurrentAndAllResources]);
+  useEffect(() => subscribeToasts(({kind, text}) => { toast(text, kind); }), [toast]);
   useEffect(()=>{const failed=()=>toast(t('note.failed'),'error');window.addEventListener('m2shelf-note-save-failed',failed);return()=>window.removeEventListener('m2shelf-note-save-failed',failed);},[t,toast]);
   useDirectionalHeader(contentScrollRef,`${page}:${selectedRootId}:${detail?.node.id??currentNode?.id??''}`,pendingScrollTop.current??0);
   const readerBack=useCallback(()=>{goBack();void loadAllResources();},[goBack,loadAllResources]);
@@ -2022,18 +2141,37 @@ function App() {
   useEffect(()=>{if(allResources)void collection?.refresh();},[allResources,collection?.refresh]);
   const readerProgress=useCallback(()=>{window.dispatchEvent(new Event('m2shelf-progress-changed'));void loadRecentlyWatched();},[loadRecentlyWatched]);
   useEffect(()=>{if(pathDialogOpen||pendingRootAdd||rootAddBusy||scan||!folderQueue.length)return;setPendingRootAdd({path:folderQueue[0],onboarding:false,playerPath:null});setFolderQueue(q=>q.slice(1));},[pathDialogOpen,pendingRootAdd,rootAddBusy,scan,folderQueue]);
+  useEffect(()=>{
+    const onGlobalKeyDown=(e:KeyboardEvent)=>{
+      if(e.defaultPrevented||e.isComposing||readerBookId!==null||document.querySelector('[aria-modal="true"],dialog[open]'))return;
+      if(e.ctrlKey&&!e.altKey&&!e.metaKey&&!e.shiftKey&&e.key.toLowerCase()==='f'){
+        const input=contentScrollRef.current?.querySelector<HTMLInputElement>('.page-toolbar .search-field input, .search-toolbar .search-field input');
+        e.preventDefault();
+        if(input){input.focus();input.select();}
+        else{navigate('search');window.requestAnimationFrame(()=>contentScrollRef.current?.querySelector<HTMLInputElement>('.search-toolbar .search-field input')?.focus());}
+        return;
+      }
+      if(e.key==='Escape'&&editMode&&!context&&!batchContext&&!rootContext){
+        if(e.target instanceof HTMLElement&&e.target.closest('input,textarea,[contenteditable=true]')){(e.target as HTMLElement).blur();return;}
+        e.preventDefault();
+        changeEditMode(false);
+      }
+    };
+    window.addEventListener('keydown',onGlobalKeyDown);
+    return()=>window.removeEventListener('keydown',onGlobalKeyDown);
+  },[batchContext,changeEditMode,context,editMode,navigate,readerBookId,rootContext]);
   const quickActions=[
     {id:'all',label:t('sidebar.allResources'),run:()=>navigate('all')},
     {id:'search',label:t('common.search'),run:()=>navigate('search')},
     {id:'recent',label:t('sidebar.recentlyWatched'),run:()=>navigate('recent')},
-    {id:'organize',label:t('tidy.title'),run:()=>navigate('organize')},
+    {id:'organize',label:t('studio.title'),run:()=>navigate('organize')},
     {id:'settings',label:t('sidebar.settings'),run:()=>navigate('settings')},
     ...(selectedRoot&&!scan?[{id:'scan',label:t('settings.scanNamed',{name:selectedRoot.displayName}),run:()=>{void startScan(selectedRoot.id);}}]:[]),
     ...roots.map(root=>({id:`root-${root.id}`,label:root.displayName,run:()=>navigateRootSection(root.id)}))
   ];
-  const titlebar=<WindowTitlebar actions={{
+  const titlebar=<><ShortcutHelp enabled={initialized&&!showOnboarding}/><WindowTitlebar actions={{
     back:goBack,canBack:initialized&&!showOnboarding&&(historyCursor.current>0||(detail?.breadcrumbs??browseData?.breadcrumbs??[]).length>1),reader:readerBookId===null?null:readerMenuActions,
-    reload:()=>{if(document.querySelector('[aria-modal="true"],[data-unsaved-edit="true"]'))return;void flushSettings().then(()=>window.location.reload()).catch(error=>toast(errorMessage(error),'error'));},
+    reload:()=>{if(document.querySelector('[aria-modal="true"],dialog[open],[data-unsaved-edit="true"]'))return;void flushSettings().then(()=>window.location.reload()).catch(error=>toast(errorMessage(error),'error'));},
     canReload:initialized&&readerBookId===null&&!scan&&!rootAddBusy&&!matchBusy&&!favoriteBusy&&updateDownloadStatus.phase!=='APPLYING'&&updateDownloadStatus.phase!=='DOWNLOADING',
     addRoot:()=>void addRoot(),revealRoot:()=>{if(selectedRoot)void api.openRootInExplorer(selectedRoot.id).catch(error=>toast(errorMessage(error),'error'));},navigate,
     about:()=>{navigate('settings');setAboutRequest(value=>value+1);},checkUpdate:()=>void checkForUpdate(true),
@@ -2041,37 +2179,38 @@ function App() {
     setView:setViewMode,canBrowse:initialized&&!showOnboarding&&readerBookId===null,canAdd:initialized&&!rootAddBusy&&readerBookId===null,
     canReveal:page==='library'&&!!selectedRoot&&readerBookId===null,canView:readerBookId===null&&!detail&&page!=='settings',
     canCheck:initialized&&readerBookId===null&&updateDownloadStatus.phase!=='CHECKING'&&updateDownloadStatus.phase!=='DOWNLOADING'&&updateDownloadStatus.phase!=='APPLYING',viewMode
-  }}/>;
+  }}/></>;
   const updateUi = <>
     {updateCheckResult?.update && !updateDialogOpen && !updateBannerDismissed && <UpdateBanner update={updateCheckResult.update} onOpen={() => { setUpdateDialogOpen(true); setUpdateBannerDismissed(true); }} onDismiss={() => { updateBannerDismissedRef.current = true; setUpdateBannerDismissed(true); }} />}
     <UpdateDialog open={updateDialogOpen && !bootstrap?.updateRecoveryNotice} checkResult={updateCheckResult} downloadStatus={updateDownloadStatus} failureAction={updateFailureAction} confirmInstallRequest={updateInstallRequest} onClose={closeUpdateDialog} onDownload={(version) => void downloadUpdate(version)} onInstall={(version) => void installDownloadedUpdate(version)} onRetry={retryUpdate} />
     <UpdateRecoveryDialog notice={bootstrap?.updateRecoveryNotice ?? null} busy={updateRecoveryBusy} error={updateRecoveryError} onAcknowledge={(notice) => void acknowledgeUpdateRecoveryNotice(notice)} />
   </>;
-  const rootModeUi = <><LibraryDropImport enabled={initialized&&readerBookId===null&&!rootAddBusy} onFolders={paths=>setFolderQueue(paths)} onError={message=>toast(message,'error')}/>{pathDialogOpen&&<LibraryPathDialog initialPath={pendingRootAdd?.path??pathDialogContext?.path??""} onChoose={path=>{setPathDialogOpen(false);setPendingRootAdd({...pendingRootAdd??pathDialogContext??{onboarding:false,playerPath:null},path});setPathDialogContext(null);}} onClose={()=>{setPathDialogOpen(false);setPathDialogContext(null);}}/>}
+  const rootModeUi = <><LibraryDropImport enabled={canImportLibraryDrop({initialized,showOnboarding,page,detail,currentNode,readerBookId,rootAddBusy})} onFolders={paths=>setFolderQueue(paths)} onError={message=>toast(message,'error')}/>{pathDialogOpen&&<LibraryPathDialog initialPath={pendingRootAdd?.path??pathDialogContext?.path??""} onChoose={path=>{setPathDialogOpen(false);setPendingRootAdd({...pendingRootAdd??pathDialogContext??{onboarding:false,playerPath:null},path});setPathDialogContext(null);}} onClose={()=>{setPathDialogOpen(false);setPathDialogContext(null);}}/>}
   <LibraryRecognitionModeDialog suspended={pathDialogOpen} onEditPath={()=>{setPathDialogContext(pendingRootAdd);setPathDialogOpen(true);}} path={pendingRootAdd?.path ?? null} busy={rootAddBusy} onChoose={(mode,kind,autoBangumi,strategy) => void confirmRootRecognitionMode(mode,kind,autoBangumi,strategy)} onClose={() => { if (!rootAddBusy) {setPendingRootAdd(null);setFolderQueue([]);} }} />{pendingRootAdd&&folderQueue.length>0&&<div className="folder-queue-status" role="status">{t("drop.remaining",{count:folderQueue.length})}<button className="button ghost" type="button" onClick={()=>setFolderQueue([])}>{t("drop.cancel")}</button></div>}</>;
 
   if (showOnboarding) return <>{titlebar}<OnboardingPage onComplete={finishOnboarding} onError={(message) => toast(message, "error")} />{rootModeUi}{updateUi}<ToastStack toasts={toasts} onDismiss={(id) => setToasts((items) => items.filter((item) => item.id !== id))} /></>;
-  if(readerBookId!==null)return <>{titlebar}<div className="reader-session"><ComicReaderPage key={readerBookId} bookId={readerBookId} readingList={readerBookList} preferences={readerPreferences} onNextBook={(book,preferences)=>{setReaderPreferences(preferences);setReaderBookId(book.id);}} onBack={readerBack} onProgress={readerProgress} onMenuActions={setReaderMenuActions}/></div><ToastStack toasts={toasts} onDismiss={id=>setToasts(items=>items.filter(item=>item.id!==id))}/></>;
+  if(readerBookId!==null)return <>{titlebar}<div className="reader-session"><NavigationStage animateInitial className="reader-stage" direction={navDirection} navigationKey={`reader:${readerBookId}`}><Suspense fallback={<LoadingState label={t("comic.loading")}/>}><ComicReaderPage key={readerBookId} bookId={readerBookId} readingList={readerBookList} preferences={readerPreferences} onNextBook={(book,preferences)=>{setReaderPreferences(preferences);setReaderBookId(book.id);}} onBack={readerBack} onProgress={readerProgress} onMenuActions={setReaderMenuActions}/></Suspense></NavigationStage></div><ToastStack toasts={toasts} onDismiss={id=>setToasts(items=>items.filter(item=>item.id!==id))}/></>;
 
   return (
     <>{titlebar}<CommandPalette enabled={initialized&&!showOnboarding&&!rootAddBusy&&!dialogBusy&&!matchBusy&&!favoriteBusy&&updateDownloadStatus.phase!=="APPLYING"} actions={quickActions} onHit={hit=>hit.comicBook?openComic(hit.comicBook):void openNode(hit.node)}/><div className="app-shell">
-      <Sidebar page={page} roots={roots} selectedRootId={selectedRootId} loading={rootsLoading} onNavigate={navigate} onSelectRoot={navigateRootSection} onAddRoot={() => void addRoot()} onRootMenu={(event, root) => setRootContext({ root, x: event.clientX, y: event.clientY })} projectCount={projectCount} />
+      <Sidebar page={sectionKey.startsWith("library:")?"library":sectionKey as AppPage} roots={roots} selectedRootId={sectionKey.startsWith("library:")?Number(sectionKey.slice(8)):null} loading={rootsLoading} onNavigate={navigate} onSelectRoot={navigateRootSection} onAddRoot={() => void addRoot()} onRootMenu={(event, root) => setRootContext({ root, ...menuPoint(event) })} projectCount={projectCount} />
       <ScrollCommitBoundary scrollRef={contentScrollRef} pending={pendingScrollTop} ready={!((page === "all" && allResourcesLoading) || (page === "recent" && recentlyWatchedLoading) || (page === "favorites" && favoritesLoading) || (page === "library" && contentLoading))}>
       <main className="main-content">
         {!desktopAvailable && <div className="web-preview-notice"><Icon name="info" />{t("app.previewNotice")}</div>}
         {scan && !scan.background && (scan.status === "RUNNING" || scan.status === "CANCELLING") && <ScanBanner progress={scan} mediaKind={roots.find(root=>root.id===scan.rootId)?.mediaKind} onCancel={() => void cancelScan()} />}
         <div className={`content-scroll${page === "settings" ? " is-settings" : ""}`} ref={contentScrollRef}>
+          <NavigationStage animateInitial={navDirection !== 'section'} direction={navDirection} navigationKey={page === "library" ? `${page}:${selectedRootId}:${detail ? `detail-${detail.node.id}-${detail.node.workView === true}` : currentNode?.id ?? "root"}` : page === "favorites" ? `${page}:${selectedFavoriteFolderId ?? "root"}` : page}>
           {page === "all" && <AllResourcesPage onOpenBookEntry={openBookEntry} onRevealBook={book=>{void api.revealComicBook(book.id).catch(error=>toast(errorMessage(error),'error'));}} mediaKind={allMediaKind} onMediaKind={setAllMediaKind} grouping={allGrouping} data={allResources} loading={allResourcesLoading} viewMode={viewMode} onViewMode={setViewMode} filter={allFilter} onFilter={setAllFilter} tagFilterId={allTagFilterId} onTagFilter={setAllTagFilterId} sort={allSort} onSort={changeAllSort} onOpenNode={openNode} onMenu={openNodeMenu} onBangumi={requestBangumi} onRetryCover={retryCover} onScan={() => void startScan()} onAddRoot={() => void addRoot()} coverRevision={coverRevision} editMode={editMode} selectedNodeIds={selectedNodeIds} matchBusy={matchBusy || favoriteBusy || Boolean(scan)} onEditMode={changeEditMode} onToggleSelection={toggleNodeSelection} onSelectAll={selectNodeIds} onClearSelection={clearNodeSelection} onBatchTags={() => setBatchTagsOpen(true)} onBatchFavorites={() => setFavoriteAssignmentNodeIds([...selectedNodeIds])} onBatchMenu={openBatchMenu} onMatch={(nodeIds, rematch) => void matchExisting(nodeIds, rematch)} />}
-          {page === "recent" && <RecentlyWatchedPage onRemoveRecent={removeRecent} onClearRecent={clearRecent} onError={message=>toast(message,"error")} onReadBook={openComic} onRevealBook={book=>{void api.revealComicBook(book.id).catch(error=>toast(errorMessage(error),'error'));}} entries={recentlyWatched} loading={recentlyWatchedLoading} viewMode={viewMode} onViewMode={setViewMode} onOpenNode={(node) => {const bookId=recentlyWatched?.find(e=>!e.comicBook&&e.node.id===node.id)?.comicBookId;if(bookId)openComic({id:bookId} as ComicBook);else void openNode(node);}} onMenu={(event, node) => setContext({ node, x: event.clientX, y: event.clientY })} onBangumi={requestBangumi} onRetryCover={(node, failed) => void retryCover(node, failed)} coverRevision={coverRevision} />}
+          {page === "recent" && <RecentlyWatchedPage onRemoveRecent={removeRecent} onClearRecent={clearRecent} onError={message=>toast(message,"error")} onReadBook={openComic} onRevealBook={book=>{void api.revealComicBook(book.id).catch(error=>toast(errorMessage(error),'error'));}} entries={recentlyWatched} loading={recentlyWatchedLoading} viewMode={viewMode} onViewMode={setViewMode} onOpenNode={(node) => {const bookId=recentlyWatched?.find(e=>!e.comicBook&&e.node.id===node.id)?.comicBookId;if(bookId)openComic({id:bookId} as ComicBook);else void openNode(node);}} onMenu={(event, node) => setContext({ node, ...menuPoint(event) })} onBangumi={requestBangumi} onRetryCover={(node, failed) => void retryCover(node, failed)} coverRevision={coverRevision} />}
           {page === "favorites" && <FavoritesPage folders={favoriteFolders} nodes={favoriteNodes} selectedFolderId={selectedFavoriteFolderId} loading={favoritesLoading} viewMode={viewMode} onViewMode={setViewMode} filter={favoriteFilter} onFilter={setFavoriteFilter} sort={favoriteSort} onSort={changeFavoriteSort} onOpenFolder={(folderId) => void openFavoriteFolder(folderId)} onBack={goBack} onCreate={() => setFavoriteFolderDialog("new")} onRename={setFavoriteFolderDialog} onDelete={deleteFavoriteFolder} onOpenNode={openNode} onMenu={openNodeMenu} onBangumi={requestBangumi} onRetryCover={retryCover} coverRevision={coverRevision} editMode={editMode} selectedNodeIds={selectedNodeIds} busy={favoriteBusy || matchBusy || Boolean(scan)} onEditMode={changeEditMode} onToggleSelection={toggleNodeSelection} onSelectAll={selectNodeIds} onClearSelection={clearNodeSelection} onBatchTags={() => setBatchTagsOpen(true)} onBatchFavorites={() => setFavoriteAssignmentNodeIds([...selectedNodeIds])} onBatchMenu={openBatchMenu} onRematch={() => void matchExisting([...selectedNodeIds], true)} onRemoveSelected={() => void removeSelectedFromFavorite()} />}
           {page === "library" && !selectedRoot && <EmptyState eyebrow={t("app.emptyEyebrow")} title={t("app.emptyTitle")} description={desktopAvailable ? t("app.emptyDesktop") : t("app.emptyWeb")} action={<button className="button primary" disabled={!desktopAvailable} onClick={() => void addRoot()} type="button"><Icon name="plus" />{t("app.addMediaDirectory")}</button>} />}
           {page === "library" && selectedRoot && !detail && <BrowsePage onLogicalCount={updateLogicalCount} onReadComic={openComic} onNodeAction={(action,node)=>void nodeAction(action,node)} data={browseData} currentNode={currentNode} loading={contentLoading} viewMode={viewMode} onViewMode={setViewMode} filter={browseFilter} onFilter={setBrowseFilter} tagFilterId={browseTagFilterId} onTagFilter={setBrowseTagFilterId} sort={browseSort} onSort={changeBrowseSort} onRoot={goRoot} onBreadcrumb={(id) => void openBreadcrumb(id)} onOpenNode={openNode} onMenu={openNodeMenu} onBangumi={requestBangumi} onRetryCover={retryCover} onPlay={(file) => play(file)} onRevealMedia={(file) => void revealMedia(file)} onOpenResource={(file) => void openResource(file)} onRevealResource={(file) => void revealResource(file)} onScan={() => void startScan(selectedRoot.id, currentNode?.id)} onAddRoot={() => void addRoot()} coverRevision={coverRevision} editMode={editMode} selectedNodeIds={selectedNodeIds} matchBusy={matchBusy || favoriteBusy || Boolean(scan)} onEditMode={changeEditMode} onToggleSelection={toggleNodeSelection} onSelectAll={selectNodeIds} onClearSelection={clearNodeSelection} onBatchTags={() => setBatchTagsOpen(true)} onBatchFavorites={() => setFavoriteAssignmentNodeIds([...selectedNodeIds])} onBatchMenu={openBatchMenu} onMatch={(nodeIds, rematch) => void matchExisting(nodeIds, rematch)} />}
-          {page === "library" && selectedRoot && detail && <ActiveDetailPage onReadComic={openComic} onOpenBangumi={() => { void api.openBangumiSubject(detail.node.id).catch(error => toast(errorMessage(error), "error")); }} detail={detail} loading={contentLoading} rootLabel={selectedRoot.displayName} onRoot={goRoot} onBreadcrumb={(id) => void openBreadcrumb(id)} onBack={goBack} onBangumi={() => requestBangumi(detail.node)} onRetryCover={(failed) => void retryCover(detail.node, failed)} onRetryCoverNode={(node, failed) => void retryCover(node, failed)} onClearBangumi={() => void nodeAction("clear-bangumi", detail.node)} onReveal={() => void nodeAction("explorer", detail.node)} onPlay={(file) => play(file)} onRevealMedia={(file) => void revealMedia(file)} onOpenResource={(file) => void openResource(file)} onRevealResource={(file) => void revealResource(file)} onOpenChild={(node) => void openNode(node)} onBangumiNode={requestBangumi} onMenu={(event, node) => setContext({ node, x: event.clientX, y: event.clientY })} coverRevision={coverRevision} />}
-          {page === "search" && <SearchPage filters={searchFilters} onFiltersChange={setSearchFilters} initialQuery={searchQuery} rootId={searchRootId} roots={roots} onRootChange={id=>{setSearchRootId(id);setSearchFilters(f=>({...f,scanRootId:undefined}));}} onQueryChange={setSearchQuery} onOpen={(hit: SearchHit) => hit.comicBook ? openComic(hit.comicBook) : void openNode(hit.node)} onError={(message) => toast(message, "error")} onResultsReady={applyPendingScroll} coverRevision={coverRevision} />}
-          {page==="organize"&&<OrganizePage roots={roots} refreshKey={tidyRevision} revision={coverRevision} busy={matchBusy||Boolean(scan)} onOpen={openNode} onMatch={requestBangumi} onRetryMatch={node=>matchExisting([node.id],false)} onRetryCover={async node=>{if(node.tmdbBinding?.active){await api.tmdbRetryCover(node.id);await refreshCurrentAndAllResources();}else if(node.binding){await retryCover(node);}else{await api.retryPosterCache();}}} onReveal={node=>nodeAction('explorer',node)} onMenu={openNodeMenu} onError={message=>toast(message,'error')}/>}
-          {page === "settings" && <SettingsPage onScanAdded={rootId=>{openSearch("",rootId);setSearchFilters({scanRootId:rootId});}} aboutRequest={aboutRequest} onRootPolicy={async(root,enabled)=>{try{const updated=await api.setRootAutoBangumi(root.id,enabled);setRoots(current=>current.map(item=>item.id===root.id?{...item,autoBangumi:updated.autoBangumi}:item));toast(t('library.policySaved'),'success');}catch(error){toast(errorMessage(error),'error');}}} onIgnoreScanWarnings={root=>{void api.setLibraryScanWarningsIgnored(root.id,!root.scanHealth?.warningsIgnored).then(()=>loadRoots()).catch(e=>toast(errorMessage(e),'error'));}} onHiddenNodes={() => setHiddenNodesOpen(true)} roots={roots} bootstrap={bootstrap} onAddRoot={() => void addRoot()} onRemoveRoot={removeRoot} onScanRoot={(root) => void startScan(root.id)} updateDownloadStatus={updateDownloadStatus} onCheckForUpdate={() => { if (updateCheckResult?.update && updateDownloadStatus.phase !== "CHECKING" && updateDownloadStatus.phase !== "DOWNLOADING" && updateDownloadStatus.phase !== "APPLYING") { setUpdateDialogOpen(true); setUpdateInstallRequest(0); } else { void checkForUpdate(true); } }} onError={(message) => toast(message, "error")} onSuccess={(message) => toast(message, "success")} />}
+          {page === "library" && selectedRoot && detail && <ActiveDetailPage onReadComic={openComic} onOpenBangumi={() => { void api.openBangumiSubject(detail.node.id).catch(error => toast(errorMessage(error), "error")); }} detail={detail} loading={contentLoading} rootLabel={selectedRoot.displayName} onRoot={goRoot} onBreadcrumb={(id) => void openBreadcrumb(id)} onBack={goBack} onBangumi={() => requestBangumi(detail.node)} onRetryCover={(failed) => void retryCover(detail.node, failed)} onRetryCoverNode={(node, failed) => void retryCover(node, failed)} onClearBangumi={() => void nodeAction("clear-bangumi", detail.node)} onReveal={() => void nodeAction("explorer", detail.node)} onPlay={(file) => play(file)} onRevealMedia={(file) => void revealMedia(file)} onOpenResource={(file) => void openResource(file)} onRevealResource={(file) => void revealResource(file)} onOpenChild={(node) => void openNode(node)} onBangumiNode={requestBangumi} onMenu={(event, node) => setContext({ node, ...menuPoint(event) })} coverRevision={coverRevision} viewState={detailViewState} onViewStateChange={patch => setDetailViewState(current => ({ ...current, ...patch }))} />}
+          {page === "search" && <SearchPage sourceFilter={searchSource} onSourceFilterChange={setSearchSource} filters={searchFilters} onFiltersChange={setSearchFilters} initialQuery={searchQuery} rootId={searchRootId} roots={roots} onRootChange={id=>{setSearchRootId(id);setSearchFilters(f=>({...f,scanRootId:undefined}));}} onQueryChange={setSearchQuery} onOpen={(hit: SearchHit) => hit.comicBook ? openComic(hit.comicBook) : void openNode(hit.node)} onError={(message) => toast(message, "error")} onResultsReady={applyPendingScroll} coverRevision={coverRevision} />}
+          {visitedWorkbench.current&&<div hidden={page!=="organize"}><OrganizePage onContentReady={applyPendingScroll} active={page==="organize"} location={workbenchLocation} onLocationChange={changeWorkbenchLocation} sortPreferences={workbenchSort} onSortPreferenceChange={changeWorkbenchSort} roots={roots} refreshKey={tidyRevision} revision={coverRevision} busy={matchBusy||Boolean(scan)} onOpenTarget={async(target,nodeId)=>{const id=nodeId??(target.kind==='NODE'?target.id:null);if(id===null)throw new Error(t('studio.loadFailed'));const result=await api.nodeDetail(id);await openNode(result.node);}} onError={message=>toast(message,'error')}/></div>}
+          {visitedSettings.current && <div hidden={page!=="settings"}><SettingsPage active={page==='settings'} onScanAdded={rootId=>{openSearch("",rootId);setSearchFilters({scanRootId:rootId});}} aboutRequest={aboutRequest} onRootPolicy={async(root,enabled)=>{try{const updated=await api.setRootAutoBangumi(root.id,enabled);setRoots(current=>current.map(item=>item.id===root.id?{...item,autoBangumi:updated.autoBangumi}:item));toast(t('library.policySaved'),'success');}catch(error){toast(errorMessage(error),'error');}}} onIgnoreScanWarnings={root=>{void api.setLibraryScanWarningsIgnored(root.id,!root.scanHealth?.warningsIgnored).then(()=>loadRoots()).catch(e=>toast(errorMessage(e),'error'));}} onHiddenNodes={() => setHiddenNodesOpen(true)} roots={roots} bootstrap={bootstrap} onAddRoot={() => void addRoot()} onRemoveRoot={removeRoot} onScanRoot={(root) => void startScan(root.id)} updateDownloadStatus={updateDownloadStatus} onCheckForUpdate={() => { if (updateCheckResult?.update && updateDownloadStatus.phase !== "CHECKING" && updateDownloadStatus.phase !== "DOWNLOADING" && updateDownloadStatus.phase !== "APPLYING") { setUpdateDialogOpen(true); setUpdateInstallRequest(0); } else { void checkForUpdate(true); } }} onError={(message) => toast(message, "error")} onSuccess={(message) => toast(message, "success")} /></div>}
+          </NavigationStage>
         </div>
-        <footer className="app-footer"><span>{bootstrap ? `${t("brand.name")} ${bootstrap.version}` : t("brand.name")}</span><span className="footer-separator" /><span><Icon name="shield" />{t("common.readOnly")}</span><span className="footer-separator" /><span>{t("app.projectCount", { count: number(projectCount) })}</span>{(page === "library" || (page === "search" && searchRootId != null)) && selectedRoot && <><span className="footer-separator" /><span title={selectedRoot.path}>{selectedRoot.displayName}</span></>}</footer>
       </main>
       </ScrollCommitBoundary>
 

@@ -278,7 +278,7 @@ impl LogicalWorkIndex {
             .collect()
     }
 
-    fn independent_boundary(&self, id: i64, owner: i64) -> bool {
+    pub(crate) fn independent_boundary(&self, id: i64, owner: i64) -> bool {
         let node = &self.nodes[&id];
         if node.manual_type_override {
             return true;
@@ -385,8 +385,48 @@ impl LogicalWorkIndex {
             && (!self.folder_roots.contains(&self.nodes[&id].library_root_id)
                 || self.nodes[&id].manual_type_override
                 || self.nodes[&id].binding.is_some()
-                || !is_supplementary_directory_name(&self.nodes[&id].folder_name))
+                || !self.is_automatic_supplement_subtree(id))
             && self.video_counts.get(&id).is_some_and(|count| *count > 0)
+    }
+
+    fn is_automatic_supplement_subtree(&self, id: i64) -> bool {
+        let mut current = Some(id);
+        let mut visited = HashSet::new();
+        let mut outer_shell = None;
+        while let Some(current_id) = current {
+            if !visited.insert(current_id) {
+                break;
+            }
+            let Some(node) = self.nodes.get(&current_id) else {
+                break;
+            };
+            // An explicit independent decision terminates inherited supplement context.
+            if node.manual_type_override
+                || node.binding.is_some()
+                || node
+                    .tmdb_binding
+                    .as_ref()
+                    .is_some_and(|binding| binding.active)
+            {
+                break;
+            }
+            if node.parent_node_id.is_none() {
+                break;
+            }
+            if is_supplementary_directory_name(&node.folder_name) {
+                outer_shell = Some(current_id);
+            }
+            current = node.parent_node_id;
+        }
+        outer_shell.is_some_and(|shell_id| {
+            // Keep the existing named-shell rule, but do not hide ordinary works
+            // in an orphan SPs folder directly beneath the hidden Library Root.
+            shell_id == id
+                || self.nodes[&shell_id]
+                    .parent_node_id
+                    .and_then(|parent| self.nodes.get(&parent))
+                    .is_some_and(|parent| parent.parent_node_id.is_some())
+        })
     }
 
     pub fn owned_nodes(&self, id: i64) -> Vec<i64> {
@@ -552,7 +592,11 @@ mod tests {
             assert!(is_disc_name(name), "{name}");
         }
         for name in [
+            "CD",
             "CDs",
+            "OST",
+            "Soundtrack",
+            "特典CD",
             "Scans",
             "Disc",
             "Disc 1 Another Show",

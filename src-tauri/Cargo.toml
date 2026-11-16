@@ -1,6 +1,6 @@
 [package]
 name = "m2shelf"
-version = "0.5.17"
+version = "0.5.19"
 description = "A read-only visual browser for local media collections"
 authors = ["森下Undermori"]
 edition = "2021"
@@ -31,7 +31,7 @@ m2shelf-media-parser = { path = "../tools/media-parser" }
 m2shelf-smart-mixed-shadow = { path = "../tools/smart-mixed-shadow", features = ["production"] }
 base64 = "0.22"
 encoding_rs = "0.8"
-image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "bmp"] }
 regex = "1"
 scraper = "0.24"
 lopdf = { version = "0.38", default-features = false }

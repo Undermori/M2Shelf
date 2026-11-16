@@ -3,7 +3,7 @@ import {useCardProgress,cardProgressLabel} from '../lib/cardProgress';
 import {useCollection} from '../lib/collectionState';
 import { memo, useEffect, useRef, useState } from "react";
 import type { MediaNode, ViewMode } from "../types/media";
-import { canBindBangumi, formatDate, nodeDisplayTitle, mediaBadge } from "../lib/format";
+import { canBindBangumi, canBindTmdb, formatDate, nodeDisplayTitle, mediaBadge } from "../lib/format";
 import { FileModifiedTime } from "./FileModifiedTime";
 import { Icon } from "./Icon";
 import { useCoverDataUrl } from "../hooks/useCoverDataUrl";
@@ -57,6 +57,7 @@ function MediaCardComponent({ node, viewMode, onOpen, onMenu, onBangumi, onRetry
   useEffect(() => setImageFailed(false), [cover]);
   const container = node.nodeType === "CONTAINER" || node.nodeType === "MIXED";
   const bindable = canBindBangumi(node);
+  const multipleProviders = canBindTmdb(node);
   const title = nodeDisplayTitle(node);
   const coverFailed = coverReadFailed || imageFailed;
   const coverError = node.binding != null && !coverLoading && (Boolean(node.binding.coverDownloadError) || !cover || coverFailed);
@@ -94,7 +95,7 @@ function MediaCardComponent({ node, viewMode, onOpen, onMenu, onBangumi, onRetry
         </span>
       </button>
       {!editMode && bindable && !node.binding && !node.tmdbBinding?.active && (
-        <button className="quick-bind" onClick={() => onBangumi(node)} title={t("card.searchCover")} type="button"><Icon name="plus" /><span>{t("provider.bangumi")}</span></button>
+        <button className="quick-bind" onClick={() => onBangumi(node)} title={t(multipleProviders ? "detail.searchAdd" : "card.searchCover")} type="button"><Icon name={multipleProviders ? "match" : "bangumi"} /><span>{t(multipleProviders ? "layout.match" : "provider.bangumi")}</span></button>
       )}
       {!editMode && bindable && node.binding && coverError && (
         <button className="quick-bind is-retry" onClick={() => onRetryCover(node, imageFailed)} title={t("card.retryCover")} type="button"><Icon name="refresh" /><span>{t("card.retryShort")}</span></button>

@@ -28,6 +28,7 @@ export function MediaFileList({ watch, relativePaths, directorySortKeys, modifie
         return (
           <div
             className={`media-file-row${!modifiedSort&&!file.durationMs?' is-layout-contained':''}`}
+            data-file-id={file.id}
             key={file.id}
             onDoubleClick={(event) => { if(event.target instanceof Element&&event.target.closest('button'))return;event.preventDefault(); if(watch)void watch.playAndMark(file.id,()=>onPlay(file));else void onPlay(file); }}
             onMouseDown={(event) => { if (event.detail > 1) event.preventDefault(); }}

@@ -1,0 +1,104 @@
+/* Shared metadata source, identity and actions. Container width owns reflow. */
+:root {
+  --metadata-brand: var(--logo-red);
+  --metadata-tmdb: #076972;
+  --metadata-tmdb-soft: #e1f1f2;
+}
+:root[data-theme="dark"] {
+  --metadata-brand: var(--logo-red);
+  --metadata-tmdb: #75cbd2;
+  --metadata-tmdb-soft: #20363a;
+}
+.metadata-binding.binding-panel {
+  container: metadata-binding / inline-size;
+  display: block;
+  max-inline-size: none;
+  margin-block: 22px 0;
+  padding: 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-control);
+  background: var(--surface-panel);
+}
+.metadata-binding .binding-layout {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  gap: 10px 12px;
+  align-items: start;
+}
+.metadata-binding .binding-logo {
+  display: grid;
+  place-items: center;
+  inline-size: 34px;
+  block-size: 34px;
+  border-radius: var(--radius-control);
+  color: var(--on-brand);
+  background: var(--metadata-brand);
+}
+.metadata-binding .binding-logo svg { inline-size: 20px; block-size: 20px; }
+.metadata-binding[data-provider="TMDb"] .binding-logo,
+.metadata-provider-control[data-provider="TMDb"] .metadata-provider-icon {
+  color: var(--metadata-tmdb);
+  background: var(--metadata-tmdb-soft);
+}
+.metadata-binding .binding-copy { display: grid; min-inline-size: 0; gap: 5px; }
+.metadata-binding .binding-meta { display: flex; flex-wrap: wrap; align-items: baseline; gap: 3px 9px; line-height: 1.4; }
+.metadata-binding .binding-provider { color: var(--text-normal); font-size: 12px; font-weight: 600; }
+.metadata-binding .binding-meta small { color: var(--text-muted); font-size: 12px; font-weight: 400; white-space: normal; overflow-wrap: anywhere; }
+.metadata-binding .binding-subject-link {
+  display: flex;
+  justify-self: start;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 6px;
+  inline-size: auto;
+  max-inline-size: 100%;
+  min-inline-size: 0;
+  min-block-size: 24px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-small);
+  color: var(--text-strong);
+  background: transparent;
+  text-align: start;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.5;
+}
+.metadata-binding .binding-title { min-inline-size: 0; overflow-wrap: anywhere; white-space: normal; }
+.metadata-binding .binding-subject-link:hover .binding-title { text-decoration: underline; text-underline-offset: 3px; }
+.metadata-binding .binding-open-icon { inline-size: 14px; block-size: 14px; flex: none; color: var(--text-muted); }
+.metadata-binding .binding-unbound { color: var(--text-muted); font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
+.metadata-binding .binding-error { display: flex; align-items: baseline; gap: 5px; color: var(--status-warning); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.metadata-binding .binding-error svg { flex: none; inline-size: 13px; block-size: 13px; }
+.metadata-binding .binding-actions { display: flex; grid-column: 2; flex-wrap: wrap; align-items: center; gap: 6px; min-inline-size: 0; }
+.metadata-binding .binding-actions .button { min-block-size: 32px; height: auto; padding: 5px 10px; font-size: 13px; line-height: 1.5; white-space: normal; }
+.metadata-binding .binding-actions .icon-button { inline-size: 32px; min-block-size: 32px; block-size: 32px; flex: none; }
+.metadata-binding .binding-actions .icon-button svg { inline-size: 16px; block-size: 16px; }
+@container metadata-binding (min-width: 560px) {
+  .metadata-binding .binding-layout { grid-template-columns: 34px minmax(0, 1fr) auto; }
+  .metadata-binding .binding-actions { grid-column: 3; grid-row: 1; align-self: center; justify-content: end; }
+}
+@container metadata-binding (max-width: 280px) {
+  .metadata-binding .binding-actions { grid-column: 1 / -1; }
+}
+
+.bangumi-modal .metadata-provider { display: flex; flex-wrap: wrap; align-items: end; gap: 12px 20px; margin-block: 0 16px; padding-block: 0; }
+.metadata-provider-field { display: grid; gap: 6px; min-inline-size: 0; flex: 1 1 180px; }
+.metadata-provider-field > span { color: var(--text-muted); font-size: 12px; font-weight: 500; }
+.metadata-provider-control { display: flex; min-inline-size: 0; gap: 8px; align-items: center; }
+.metadata-provider-control .styled-select { flex: 1; min-inline-size: 0; }
+.metadata-provider-icon { display: grid; place-items: center; inline-size: 32px; block-size: 32px; flex: none; border-radius: var(--radius-control); color: var(--on-brand); background: var(--metadata-brand); }
+.metadata-provider-icon svg { inline-size: 19px; block-size: 19px; }
+.metadata-provider-field .select-trigger { min-block-size: 36px; }
+.bangumi-result .match-bound-label { display: inline-flex; align-items: center; justify-self: start; gap: 4px; margin-block-start: 6px; padding: 2px 6px; border: 1px solid var(--border-normal); border-radius: var(--radius-small); color: var(--text-normal); background: var(--surface-muted); font-size: 11px; font-weight: 500; line-height: 1.4; }
+.match-bound-label svg { inline-size: 12px; block-size: 12px; }
+@media (forced-colors: active) {
+  .metadata-binding.binding-panel { border-color: CanvasText; background: Canvas; }
+  .metadata-binding .binding-logo,
+  .metadata-binding[data-provider="TMDb"] .binding-logo,
+  .metadata-provider-control .metadata-provider-icon { color: CanvasText; background: Canvas; border: 1px solid CanvasText; }
+  .metadata-binding .binding-subject-link { color: LinkText; }
+  .metadata-binding .binding-subject-link:focus-visible { outline: 2px solid Highlight; outline-offset: 3px; }
+  .bangumi-result .match-bound-label { color: CanvasText; background: Canvas; border-color: CanvasText; }
+}

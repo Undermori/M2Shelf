@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { AppLanguage, UpdateCheckResult, UpdateDownloadStatus } from "../types/media";
 import { formatBytes, formatDate } from "../lib/format";
 import { useI18n, type MessageKey } from "../lib/i18n";
-import { isolateModalSiblings } from "../lib/modalA11y";
+import { useModalFocus } from "../hooks/useModalFocus";
 import { Icon } from "./Icon";
 
 export type UpdateFailureAction = "download" | "install" | null;
@@ -41,57 +41,17 @@ export function UpdateDialog({ open, checkResult, downloadStatus, failureAction,
   const update = checkResult?.update ?? null;
   const visible = open && Boolean(checkResult && update);
   const busy = downloadStatus.phase === "CHECKING" || downloadStatus.phase === "DOWNLOADING" || downloadStatus.phase === "APPLYING";
-  const busyRef = useRef(busy);
   const totalBytes = downloadStatus.totalBytes ?? (update && downloadStatus.version === update.version ? update.downloadSize : null);
   const progress = totalBytes && totalBytes > 0
     ? Math.min(100, Math.max(0, Math.round((downloadStatus.downloadedBytes / totalBytes) * 100)))
     : null;
   const notes = checkResult ? releaseNotesFor(checkResult, language) : "";
-  busyRef.current = busy;
+  useModalFocus(backdropRef, dialogRef, onClose, 'button:not(:disabled)', busy, visible);
 
   useEffect(() => {
     if (!visible) setConfirming(false);
     else if (confirmInstallRequest > 0) setConfirming(true);
   }, [confirmInstallRequest, visible]);
-
-  useEffect(() => {
-    if (!visible) return;
-    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    const dialog = dialogRef.current;
-    const restoreBackground = isolateModalSiblings(backdropRef.current);
-    const focusable = () => Array.from(dialog?.querySelectorAll<HTMLElement>("button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])") ?? []);
-    const frame = window.requestAnimationFrame(() => focusable()[0]?.focus());
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !busyRef.current) {
-        event.preventDefault();
-        onClose();
-        return;
-      }
-      if (event.key !== "Tab") return;
-      const items = focusable();
-      if (items.length === 0) {
-        event.preventDefault();
-        dialog?.focus();
-        return;
-      }
-      const first = items[0];
-      const last = items[items.length - 1];
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first.focus();
-      }
-    };
-    document.addEventListener("keydown", onKeyDown);
-    return () => {
-      window.cancelAnimationFrame(frame);
-      document.removeEventListener("keydown", onKeyDown);
-      restoreBackground();
-      previous?.focus();
-    };
-  }, [onClose, visible]);
 
   useEffect(() => {
     if (!visible || downloadStatus.phase !== "APPLYING") return;
@@ -102,10 +62,9 @@ export function UpdateDialog({ open, checkResult, downloadStatus, failureAction,
   if (!visible || !checkResult || !update) return null;
   return (
     <div className="modal-backdrop" onPointerDown={(event) => { if (event.currentTarget === event.target && !busy) onClose(); }} ref={backdropRef} role="presentation">
-      <section aria-describedby="update-dialog-description" aria-labelledby="update-dialog-title" aria-modal="true" className="update-dialog" ref={dialogRef} role="dialog" tabIndex={-1}>
+      <section aria-labelledby="update-dialog-title" aria-modal="true" className="update-dialog" ref={dialogRef} role="dialog" tabIndex={-1}>
         <header className="modal-header">
-          <span className="modal-heading-icon"><Icon name="download" /></span>
-          <div><p className="eyebrow">{t("update.eyebrow")}</p><h2 id="update-dialog-title">{t("update.dialogTitle")}</h2><p id="update-dialog-description">{t("update.dialogDescription")}</p></div>
+          <div><h2 id="update-dialog-title">{t("update.dialogTitle")}</h2></div>
           <button aria-label={t("common.close")} className="modal-close" disabled={busy} onClick={onClose} title={t("common.close")} type="button"><Icon name="close" /></button>
         </header>
         <div className="update-dialog-body">
@@ -132,9 +91,9 @@ export function UpdateDialog({ open, checkResult, downloadStatus, failureAction,
           {downloadStatus.phase === "FAILED" && <div className="update-error" role="alert"><Icon name="warning" /><span><strong>{t("update.operationFailed")}</strong><small>{t(failureKey(failureAction))}</small></span></div>}
 
           {!confirming && <div className="update-actions">
+            <button className="button ghost" disabled={busy} onClick={onClose} type="button">{t("update.later")}</button>
             {downloadStatus.phase === "FAILED" && <button className="button secondary" onClick={onRetry} type="button"><Icon name="refresh" />{t("common.retry")}</button>}
             {downloadStatus.phase === "IDLE" && <button aria-label={t("update.downloadAria", { version: update.version })} className="button primary" onClick={() => onDownload(update.version)} title={t("update.downloadAria", { version: update.version })} type="button"><Icon name="download" />{t("update.download")}</button>}
-            {downloadStatus.phase === "DOWNLOADING" && <button className="button primary is-busy" disabled type="button"><Icon name="refresh" />{t("update.downloading")}</button>}
             {downloadStatus.phase === "READY" && <button aria-label={t("update.installAria", { version: update.version })} className="button primary" disabled={!downloadStatus.canInstall} onClick={() => setConfirming(true)} title={t("update.installAria", { version: update.version })} type="button"><Icon name="refresh" />{t("update.install")}</button>}
             {downloadStatus.phase === "APPLYING" && <button className="button primary is-busy" disabled type="button"><Icon name="refresh" />{t("update.installing")}</button>}
           </div>}
@@ -145,7 +104,6 @@ export function UpdateDialog({ open, checkResult, downloadStatus, failureAction,
             <div className="dialog-actions"><button className="button ghost" onClick={() => setConfirming(false)} type="button">{t("common.cancel")}</button><button className="button primary" disabled={!downloadStatus.canInstall} onClick={() => { setConfirming(false); onInstall(update.version); }} type="button"><Icon name="refresh" />{t("update.installAndRestart")}</button></div>
           </div>}
         </div>
-        <footer className="modal-footer update-dialog-footer"><span><Icon name="shield" />{t("update.footer")}</span><button disabled={busy} onClick={onClose} type="button">{t("update.later")}</button></footer>
       </section>
     </div>
   );

@@ -38,10 +38,14 @@ pub struct Factory {
 }
 impl Factory {
     /// Refuses to overwrite any existing file. Only CLI-chosen private synthetic paths are used.
-    pub fn create(path: &Path, kind: LibraryKind, mode: &str) -> Result<Self> { Self::create_internal(path,kind,mode,false) }
-    #[cfg(feature="production")]
-    pub fn create_smart(path:&Path,kind:LibraryKind)->Result<Self>{Self::create_internal(path,kind,"FOLDER",true)}
-    fn create_internal(path:&Path,kind:LibraryKind,mode:&str,smart:bool)->Result<Self>{
+    pub fn create(path: &Path, kind: LibraryKind, mode: &str) -> Result<Self> {
+        Self::create_internal(path, kind, mode, false)
+    }
+    #[cfg(feature = "production")]
+    pub fn create_smart(path: &Path, kind: LibraryKind) -> Result<Self> {
+        Self::create_internal(path, kind, "FOLDER", true)
+    }
+    fn create_internal(path: &Path, kind: LibraryKind, mode: &str, smart: bool) -> Result<Self> {
         std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -58,10 +62,144 @@ impl Factory {
             )
             .map_err(|e| e.to_string())?;
         }
-        if smart {c.execute_batch(include_str!("../../../src-tauri/migrations/0025_smart_mixed.sql")).map_err(|e|e.to_string())?;c.execute("INSERT INTO mediashelf_schema_migrations(version) VALUES(25)",[]).map_err(|e|e.to_string())?;c.execute_batch(include_str!("../../../src-tauri/migrations/0026_text_reader_positions.sql")).map_err(|e|e.to_string())?;c.execute("INSERT INTO mediashelf_schema_migrations(version) VALUES(26)",[]).map_err(|e|e.to_string())?;c.execute_batch(include_str!("../../../src-tauri/migrations/0027_scraper_metadata.sql")).map_err(|e|e.to_string())?;c.execute("INSERT INTO mediashelf_schema_migrations(version) VALUES(27)",[]).map_err(|e|e.to_string())?;c.execute_batch(include_str!("../../../src-tauri/migrations/0028_manual_display_name.sql")).map_err(|e|e.to_string())?;c.execute("INSERT INTO mediashelf_schema_migrations(version) VALUES(28)",[]).map_err(|e|e.to_string())?;c.execute_batch(include_str!("../../../src-tauri/migrations/0029_scan_changes.sql")).map_err(|e|e.to_string())?;c.execute("INSERT INTO mediashelf_schema_migrations(version) VALUES(29)",[]).map_err(|e|e.to_string())?;c.execute_batch(include_str!("../../../src-tauri/migrations/0030_organize_issues.sql")).map_err(|e|e.to_string())?;c.execute("INSERT INTO mediashelf_schema_migrations(version) VALUES(30)",[]).map_err(|e|e.to_string())?;c.execute_batch(include_str!("../../../src-tauri/migrations/0031_recent_activity.sql")).map_err(|e|e.to_string())?;c.execute("INSERT INTO mediashelf_schema_migrations(version) VALUES(31)",[]).map_err(|e|e.to_string())?;c.execute_batch(include_str!("../../../src-tauri/migrations/0032_collection_states.sql")).map_err(|e|e.to_string())?;c.execute("INSERT INTO mediashelf_schema_migrations(version) VALUES(32)",[]).map_err(|e|e.to_string())?;c.execute_batch(include_str!("../../../src-tauri/migrations/0033_private_notes.sql")).map_err(|e|e.to_string())?;c.execute("INSERT INTO mediashelf_schema_migrations(version) VALUES(33)",[]).map_err(|e|e.to_string())?;}
-        if smart {c.execute_batch(include_str!("../../../src-tauri/migrations/0034_episode_watch.sql")).map_err(|e|e.to_string())?;c.execute("INSERT INTO mediashelf_schema_migrations(version) VALUES(34)",[]).map_err(|e|e.to_string())?;}
-        if smart {c.execute_batch(include_str!("../../../src-tauri/migrations/0035_library_all_resources_visibility.sql")).map_err(|e|e.to_string())?;c.execute("INSERT INTO mediashelf_schema_migrations(version) VALUES(35)",[]).map_err(|e|e.to_string())?;}
-        if smart {c.execute_batch(include_str!("../../../src-tauri/migrations/0036_tmdb_tv_series_scope.sql")).map_err(|e|e.to_string())?;c.execute("INSERT INTO mediashelf_schema_migrations(version) VALUES(36)",[]).map_err(|e|e.to_string())?;}
+        if smart {
+            c.execute_batch(include_str!(
+                "../../../src-tauri/migrations/0025_smart_mixed.sql"
+            ))
+            .map_err(|e| e.to_string())?;
+            c.execute(
+                "INSERT INTO mediashelf_schema_migrations(version) VALUES(25)",
+                [],
+            )
+            .map_err(|e| e.to_string())?;
+            c.execute_batch(include_str!(
+                "../../../src-tauri/migrations/0026_text_reader_positions.sql"
+            ))
+            .map_err(|e| e.to_string())?;
+            c.execute(
+                "INSERT INTO mediashelf_schema_migrations(version) VALUES(26)",
+                [],
+            )
+            .map_err(|e| e.to_string())?;
+            c.execute_batch(include_str!(
+                "../../../src-tauri/migrations/0027_scraper_metadata.sql"
+            ))
+            .map_err(|e| e.to_string())?;
+            c.execute(
+                "INSERT INTO mediashelf_schema_migrations(version) VALUES(27)",
+                [],
+            )
+            .map_err(|e| e.to_string())?;
+            c.execute_batch(include_str!(
+                "../../../src-tauri/migrations/0028_manual_display_name.sql"
+            ))
+            .map_err(|e| e.to_string())?;
+            c.execute(
+                "INSERT INTO mediashelf_schema_migrations(version) VALUES(28)",
+                [],
+            )
+            .map_err(|e| e.to_string())?;
+            c.execute_batch(include_str!(
+                "../../../src-tauri/migrations/0029_scan_changes.sql"
+            ))
+            .map_err(|e| e.to_string())?;
+            c.execute(
+                "INSERT INTO mediashelf_schema_migrations(version) VALUES(29)",
+                [],
+            )
+            .map_err(|e| e.to_string())?;
+            c.execute_batch(include_str!(
+                "../../../src-tauri/migrations/0030_organize_issues.sql"
+            ))
+            .map_err(|e| e.to_string())?;
+            c.execute(
+                "INSERT INTO mediashelf_schema_migrations(version) VALUES(30)",
+                [],
+            )
+            .map_err(|e| e.to_string())?;
+            c.execute_batch(include_str!(
+                "../../../src-tauri/migrations/0031_recent_activity.sql"
+            ))
+            .map_err(|e| e.to_string())?;
+            c.execute(
+                "INSERT INTO mediashelf_schema_migrations(version) VALUES(31)",
+                [],
+            )
+            .map_err(|e| e.to_string())?;
+            c.execute_batch(include_str!(
+                "../../../src-tauri/migrations/0032_collection_states.sql"
+            ))
+            .map_err(|e| e.to_string())?;
+            c.execute(
+                "INSERT INTO mediashelf_schema_migrations(version) VALUES(32)",
+                [],
+            )
+            .map_err(|e| e.to_string())?;
+            c.execute_batch(include_str!(
+                "../../../src-tauri/migrations/0033_private_notes.sql"
+            ))
+            .map_err(|e| e.to_string())?;
+            c.execute(
+                "INSERT INTO mediashelf_schema_migrations(version) VALUES(33)",
+                [],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        if smart {
+            c.execute_batch(include_str!(
+                "../../../src-tauri/migrations/0034_episode_watch.sql"
+            ))
+            .map_err(|e| e.to_string())?;
+            c.execute(
+                "INSERT INTO mediashelf_schema_migrations(version) VALUES(34)",
+                [],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        if smart {
+            c.execute_batch(include_str!(
+                "../../../src-tauri/migrations/0035_library_all_resources_visibility.sql"
+            ))
+            .map_err(|e| e.to_string())?;
+            c.execute(
+                "INSERT INTO mediashelf_schema_migrations(version) VALUES(35)",
+                [],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        if smart {
+            c.execute_batch(include_str!(
+                "../../../src-tauri/migrations/0036_tmdb_tv_series_scope.sql"
+            ))
+            .map_err(|e| e.to_string())?;
+            c.execute(
+                "INSERT INTO mediashelf_schema_migrations(version) VALUES(36)",
+                [],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        if smart {
+            c.execute_batch(include_str!(
+                "../../../src-tauri/migrations/0037_screenshot_gallery.sql"
+            ))
+            .map_err(|e| e.to_string())?;
+            c.execute(
+                "INSERT INTO mediashelf_schema_migrations(version) VALUES(37)",
+                [],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        if smart {
+            c.execute_batch(include_str!(
+                "../../../src-tauri/migrations/0038_workspace_files_and_mpv_shots.sql"
+            ))
+            .map_err(|e| e.to_string())?;
+            c.execute(
+                "INSERT INTO mediashelf_schema_migrations(version) VALUES(38)",
+                [],
+            )
+            .map_err(|e| e.to_string())?;
+        }
         let video = matches!(
             kind,
             LibraryKind::Video | LibraryKind::Animation | LibraryKind::LiveAction

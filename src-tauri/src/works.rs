@@ -4,14 +4,14 @@ use rusqlite::Connection;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     path::Path,
 };
 
 use crate::{
     db::{self, AppResult, Database},
     logical_works::LogicalWorkIndex,
-    models::{MediaNode, NestedMediaFile, NodeDetail, NodeType, WorkGroup, WorkTarget},
+    models::{MediaFile, MediaNode, NestedMediaFile, NodeDetail, NodeType, WorkGroup, WorkTarget},
     title_extractor::{extract_title_signals, is_generic_title, normalize_title_for_match},
 };
 
@@ -324,29 +324,111 @@ pub fn populate_owned_content(
     })
 }
 
+fn supplementary_descendants_for_source(index: &LogicalWorkIndex, source: &MediaNode) -> Vec<i64> {
+    if source.node_type.is_work() {
+        return index
+            .owned_nodes(source.id)
+            .into_iter()
+            .filter(|id| *id != source.id)
+            .collect();
+    }
+    if source.node_type == NodeType::Container && source.parent_node_id.is_none() {
+        return Vec::new();
+    }
+    let mut ids = Vec::new();
+    let mut visited = HashSet::from([source.id]);
+    let mut pending = Vec::new();
+    for child_id in index
+        .children
+        .get(&source.id)
+        .into_iter()
+        .flatten()
+        .copied()
+    {
+        let Some(child) = index.nodes.get(&child_id) else {
+            continue;
+        };
+        if child.node_type != NodeType::Ignored
+            && !index.independent_boundary(child_id, source.id)
+            && !index.is_source(child_id)
+            && crate::scanner::is_supplementary_directory_name(&child.folder_name)
+            && visited.insert(child_id)
+        {
+            pending.push(child_id);
+        }
+    }
+    while let Some(id) = pending.pop() {
+        ids.push(id);
+        for grandchild_id in index.children.get(&id).into_iter().flatten().copied() {
+            let Some(grandchild) = index.nodes.get(&grandchild_id) else {
+                continue;
+            };
+            if grandchild.node_type != NodeType::Ignored
+                && !index.independent_boundary(grandchild_id, source.id)
+                && !index.is_source(grandchild_id)
+                && visited.insert(grandchild_id)
+            {
+                pending.push(grandchild_id);
+            }
+        }
+    }
+    ids.sort_unstable();
+    ids
+}
+
+/// Indexed parent IDs are authoritative even after a drive-letter casing or path migration.
+fn indexed_ancestors(index: &LogicalWorkIndex, id: i64, stop: i64) -> Vec<i64> {
+    let mut result = Vec::new();
+    let mut seen = HashSet::new();
+    let mut current = Some(id);
+    while let Some(id) = current {
+        if id == stop || !seen.insert(id) {
+            break;
+        }
+        let Some(node) = index.nodes.get(&id) else {
+            break;
+        };
+        result.push(id);
+        current = node.parent_node_id;
+    }
+    result
+}
+
 /// Shared indexed-video ownership only, without children/resources/activity presentation.
 fn populate_owned_video_files(
     index: &LogicalWorkIndex,
     detail: &mut NodeDetail,
     sources: &[MediaNode],
 ) {
+    populate_owned_video_files_with(index, detail, sources, &HashMap::new());
+}
+
+fn populate_owned_video_files_with(
+    index: &LogicalWorkIndex,
+    detail: &mut NodeDetail,
+    sources: &[MediaNode],
+    extra_videos: &HashMap<i64, Vec<MediaFile>>,
+) {
     let mut seen = detail
         .media_files
         .iter()
         .map(|file| file.id)
         .collect::<HashSet<_>>();
-    for source in sources.iter().filter(|source| source.node_type.is_work()) {
-        for id in index
-            .owned_nodes(source.id)
-            .into_iter()
-            .filter(|id| *id != source.id)
-        {
+    for source in sources {
+        for id in supplementary_descendants_for_source(index, source) {
             let node = &index.nodes[&id];
-            let relative = Path::new(&node.absolute_path)
-                .strip_prefix(&source.absolute_path)
-                .map(|path| path.to_string_lossy().into_owned())
-                .unwrap_or_else(|_| node.folder_name.clone());
-            for file in index.videos.get(&id).into_iter().flatten() {
+            let relative = indexed_ancestors(index, node.id, source.id)
+                .into_iter()
+                .rev()
+                .map(|id| index.nodes[&id].folder_name.as_str())
+                .collect::<Vec<_>>()
+                .join("/");
+            let files = extra_videos
+                .get(&id)
+                .or_else(|| index.videos.get(&id))
+                .into_iter()
+                .flatten();
+            for file in files {
                 if seen.insert(file.id) {
                     detail.nested_media_files.push(NestedMediaFile {
                         file: file.clone(),
@@ -385,9 +467,38 @@ fn populate_owned_content_conn(
             detail.node.latest_file_modified_at = source.latest_file_modified_at;
         }
     }
-    populate_owned_video_files(index, detail, sources);
-    for source in sources.iter().filter(|source| source.node_type.is_work()) {
-        for owned in index.owned_nodes(source.id) {
+    let missing_video_ids = sources
+        .iter()
+        .filter(|source| !source.node_type.is_work())
+        .flat_map(|source| supplementary_descendants_for_source(index, source))
+        .filter(|id| !index.videos.contains_key(id))
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    let mut extra_videos: HashMap<i64, Vec<MediaFile>> = HashMap::new();
+    if !missing_video_ids.is_empty() {
+        for file in db::list_media_for_nodes_conn(connection, &missing_video_ids)? {
+            extra_videos.entry(file.node_id).or_default().push(file);
+        }
+        for id in missing_video_ids {
+            extra_videos.entry(id).or_default();
+        }
+    }
+    populate_owned_video_files_with(index, detail, sources, &extra_videos);
+
+    let mut cds_shell_ids = HashSet::new();
+    let mut sp_shell_ids = HashSet::new();
+    let mut seen_cds_folder_ids = HashSet::new();
+    let mut seen_sp_folder_ids = HashSet::new();
+    for source in sources {
+        let owned_descendants = supplementary_descendants_for_source(index, source)
+            .into_iter()
+            .collect::<HashSet<_>>();
+        // Independent boundaries remain destinations, including those inside a shell
+        // that is removed from Other resources. They must never be silently swallowed.
+        let mut owned_order = owned_descendants.iter().copied().collect::<Vec<_>>();
+        owned_order.sort_unstable();
+        for owned in std::iter::once(source.id).chain(owned_order) {
             for child in index
                 .children
                 .get(&owned)
@@ -396,28 +507,98 @@ fn populate_owned_content_conn(
                 .filter_map(|id| index.nodes.get(id))
             {
                 if child.node_type != NodeType::Ignored
-                    && index.owners.get(&child.id) != Some(&source.id)
-                    && !sources.iter().any(|source| source.id == child.id)
+                    && !owned_descendants.contains(&child.id)
+                    && !sources.iter().any(|s| s.id == child.id)
                     && !detail.children.iter().any(|node| node.id == child.id)
                 {
                     detail.children.push(child.clone());
                 }
             }
         }
+        let shells = owned_descendants
+            .iter()
+            .copied()
+            .filter(|id| {
+                let node = &index.nodes[id];
+                crate::scanner::is_supplementary_directory_name(&node.folder_name)
+                    && !index.independent_boundary(*id, source.id)
+                    && !index.is_source(*id)
+            })
+            .collect::<HashSet<_>>();
+        for shell_id in shells.iter().copied().filter(|id| {
+            // Unwrap only the outer shell; its direct children remain browsable and
+            // keep their own resource identities rather than recursively copying files.
+            !indexed_ancestors(index, *id, source.id)
+                .into_iter()
+                .skip(1)
+                .any(|ancestor| shells.contains(&ancestor))
+        }) {
+            let cds = crate::scanner::is_cds_directory_name(&index.nodes[&shell_id].folder_name);
+            let added = if cds {
+                cds_shell_ids.insert(shell_id)
+            } else {
+                sp_shell_ids.insert(shell_id)
+            };
+            if !added {
+                continue;
+            }
+            // Empty and non-video shells are expanded too, independently of video counts.
+            detail.expanded_folder_ids.push(shell_id);
+            for inner_id in index.children.get(&shell_id).into_iter().flatten().copied() {
+                if !owned_descendants.contains(&inner_id)
+                    || index.independent_boundary(inner_id, source.id)
+                    || index.is_source(inner_id)
+                {
+                    continue;
+                }
+                let inner = &index.nodes[&inner_id];
+                if cds && seen_cds_folder_ids.insert(inner_id) {
+                    detail.cds_folders.push(inner.clone());
+                } else if !cds && seen_sp_folder_ids.insert(inner_id) {
+                    detail.sp_folders.push(inner.clone());
+                }
+            }
+        }
+        let video_ancestors = detail
+            .nested_media_files
+            .iter()
+            .filter(|entry| entry.source_node_id == source.id)
+            .map(|entry| entry.file.node_id)
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .flat_map(|id| indexed_ancestors(index, id, source.id))
+            .collect::<HashSet<_>>();
         detail.expanded_folder_ids.extend(
             detail
                 .children
                 .iter()
                 .filter(|child| {
-                    index.owners.get(&child.id) == Some(&source.id)
-                        && detail.nested_media_files.iter().any(|entry| {
-                            entry.source_node_id == source.id
-                                && Path::new(&entry.file.absolute_path)
-                                    .starts_with(&child.absolute_path)
-                        })
+                    owned_descendants.contains(&child.id) && video_ancestors.contains(&child.id)
                 })
                 .map(|child| child.id),
         );
+    }
+    for (shell_ids, files) in [
+        (cds_shell_ids, &mut detail.cds_files),
+        (sp_shell_ids, &mut detail.sp_files),
+    ] {
+        let mut seen = files.iter().map(|file| file.id).collect::<HashSet<_>>();
+        for file in db::list_resources_for_nodes_conn(
+            connection,
+            &shell_ids.into_iter().collect::<Vec<_>>(),
+        )? {
+            if seen.insert(file.id) {
+                files.push(file);
+            }
+        }
+        files.sort_by(|a, b| {
+            crate::db::natural_cmp(&a.file_name, &b.file_name).then(a.id.cmp(&b.id))
+        });
+    }
+    for folders in [&mut detail.cds_folders, &mut detail.sp_folders] {
+        folders.sort_by(|a, b| {
+            crate::db::natural_cmp(&a.folder_name, &b.folder_name).then(a.id.cmp(&b.id))
+        });
     }
     detail.recognition_warnings = index
         .warnings
@@ -434,6 +615,8 @@ fn populate_owned_content_conn(
     // The lightweight ownership graph does not calculate recursive activity for unrelated
     // nodes. Preserve full presentation metadata on the small set returned by this detail.
     db::hydrate_file_modified_times_conn(connection, &mut detail.children[hydrated_children..])?;
+    db::hydrate_file_modified_times_conn(connection, &mut detail.cds_folders)?;
+    db::hydrate_file_modified_times_conn(connection, &mut detail.sp_folders)?;
     db::hydrate_file_modified_times_conn(connection, &mut detail.recognition_warnings)?;
 
     detail.expanded_folder_ids.sort_unstable();
@@ -450,6 +633,8 @@ pub fn work_detail(database: &Database, node_id: i64) -> AppResult<NodeDetail> {
     database.read_snapshot(|connection| {
         let mut detail = work_detail_conn(connection, node_id)?;
         crate::card_progress::hydrate_nodes_conn(connection, &mut detail.children)?;
+        crate::card_progress::hydrate_nodes_conn(connection, &mut detail.cds_folders)?;
+        crate::card_progress::hydrate_nodes_conn(connection, &mut detail.sp_folders)?;
         Ok(detail)
     })
 }
@@ -507,6 +692,10 @@ fn detail_for_group_conn(
         nested_media_files: Vec::new(),
         expanded_folder_ids: Vec::new(),
         recognition_warnings: Vec::new(),
+        cds_folders: Vec::new(),
+        cds_files: Vec::new(),
+        sp_folders: Vec::new(),
+        sp_files: Vec::new(),
     };
     for source in &group.sources {
         detail
@@ -590,6 +779,10 @@ pub(crate) fn progress_detail_for_sources_conn(
         nested_media_files: Vec::new(),
         expanded_folder_ids: Vec::new(),
         recognition_warnings: Vec::new(),
+        cds_folders: Vec::new(),
+        cds_files: Vec::new(),
+        sp_folders: Vec::new(),
+        sp_files: Vec::new(),
     };
     populate_owned_video_files(index, &mut detail, &sources);
     if aggregate || sources.len() > 1 {
@@ -679,6 +872,8 @@ pub fn node_detail(database: &Database, node_id: i64) -> AppResult<NodeDetail> {
     database.read_snapshot(|connection| {
         let mut detail = node_detail_conn(connection, node_id, true)?;
         crate::card_progress::hydrate_nodes_conn(connection, &mut detail.children)?;
+        crate::card_progress::hydrate_nodes_conn(connection, &mut detail.cds_folders)?;
+        crate::card_progress::hydrate_nodes_conn(connection, &mut detail.sp_folders)?;
         Ok(detail)
     })
 }
@@ -722,6 +917,10 @@ fn node_detail_index_conn(
         nested_media_files: Vec::new(),
         expanded_folder_ids: Vec::new(),
         recognition_warnings: Vec::new(),
+        cds_folders: Vec::new(),
+        cds_files: Vec::new(),
+        sp_folders: Vec::new(),
+        sp_files: Vec::new(),
     };
     if detail.node.media_kind.is_book() {
         crate::comics::populate_detail(connection, &mut detail)?;
@@ -768,6 +967,8 @@ pub fn presentation_detail(
         };
         let mut progress = crate::card_progress::Hydrator::new(c, graph);
         progress.nodes(&mut detail.children, false)?;
+        progress.nodes(&mut detail.cds_folders, false)?;
+        progress.nodes(&mut detail.sp_folders, false)?;
         let episode_watch = if detail.node.media_kind.is_book() {
             None
         } else {
@@ -790,6 +991,8 @@ pub(crate) fn reference_detail(
         if !aggregate {
             let mut detail = node_detail_conn(connection, node_id, false)?;
             crate::card_progress::hydrate_nodes_conn(connection, &mut detail.children)?;
+            crate::card_progress::hydrate_nodes_conn(connection, &mut detail.cds_folders)?;
+            crate::card_progress::hydrate_nodes_conn(connection, &mut detail.sp_folders)?;
             return Ok(detail);
         }
         let index = LogicalWorkIndex::load(connection)?;
@@ -799,6 +1002,8 @@ pub(crate) fn reference_detail(
             .ok_or_else(|| "NODE_NOT_VISIBLE".to_string())?;
         let mut detail = detail_for_group_conn(connection, &index, group)?;
         crate::card_progress::hydrate_nodes_conn(connection, &mut detail.children)?;
+        crate::card_progress::hydrate_nodes_conn(connection, &mut detail.cds_folders)?;
+        crate::card_progress::hydrate_nodes_conn(connection, &mut detail.sp_folders)?;
         Ok(detail)
     })
 }
@@ -883,6 +1088,10 @@ mod tests {
                         nested_media_files: Vec::new(),
                         expanded_folder_ids: Vec::new(),
                         recognition_warnings: Vec::new(),
+                        cds_folders: Vec::new(),
+                        cds_files: Vec::new(),
+                        sp_folders: Vec::new(),
+                        sp_files: Vec::new(),
                     };
                     phase!(
                         "owned_content",

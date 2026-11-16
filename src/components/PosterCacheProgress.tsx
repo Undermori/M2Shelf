@@ -8,7 +8,7 @@ const phaseKeys = {IDLE:"poster.idle",QUEUED:"poster.queued",RUNNING:"poster.run
 const reasonKeys = {SOURCE_READ:"poster.sourceRead",SOURCE_CHANGED:"poster.sourceChanged",PROCESSING:"poster.processing"} as const;
 
 // Poll only this small panel. Settings fields and the rest of the page do not rerender per tick.
-export function PosterCacheProgress({cacheDirectory, onCompleted}: {cacheDirectory?:string;onCompleted:()=>void}) {
+export function PosterCacheProgress({cacheDirectory, onCompleted,active:visible=true}: {cacheDirectory?:string;onCompleted:()=>void;active?:boolean}) {
   const {t} = useI18n();
   const [status,setStatus] = useState<PosterCacheStatus|null>(null);
   const [unavailable,setUnavailable] = useState(false);
@@ -21,26 +21,32 @@ export function PosterCacheProgress({cacheDirectory, onCompleted}: {cacheDirecto
   completed.current = onCompleted;
   const generation = useRef(0);
   const diagnostics = useRef(0);
+  const schedulePoll = useRef<(() => void) | null>(null);
+  // A sidebar switch suspends polling, but the current diagnostics may finish
+  // into this retained panel. Only a new cache scope or unmount invalidates them.
+  useEffect(()=>{generation.current++;diagnostics.current++;setExpanded(false);setFailures([]);setDetailsLoading(false);setActionError("");setRetrying(false);},[cacheDirectory]);
+  useEffect(()=>()=>{generation.current++;diagnostics.current++;},[]);
   useEffect(()=>{
-    if (!desktopAvailable) return;
-    const request=++generation.current;
+    if (!desktopAvailable||!visible) return;
     let active=true;
     let timer:number|undefined;
     let previous:PosterCacheStatus["phase"]|undefined;
-    setExpanded(false);setFailures([]);setActionError("");setRetrying(false);
     const poll=async()=>{
+      let keepPolling=false;
       try {
         const next=await api.posterCacheStatus();
         if (!active) return;
         setStatus(next);setUnavailable(false);
         if (previous && previous!==next.phase && next.phase==="COMPLETED") completed.current();
         previous=next.phase;
+        keepPolling=next.phase==="QUEUED" || next.phase==="RUNNING";
       } catch {if (active) setUnavailable(true);}
-      finally {if (active) timer=window.setTimeout(()=>void poll(),1000);}
+      finally {if (active && keepPolling) {window.clearTimeout(timer);timer=window.setTimeout(()=>void poll(),1000);}}
     };
+    schedulePoll.current=()=>{if(active){window.clearTimeout(timer);timer=window.setTimeout(()=>void poll(),1000);}};
     void poll();
-    return ()=>{active=false;window.clearTimeout(timer);if(generation.current===request) generation.current++;diagnostics.current++;};
-  },[cacheDirectory]);
+    return ()=>{active=false;schedulePoll.current=null;window.clearTimeout(timer);};
+  },[cacheDirectory,visible]);
 
   const showReasons=async()=>{
     if(expanded){setExpanded(false);diagnostics.current++;return;}
@@ -54,7 +60,7 @@ export function PosterCacheProgress({cacheDirectory, onCompleted}: {cacheDirecto
   const retry=async()=>{
     const current=generation.current;
     setRetrying(true);setActionError("");setExpanded(false);diagnostics.current++;
-    try {await api.retryPosterCache();if(current===generation.current) {const next=await api.posterCacheStatus();if(current===generation.current) setStatus(next);}}
+    try {await api.retryPosterCache();if(current===generation.current) {const next=await api.posterCacheStatus();if(current===generation.current) {setStatus(next);if(next.phase==="QUEUED"||next.phase==="RUNNING")schedulePoll.current?.();}}}
     catch(error){if(current===generation.current) setActionError(errorMessage(error));}
     finally{if(current===generation.current) setRetrying(false);}
   };

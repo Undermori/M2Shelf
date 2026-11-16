@@ -3,9 +3,8 @@ import {afterEach,beforeEach,expect,it,vi} from 'vitest';
 import {act,cleanup,fireEvent,render,screen,waitFor} from '@testing-library/react';
 import {I18nProvider} from '../lib/i18n';
 import {SearchPage} from './SearchPage';
-import {OrganizePage} from './OrganizePage';
 import {ScanChanges} from '../components/ScanChanges';
-import type {SearchFilters,TidyIssue} from '../types/incremental';
+import type {SearchFilters} from '../types/incremental';
 import type {MediaNode} from '../types/media';
 const calls=vi.hoisted(()=>({search:vi.fn(),extensions:vi.fn(),issues:vi.fn(),remind:vi.fn(),poster:vi.fn()}));
 vi.mock('../lib/api',()=>({desktopAvailable:true,api:{search:calls.search,searchExtensions:calls.extensions,organizeIssues:calls.issues,setIssueReminder:calls.remind,posterCacheStatus:calls.poster}}));
@@ -68,18 +67,4 @@ it('rejects older asynchronous search completions and supports the scan-added vi
 it('shows node units and unconfirmed removal on an incomplete scan',()=>{
  const added=vi.fn();render(<I18nProvider><ScanChanges changes={{scanId:'test',scope:[],added:3,updated:1,unchanged:4,removed:null,errors:1,complete:false,addedNodeIds:[1,2,3]}} onAdded={added}/></I18nProvider>);
  expect(screen.getByText('变化单位：节点 · 扫描未完整完成')).toBeTruthy();expect(screen.getByText('未确认')).toBeTruthy();fireEvent.click(screen.getByRole('button',{name:'查看新增'}));expect(added).toHaveBeenCalledOnce();
-});
-it('persists only the selected issue reminder and refreshes resolved rows',async()=>{
- const issue:TidyIssue={node,kind:'match',reason:'multiple-candidates',ignored:false};calls.issues.mockResolvedValueOnce([issue]).mockResolvedValue([]);
- render(<I18nProvider><OrganizePage roots={[]} revision={0} busy={false} onOpen={vi.fn()} onMatch={vi.fn()} onRetryMatch={vi.fn()} onRetryCover={vi.fn()} onReveal={vi.fn()} onMenu={vi.fn()} onError={vi.fn()}/></I18nProvider>);
- await waitFor(()=>expect(screen.getByRole('button',{name:'忽略提醒'})).toBeTruthy());fireEvent.click(screen.getByRole('button',{name:'忽略提醒'}));
- await waitFor(()=>expect(calls.remind).toHaveBeenCalledWith(1,'match',true));await waitFor(()=>expect(screen.getByText('没有待处理的问题')).toBeTruthy());expect(calls.issues).toHaveBeenCalledTimes(2);
-});
-
-it('refreshes after the existing background cover retry finishes',async()=>{
- const cachedNode:MediaNode={...node,coverSource:'MANUAL',coverCachePath:'X:/SyntheticCache/retained.png'};const issue:TidyIssue={node:cachedNode,kind:'cover',reason:'cover',ignored:false};calls.issues.mockResolvedValueOnce([issue]).mockResolvedValueOnce([issue]).mockResolvedValue([]);
- const retry=vi.fn().mockResolvedValue(undefined);
- render(<I18nProvider><OrganizePage roots={[]} revision={0} busy={false} onOpen={vi.fn()} onMatch={vi.fn()} onRetryMatch={vi.fn()} onRetryCover={retry} onReveal={vi.fn()} onMenu={vi.fn()} onError={vi.fn()}/></I18nProvider>);
- await waitFor(()=>expect(screen.getByRole('button',{name:'重试封面'})).toBeTruthy());fireEvent.click(screen.getByRole('button',{name:'重试封面'}));
- await waitFor(()=>expect(retry).toHaveBeenCalledWith(cachedNode));await waitFor(()=>expect(calls.poster).toHaveBeenCalled());await waitFor(()=>expect(screen.getByText('没有待处理的问题')).toBeTruthy());
 });

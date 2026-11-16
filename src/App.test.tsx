@@ -9,12 +9,15 @@ const mocks = vi.hoisted(() => ({
   chooseCoverCacheDirectory: vi.fn(),
   api: {
     bootstrap: vi.fn(), getSettings: vi.fn(), listRoots: vi.fn(),
-    getCollectionSortPreferences: vi.fn(), updateCollectionSortPreference: vi.fn(), scanStatus: vi.fn(), allResources: vi.fn(),
+    getCollectionSortPreferences: vi.fn(), updateCollectionSortPreference: vi.fn(),
+    getWorkbenchSortPreferences: vi.fn(), updateWorkbenchSortPreference: vi.fn(),
+    scanStatus: vi.fn(), allResources: vi.fn(),
     listRecentlyWatched: vi.fn(), listFavoriteFolders: vi.fn(), showMainWindow: vi.fn(),onMpvPlayback:vi.fn(),
     testMpv: vi.fn(), tmdbCredentialStatus: vi.fn(), addRoot: vi.fn(), startScan: vi.fn(), nodeDetail: vi.fn(), cacheStats: vi.fn(), posterCacheStatus: vi.fn(), clearCoverCache: vi.fn(), updateSettings: vi.fn(),
     bindWorkBangumi: vi.fn(), bindBangumi: vi.fn(), clearWorkBangumi: vi.fn(), retryWorkBangumiCover: vi.fn(), bangumiPrefill: vi.fn(), searchBangumi: vi.fn(), renameNode: vi.fn(), playMedia: vi.fn(), openMediaInExplorer: vi.fn(),
     listHiddenNodes: vi.fn(), resetNodeType: vi.fn(), search: vi.fn(), browse: vi.fn(), syncPendingBangumiAliases: vi.fn(), openBangumiSubject: vi.fn(), openExternalUrl: vi.fn(),
     getBookCatalogue:vi.fn(),revealComicBook:vi.fn(),collectionRestoreNotice:vi.fn(),
+    listWorkNotes: vi.fn(), screenshotFolders: vi.fn(), screenshots: vi.fn(), workspaceFolders: vi.fn(), workspaceEntries: vi.fn(),
   },
   progress: new Set<(value: ScanProgress) => void>(),
   finished: new Set<(value: ScanProgress) => void>(),
@@ -99,6 +102,19 @@ beforeEach(() => {
   mocks.api.browse.mockResolvedValue({ root, currentNode: null, nodes: sources, breadcrumbs: [], mediaFiles: [], resourceFiles: [] });
   mocks.api.getCollectionSortPreferences.mockResolvedValue({ all: "title-asc", browse: "title-asc", favorites: "title-asc" });
   mocks.api.updateCollectionSortPreference.mockImplementation(async (_scope, sort) => sort);
+  mocks.api.listWorkNotes.mockResolvedValue({ items: [], total: 0 });
+  mocks.api.screenshotFolders.mockResolvedValue([]);
+  mocks.api.screenshots.mockResolvedValue({ items: [], total: 0 });
+  mocks.api.workspaceFolders.mockResolvedValue([]);
+  mocks.api.workspaceEntries.mockResolvedValue({ folderId: 1, relativeDir: "", entries: [], breadcrumbs: [], total: 0, truncated: false });
+  mocks.api.getWorkbenchSortPreferences.mockResolvedValue({ filesSort: "NAME", filesDescending: false, gallerySort: "MODIFIED", galleryDescending: true, notesSort: "recent" });
+  mocks.api.updateWorkbenchSortPreference.mockImplementation(async (update) => ({
+    filesSort: update.scope === "files" ? update.sort : "NAME",
+    filesDescending: update.scope === "files" ? update.descending : false,
+    gallerySort: update.scope === "gallery" ? update.sort : "MODIFIED",
+    galleryDescending: update.scope === "gallery" ? update.descending : true,
+    notesSort: update.scope === "notes" ? update.sort : "recent",
+  }));
   mocks.api.scanStatus.mockResolvedValue(null);
   mocks.api.onMpvPlayback.mockResolvedValue(()=>{});
   mocks.api.allResources.mockResolvedValue(catalogue);
@@ -600,7 +616,7 @@ describe("startup refresh and work browsing", () => {
     await waitFor(() => expect(mocks.api.allResources).toHaveBeenCalledTimes(2));
     expect(document.querySelector(".toast")).toBeNull();
   });
-  it("searches every library from the sidebar and exposes scope changes without retaining stale results", async () => {
+  it("starts search across all libraries and preserves the explicit scope on sidebar return", async () => {
     settings.autoScanOnStartup = false;
     const watching = { ...root, id: 2, displayName: "Watching" };
     const flip = { ...node(45, "轻拍翻转小魔女 / Flip Flappers"), libraryRootId: 2 };
@@ -623,6 +639,8 @@ describe("startup refresh and work browsing", () => {
     await waitFor(() => expect(mocks.api.search).toHaveBeenLastCalledWith("轻拍", 1));
     await waitFor(() => expect(screen.queryByText(flip.displayName)).toBeNull());
     fireEvent.click(within(document.querySelector(".sidebar")!).getByRole("button", { name: "搜索" }));
+    expect(screen.queryByText(flip.displayName)).toBeNull();
+    chooseOption(screen.getByRole("combobox", { name: "搜索范围" }), "all");
     await screen.findByText(flip.displayName);
     fireEvent.change(query, { target: { value: "flip" } });
     await waitFor(() => expect(mocks.api.search).toHaveBeenLastCalledWith("flip", undefined));
@@ -630,8 +648,9 @@ describe("startup refresh and work browsing", () => {
     await waitFor(() => expect(screen.queryByText(flip.displayName)).toBeNull());
     fireEvent.click(screen.getByRole("button", { name: "设置" }));
     fireEvent.click(within(document.querySelector(".sidebar")!).getByRole("button", { name: "搜索" }));
-    await screen.findByText(flip.displayName);
-    expect(mocks.api.search).toHaveBeenLastCalledWith("flip", undefined);
+    await waitFor(()=>expect(screen.getByRole('combobox',{name:'搜索范围'}).textContent).toContain('Test Library'));
+    expect(screen.queryByText(flip.displayName)).toBeNull();
+    expect(mocks.api.search).toHaveBeenLastCalledWith("flip", 1);
   });
 
   it("sorts by source-file update time, shows dates only for that sort, and remembers the choice", async () => {
@@ -694,7 +713,7 @@ describe("startup refresh and work browsing", () => {
     expect(dialog.queryByText("Another Show")).toBeNull();
     mocks.api.listRecentlyWatched.mockClear();
     fireEvent.click(dialog.getByRole("button", { name: "恢复 Hidden Show" }));
-    await dialog.findByText("已恢复「Hidden Show」。");
+    await within(screen.getByRole('region', {name: '通知'})).findByText("已恢复「Hidden Show」。");
     expect(mocks.api.resetNodeType).toHaveBeenCalledWith(8);
     await waitFor(() => expect(dialog.queryByRole("button", { name: "恢复 Hidden Show" })).toBeNull());
     fireEvent.change(dialog.getByRole("textbox"), { target: { value: "" } });
@@ -745,7 +764,7 @@ describe("startup refresh and work browsing", () => {
     fireEvent.click(dialog.getByRole("button", { name: "刷新列表" }));
     mocks.api.listHiddenNodes.mockResolvedValue([]);
     fireEvent.click(dialog.getByRole("button", { name: "恢复 Hidden Show" }));
-    await dialog.findByText("已恢复「Hidden Show」。");
+    await within(screen.getByRole('region', {name: '通知'})).findByText("已恢复「Hidden Show」。");
     await act(async () => finishOldRequest([hidden]));
     expect(dialog.queryByRole("button", { name: "恢复 Hidden Show" })).toBeNull();
     await dialog.findByText("没有已隐藏的条目。");
@@ -1114,4 +1133,142 @@ it("does not let a late bootstrap index overwrite preferences edited while it wa
   await act(async()=>finish(catalogue));
   fireEvent.click(screen.getByRole('button',{name:'全部资源'}));
   await screen.findByText('Archive');expect(screen.queryByText('Example Work')).toBeNull();
+});
+
+it("preserves the selected CDs tab and prior detail state when returning from a child folder", async () => {
+  settings.autoScanOnStartup=false;
+  const childAlbum={...node(92,"OST Album"),parentNodeId:90,nodeType:"CONTAINER" as const,absolutePath:"X:/Fixtures/Work/CDs/OST Album",folderName:"OST Album"};
+  const mainVideo={id:40,nodeId:1,fileName:"01.mkv",absolutePath:"X:/Fixtures/Work/01.mkv",extension:".mkv",fileSize:10,modifiedAt:"2026-01-01",lastSeenAt:"2026-01-01",durationMs:null,width:null,height:null,codec:null};
+  const track={id:31,nodeId:90,fileName:"01 Track.flac",absolutePath:"X:/Fixtures/Work/CDs/01 Track.flac",extension:".flac",resourceType:"AUDIO" as const,fileSize:10,modifiedAt:"2026-01-01",lastSeenAt:"2026-01-01"};
+  const parentDetail={node:{...work,workView:true,workTarget},workTarget,binding:null,children:[],cdsFolders:[childAlbum],cdsFiles:[track],resourceFiles:[],breadcrumbs:[{id:1,title:"Example Work"}],workSources:sources,mediaFiles:[mainVideo],nestedMediaFiles:[],videoSections:[{fileId:40,section:"MAIN" as const}]};
+  const albumDetail={node:childAlbum,binding:null,children:[],cdsFolders:[],cdsFiles:[],resourceFiles:[track],breadcrumbs:[{id:1,title:"Example Work"},{id:92,title:"OST Album"}],mediaFiles:[],nestedMediaFiles:[],videoSections:[]};
+  mocks.api.nodeDetail.mockImplementation(async (id:number)=>id===childAlbum.id?albumDetail:parentDetail);
+  mount();
+  await screen.findByText("Example Work");
+  fireEvent.click(document.querySelector(".media-card-open")!);
+  await screen.findByRole("tab",{name:"CDs 2"});
+  fireEvent.click(screen.getByRole("tab",{name:"CDs 2"}));
+  await screen.findByText("OST Album");
+  expect(mocks.api.nodeDetail).toHaveBeenCalledTimes(1);
+  fireEvent.click(screen.getByText("OST Album",{selector:"strong"}).closest("button")!);
+  await screen.findByRole("heading",{name:"OST Album"});
+  expect(mocks.api.nodeDetail).toHaveBeenCalledTimes(2);
+  fireEvent.click(screen.getByRole("button",{name:/^返回$/}));
+  await waitFor(()=>expect(screen.getByRole("tab",{name:"CDs 2"}).getAttribute("aria-selected")).toBe("true"));
+  expect(screen.getByText("OST Album")).toBeTruthy();
+  expect(mocks.api.nodeDetail).toHaveBeenCalledTimes(2);
+});
+
+it("preserves the selected SPs tab and navigation direction and prior detail state when returning from a child folder", async () => {
+  settings.autoScanOnStartup=false;
+  const childAlbum={...node(92,"Menu scans"),parentNodeId:90,nodeType:"CONTAINER" as const,absolutePath:"X:/Fixtures/Work/SPs/Menu scans",folderName:"Menu scans"};
+  const mainVideo={id:40,nodeId:1,fileName:"01.mkv",absolutePath:"X:/Fixtures/Work/01.mkv",extension:".mkv",fileSize:10,modifiedAt:"2026-01-01",lastSeenAt:"2026-01-01",durationMs:null,width:null,height:null,codec:null};
+  const track={id:31,nodeId:90,fileName:"Commentary.mka",absolutePath:"X:/Fixtures/Work/SPs/Commentary.mka",extension:".mka",resourceType:"AUDIO" as const,fileSize:10,modifiedAt:"2026-01-01",lastSeenAt:"2026-01-01"};
+  const parentDetail={node:{...work,workView:true,workTarget},workTarget,binding:null,children:[],spFolders:[childAlbum],spFiles:[track],resourceFiles:[],breadcrumbs:[{id:1,title:"Example Work"}],workSources:sources,mediaFiles:[mainVideo],nestedMediaFiles:[],videoSections:[{fileId:40,section:"MAIN" as const}]};
+  const albumDetail={node:childAlbum,binding:null,children:[],spFolders:[],spFiles:[],resourceFiles:[track],breadcrumbs:[{id:1,title:"Example Work"},{id:92,title:"Menu scans"}],mediaFiles:[],nestedMediaFiles:[],videoSections:[]};
+  mocks.api.nodeDetail.mockImplementation(async (id:number)=>id===childAlbum.id?albumDetail:parentDetail);
+  mount();
+  await screen.findByText("Example Work");
+  fireEvent.click(document.querySelector(".media-card-open")!);
+  await screen.findByRole("tab",{name:"SPs 2"});
+  expect(document.querySelector(".nav-stage-surface")?.getAttribute("data-nav-direction")).toBe("forward");
+  const beforeTabCycle=document.querySelector(".nav-stage-surface")?.getAttribute("data-nav-cycle");
+  fireEvent.click(screen.getByRole("tab",{name:"SPs 2"}));
+  await screen.findByText("Menu scans");
+  expect(document.querySelector(".nav-stage-surface")?.getAttribute("data-nav-cycle")).toBe(beforeTabCycle);
+  expect(mocks.api.nodeDetail).toHaveBeenCalledTimes(1);
+  fireEvent.click(screen.getByText("Menu scans",{selector:"strong"}).closest("button")!);
+  await screen.findByRole("heading",{name:"Menu scans"});
+  expect(mocks.api.nodeDetail).toHaveBeenCalledTimes(2);
+  fireEvent.click(screen.getByRole("button",{name:/^返回$/}));
+  await waitFor(()=>expect(screen.getByRole("tab",{name:"SPs 2"}).getAttribute("aria-selected")).toBe("true"));
+  expect(screen.getByText("Menu scans")).toBeTruthy();
+  expect(document.querySelector(".nav-stage-surface")?.getAttribute("data-nav-direction")).toBe("backward");
+  expect(mocks.api.nodeDetail).toHaveBeenCalledTimes(2);
+});
+
+it.each(['portal', 'native'] as const)("keeps %s modal drafts and exact nested history on a system back traversal", async kind => {
+  settings.autoScanOnStartup = false;
+  mount(); await screen.findByText('Example Work');
+  fireEvent.click(screen.getByRole('button', { name: '设置' }));
+  await screen.findByRole('checkbox', { name: '全部资源穿透显示' });
+  const state = window.history.state;
+  // SmartMixed owns extra browser entries without advancing App's sequence.
+  for (const depth of [1, 2]) window.history.pushState({ ...state, smartMixed: { root: 1, depth, destination: { category: `nested-${depth}`, group: null }, scrollTop: depth * 200 } }, '');
+  const original = window.history.state;
+  const portal = document.createElement('section'); portal.setAttribute('aria-modal', 'true');
+  const draft = document.createElement('textarea'); draft.value = 'Unsaved screenshot draft'; portal.append(draft);
+  const native = document.querySelector<HTMLDialogElement>('.shortcut-help')!;
+  await act(async () => { if (kind === 'portal') document.body.append(portal); else native.setAttribute('open', ''); });
+  const downstream = vi.fn(); window.addEventListener('popstate', downstream);
+  const go = vi.spyOn(window.history, 'go');
+  try {
+    act(() => window.history.go(-3));
+    await waitFor(() => expect(go).toHaveBeenCalledTimes(4));
+    await waitFor(() => expect(window.history.state).toEqual(original));
+    expect(document.querySelector('.settings-page')).not.toBeNull();
+    expect(draft.value).toBe('Unsaved screenshot draft');
+    expect(downstream).not.toHaveBeenCalled();
+    await act(async () => { portal.remove(); native.removeAttribute('open'); });
+    act(() => window.history.go(-3));
+    await waitFor(() => expect(document.querySelector('.all-resources-page')).not.toBeNull());
+    // Rejecting the traversal did not push/replace entries or discard the forward stack.
+    act(() => window.history.go(3));
+    await waitFor(() => expect(document.querySelector('.settings-page')?.closest('[hidden]')).toBeNull());
+    expect(window.history.state).toEqual(original);
+    expect(downstream).toHaveBeenCalledTimes(2);
+  } finally { portal.remove(); native.removeAttribute('open'); window.removeEventListener('popstate', downstream); go.mockRestore(); }
+});
+
+it("restores system forward navigation while a modal is open without recursive popstate", async () => {
+  settings.autoScanOnStartup = false;
+  mount(); await screen.findByText('Example Work');
+  fireEvent.click(screen.getByRole('button', { name: '设置' }));
+  await screen.findByRole('checkbox', { name: '全部资源穿透显示' });
+  act(() => window.history.back());
+  await waitFor(() => expect(document.querySelector('.all-resources-page')).not.toBeNull());
+  const original = window.history.state;
+  const modal = document.createElement('section'); modal.setAttribute('aria-modal', 'true');
+  await act(async () => { document.body.append(modal); });
+  const go = vi.spyOn(window.history, 'go');
+  try {
+    act(() => window.history.forward());
+    await waitFor(() => expect(go).toHaveBeenCalledExactlyOnceWith(-1));
+    await waitFor(() => expect(window.history.state).toEqual(original));
+    expect(document.querySelector('.all-resources-page')).not.toBeNull();
+    await act(async () => { modal.remove(); });
+    act(() => window.history.forward());
+    await waitFor(() => expect(document.querySelector('.settings-page')?.closest('[hidden]')).toBeNull());
+    expect(go).toHaveBeenCalledTimes(1);
+  } finally { modal.remove(); go.mockRestore(); }
+});
+
+it("persists workbench and collection sort preferences and retains latest sorts across back navigation", async () => {
+  settings.autoScanOnStartup = false;
+  mocks.api.getCollectionSortPreferences.mockResolvedValue({ all: "modified-desc", browse: "title-asc", favorites: "title-asc" });
+  mocks.api.getWorkbenchSortPreferences.mockResolvedValue({ filesSort: "MODIFIED", filesDescending: true, gallerySort: "NAME", galleryDescending: false, notesSort: "title" });
+  mocks.api.listWorkNotes.mockResolvedValue({ items: [], total: 0 });
+  mocks.api.screenshotFolders.mockResolvedValue([]);
+  mocks.api.screenshots.mockResolvedValue({ items: [], total: 0 });
+  mocks.api.workspaceFolders.mockResolvedValue([]);
+  mocks.api.workspaceEntries.mockResolvedValue({ folderId: 1, relativeDir: "", entries: [], breadcrumbs: [], total: 0, truncated: false });
+  mount();
+  await screen.findByText("Example Work");
+  await waitFor(() => expect((screen.getByRole("combobox", { name: "排序方式" }) as HTMLButtonElement).textContent).toContain("更新时间"));
+  fireEvent.click(screen.getByRole("button", { name: "工作台" }));
+  await waitFor(() => expect(mocks.api.listWorkNotes).toHaveBeenLastCalledWith(expect.objectContaining({ sort: "title" })));
+  fireEvent.click(screen.getByRole("combobox", { name: "笔记排序" }));
+  fireEvent.click(screen.getByRole("option", { name: "最近编辑优先" }));
+  await waitFor(() => expect(mocks.api.updateWorkbenchSortPreference).toHaveBeenCalledWith({ scope: "notes", sort: "recent" }));
+  fireEvent.click(screen.getByRole("button", { name: "全部资源" }));
+  await screen.findByText("Example Work");
+  fireEvent.click(screen.getByRole("combobox", { name: "排序方式" }));
+  fireEvent.click(screen.getByRole("option", { name: "标题" }));
+  await waitFor(() => expect(mocks.api.updateCollectionSortPreference).toHaveBeenCalledWith("all", "title-desc"));
+  act(() => window.history.back());
+  await waitFor(() => expect(document.querySelector(".studio-page")?.closest("[hidden]")).toBeNull());
+  expect((screen.getByRole("combobox", { name: "笔记排序" }) as HTMLButtonElement).textContent).toContain("最近编辑优先");
+  act(() => window.history.forward());
+  await screen.findByText("Example Work");
+  expect((screen.getByRole("combobox", { name: "排序方式" }) as HTMLButtonElement).textContent).toContain("标题");
 });

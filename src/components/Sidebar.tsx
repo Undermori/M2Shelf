@@ -40,7 +40,7 @@ export function Sidebar({ page, roots, selectedRootId, loading, onNavigate, onSe
           <Icon name="bookmark" /><span>{t("sidebar.favorites")}</span>
         </button>
 
-        <button className={`nav-item ${page === "organize" ? "is-active" : ""}`} onClick={() => onNavigate("organize")} type="button"><Icon name="shelf"/><span>{t('tidy.title')}</span></button>
+        <button className={`nav-item ${page === "organize" ? "is-active" : ""}`} onClick={() => onNavigate("organize")} type="button"><Icon name="edit"/><span>{t('studio.title')}</span></button>
 
         <div className="nav-library-heading">
           <p className="nav-section-label">{t("sidebar.library")}</p>

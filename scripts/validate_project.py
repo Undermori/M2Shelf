@@ -133,6 +133,8 @@ def check_migrations() -> None:
         "0034_episode_watch.sql",
         "0035_library_all_resources_visibility.sql",
         "0036_tmdb_tv_series_scope.sql",
+        "0037_screenshot_gallery.sql",
+        "0038_workspace_files_and_mpv_shots.sql",
     ]
     if [path.name for path in migration_paths] != expected:
         fail(f"expected exactly migrations {expected}, got {[p.name for p in migration_paths]}")
@@ -163,12 +165,16 @@ def check_migrations() -> None:
                 "library_scan_snapshots",
                 "library_scan_health",
                 "comic_books", "comic_pages", "comic_reading_progress", "comic_bookmarks",
+                "screenshot_folders", "screenshot_images", "private_note_updates",
+                "workspace_folders", "mpv_playback_sessions",
             }
             missing = required_tables - table_names(connection)
             if missing:
                 fail(f"migration schema missing tables: {sorted(missing)}")
 
             required_columns = {
+                "workspace_folders": {"path", "alias", "note", "node_id", "book_id", "created_at"},
+                "mpv_playback_sessions": {"session_token", "node_id", "media_file_id", "started_at", "ended_at", "heartbeat_at", "screenshot_directory", "video_title"},
                 "library_roots": {"recognition_mode", "media_kind"},
                 "comic_books": {"node_id", "source_path", "source_kind", "page_count", "index_error", "revision"},
                 "comic_pages": {"comic_book_id", "page_index", "source_locator", "crc32"},
@@ -688,6 +694,12 @@ def check_source_safety() -> None:
         # User-requested collection export and restart restore. Plain application-owned
         # staging paths, library exclusion and transactional rollback are checked below.
         "collection_backup.rs",
+        # User-selected bounded Markdown only; exact source exclusions, staging and
+        # cleanup target are enforced below. This is not a general filesystem grant.
+        "notes_export.rs",
+        # On-demand derivatives only. Dedicated root/ownership/budget guards below
+        # constrain this exception; workbench source modules remain read-only.
+        "workbench_cache.rs",
     }
     for name, source in production.items():
         hits = destructive.findall(source)
@@ -696,14 +708,74 @@ def check_source_safety() -> None:
         if name not in filesystem_mutation_modules:
             fail(f"filesystem mutation outside app cache/bootstrap modules: {name}: {hits}")
 
+    workbench_cache = production.get("workbench_cache.rs", "")
+    workbench_cache_guards = (
+        'app.join("cache").join("workbench")', "fn validate_scope(",
+        "SELECT path FROM library_roots UNION ALL SELECT path FROM screenshot_folders UNION ALL SELECT path FROM workspace_folders",
+        "paths_overlap_checked(root, Path::new(&path))?", "pin_directory(path)?",
+        "FILE_FLAG_OPEN_REPARSE_POINT", "FILE_SHARE_READ | FILE_SHARE_WRITE",
+        "m.file_attributes() & 0x400", "metadata.file_attributes() & 0x400",
+        "TransactionBehavior::Immediate", "validate_scope(&tx, &self.root)?",
+        'const MAX_FILES: usize = 4000', 'const MAX_BYTES: u64 = 256 * 1024 * 1024',
+        'const MAX_ITEM: u64 = 4 * 1024 * 1024', "fn recognized(",
+        "self.checked_bytes(&name, false)?", "self.checked_bytes(name, false)?",
+        "Sha256::digest(name.as_bytes())", "Sha256::digest(&bytes[HEADER..])",
+        "validate_file_handle", "create_pending_cache_file(&destination, true)",
+        "file.sync_all()", "commit_to(&destination)", "FilterType::Triangle",
+        "CompressionType::Fast", "JpegEncoder::new_with_quality(&mut bytes, 90)",
+    )
+    if (not all(token in workbench_cache for token in workbench_cache_guards)
+            or destructive.findall(workbench_cache) != ["fs::remove_file", "fs::remove_file"]
+            or "workbench_cache::Cache::open" in production.get("lib.rs", "")):
+        fail("workbench thumbnail writes lack app-only source-excluding, no-reparse, owned-file, bounded or on-demand guards")
+    else:
+        passed("workbench thumbnails have bounded on-demand app-only cache writes and owned-file cleanup")
+
+    note_export = production.get("notes_export.rs", "")
+    # commands.rs has historical test modules before later command declarations;
+    # select this exact native command from the full source, not the test-tail slice.
+    note_export_command = sources.get("commands.rs", "").split("pub async fn save_note_markdown(", 1)[-1].split("#[tauri::command]", 1)[0]
+    note_export_guards = (
+        "markdown.len() > 16 * 1024 * 1024", "markdown.contains('\\0')",
+        'eq_ignore_ascii_case("md")', "plain(parent, true)?", "plain(destination, false)?",
+        "db.library_paths()?", "protected.push(app.to_path_buf())",
+        'SELECT path FROM screenshot_folders', "protected.extend(folders.into_iter().map(PathBuf::from))",
+        'SELECT path FROM workspace_folders',
+        "cache::paths_overlap_checked(destination, root)?", '".m2shelf-note-{}.tmp"',
+        "uuid::Uuid::new_v4()", ".create_new(true)", ".open(&temporary)",
+        "file.write_all(markdown.as_bytes())", "file.sync_all()", "drop(file)",
+        "replace(&temporary, destination)", "temporary.exists() && plain(&temporary, false).is_ok()",
+        "fs::remove_file(&temporary)",
+    )
+    if (not all(token in note_export for token in note_export_guards)
+            or destructive.findall(note_export) != ["fs::remove_file"]
+            or not all(token in note_export_command for token in (
+                "tauri::async_runtime::spawn_blocking", "lock_scan_lifecycle(&state)",
+                "update_exit_in_progress", "app_data_dir()", "crate::notes_export::save(",
+            ))):
+        fail("Markdown export lacks bounded .md-only, protected-root exclusion or atomic staging guards")
+    else:
+        passed("Markdown export is bounded, source-excluding and atomically staged with exact temporary cleanup")
+
     backup_source = production.get("collection_backup.rs", "")
     if not all(token in backup_source for token in (
         "fn plain(", "fn outside(", "BACKUP_UNSAFE_PATH", "fn validate_stage(",
         "rusqlite::backup::Backup::new", "PRAGMA foreign_key_check", "PRAGMA integrity_check(1)",
-        "fn preserve_local(", 'journal.phase = "Committing"', 'journal.phase = "Completed"',
+        "fn preserve_local(", 'committing.phase = "Committing"',
+        "fn persist_terminal(", 'persist_terminal(&marker, &database, &mut journal, "Completed")',
+        'persist_terminal(&marker, &database, &mut journal, "RolledBack")',
+        "cover_generation", "fn cleanup_restored_covers(",
         "rollback_hash", "GetDiskFreeSpaceExW", "MOVEFILE_WRITE_THROUGH",
     )) or "remove_dir_all" in strip_rust_tests(backup_source):
         fail("collection backup lacks bounded staging, media exclusion or rollback guards")
+
+    # Terminal memory state must follow durable publication; the former direct phase
+    # assignments were the audited bug, not a contract that implementations should retain.
+    terminal = backup_source.split("fn persist_terminal(", 1)[-1].split("/// Called only", 1)[0]
+    if not re.search(r"atomic_json\(marker, &candidate\)\?;\s*\*journal = candidate;", terminal):
+        fail("collection restore terminal memory phase precedes durable journal publication")
+    else:
+        passed("collection restore publishes terminal journal before changing memory phase")
 
     cache_source = production.get("cache.rs", "")
     if "remove_file" in cache_source:
@@ -2358,7 +2430,7 @@ def check_ui_windows_interaction_contract() -> None:
         "private epoch=0", "epoch===this.epoch", "this.flight?.epoch===this.epoch",
         "while(!this.state.fresh||this.state.entries===null)", "refresh=()=>{this.invalidate();return this.load();}",
     )) and all(token in app for token in (
-        "!mainWindowShown", "recentActivity.ensureFresh().then(commit)",
+        "!mainWindowShown", "recentActivity.ensureFresh().then(()=>commit())",
         "requestGeneration !== navigationGeneration.current", "recentActivity.invalidate()",
     ))
     duplicate_all_refresh_absent = all(
@@ -2376,17 +2448,21 @@ def check_ui_windows_interaction_contract() -> None:
 
     section_restore_ok = all(
         (
-            'type BrowsingSectionKey = "all" | "search" | "recent" | "favorites" | `library:${number}`' in app,
+            'type BrowsingSectionKey = "all" | "search" | "recent" | "favorites" | "organize" | "settings" | `library:${number}`' in app,
             "const sectionSnapshots = useRef<Map<BrowsingSectionKey, NavigationSnapshot>>" in app,
             "const rememberSectionNavigation" in app,
             "const restoreSectionNavigation" in app,
             "const navigateRootSection" in app,
             "sectionSnapshots.current.get(targetKey)" in app,
             "browsingSectionKey(current) === targetKey" in app,
-            "rememberSectionNavigation(current);" in app,
+            "rememberSectionNavigation(snapshot);" in app,
+            "rememberNavigation(captureNavigationRef.current(),'section');" in app,
+            "const sectionTopSnapshots" in app,
+            "const seekPreviousNavigation" in app,
+            "if(previous.page==='organize')setWorkbenchLocation(previous.workbenchLocation)" in app,
             "api.browse(rootId, parentNodeId)" in app,
             "api.listFavoriteFolderNodes(selectedFavoriteFolderId)" in app,
-            "validSearchRootId" in app,
+            "roots.some((root) => root.id === snapshot.searchRootId)" in app,
             'liveNavigation.page === "search" && liveNavigation.searchRootId === root.id' in app,
             "[initialQuery, rootId, filtersKey]" in search_page,
             "searchRequest" in search_page,
@@ -2471,8 +2547,10 @@ def check_ui_windows_interaction_contract() -> None:
 
     context_menu_viewport_ok = all(
         (
-            "getBoundingClientRect" in context_menu,
-            "window.innerHeight - bounds.height" in context_menu,
+            "useContextPanel(menuRef, x, y, onClose)" in context_menu,
+            "getBoundingClientRect" in read("src/hooks/useContextPanel.ts"),
+            "window.innerHeight - bounds.height" in read("src/hooks/useContextPanel.ts"),
+            "ResizeObserver" in read("src/hooks/useContextPanel.ts"),
             "max-height: calc(100vh - 16px)" in css,
             "overflow-y: auto" in css,
         )

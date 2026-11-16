@@ -28,7 +28,6 @@
 .favorite-folder-open { padding: 16px 80px 16px 0; gap: 4px 12px; min-height: 88px; }
 .favorite-folder-open > span { align-self: center; }
 .favorite-folder-open strong { min-width: 0; }
-.favorites-page > .page-toolbar .toolbar-actions { grid-column: 2; grid-row: 1; }
 .favorites-page > .page-toolbar .toolbar-actions .button,
 .recently-watched-page > .page-toolbar .browse-controls > .button,
 .organize-page > .page-toolbar .page-title-row > .button { min-height: 32px; padding-inline: 9px; font-size: 12px; }
@@ -41,12 +40,19 @@
 }
 
 .sidebar-nav > .root-list { scrollbar-width: thin; }
-@supports selector(::-webkit-scrollbar) {
+* { scrollbar-color: var(--text-faint) transparent; }
+@supports not (scrollbar-color: auto) {
+  ::-webkit-scrollbar { width: 12px; height: 12px; }
+  ::-webkit-scrollbar-thumb { background: var(--text-faint); border-radius: var(--radius-control); }
+  ::-webkit-scrollbar-track { background: transparent; }
   .sidebar-nav > .root-list { scrollbar-width: auto; scrollbar-color: auto; }
   .sidebar-nav > .root-list::-webkit-scrollbar { width: 6px; }
   .sidebar-nav > .root-list::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
-  .sidebar-nav > .root-list::-webkit-scrollbar-thumb { border-radius: 3px; background: var(--border-strong); }
+  .sidebar-nav > .root-list::-webkit-scrollbar-thumb { border-radius: var(--radius-small); background: var(--text-faint); }
 }
+
+.extension-add input[aria-invalid="true"] { border-color: var(--danger); }
+.extension-error { margin: 6px 0 0; color: var(--danger); font-size: 12px; line-height: 1.6; }
 
 :is(.browse-page, .search-page, .organize-page) > .page-toolbar {
   padding: 24px var(--page-gutter) 14px;
@@ -62,6 +68,7 @@
 .page-heading-title > h1 { min-width: 0; overflow-wrap: anywhere; }
 .page-heading-title > .collection-count { flex: none; color: var(--text-muted); font-size: 12px; font-weight: 400; }
 .organize-page > .page-toolbar .page-title-row { padding-top: 0; }
+.organize-page > .page-toolbar .page-title-row > button + button { margin-left: 0; }
 :is(.favorites-page, .recently-watched-page, .organize-page) > .page-toolbar .toolbar-actions .button:not(.primary):not(.is-active),
 :is(.recently-watched-page, .organize-page) > .page-toolbar .button.secondary {
   border-color: transparent;
@@ -91,6 +98,90 @@
 .organize-issue-actions > strong { flex-basis: 100%; text-align: right; margin: 0 0 2px; }
 .organize-issue-actions > .button { min-height: 32px; padding-inline: 9px; font-size: 12px; }
 
+.tag-assignment { grid-template-rows: auto; align-items: center; }
+.tag-assignment > span { grid-row: auto; }
+.batch-tag-option:not(:has(> small)) { grid-template-columns: 34px minmax(0, 1fr) 18px; min-height: 44px; }
+.player-path-row.is-system-mode > label { opacity: 0.55; transition: opacity 120ms ease; }
+.player-path-row.is-system-mode > label:focus-within { opacity: 1; }
+.detail-path { cursor: pointer; }
+.detail-path:hover { color: var(--text-normal); }
+.episode-watch-position.is-clickable { cursor: pointer; border-radius: var(--radius-small); transition: color 120ms ease; }
+.episode-watch-position.is-clickable:hover strong { color: var(--logo-red); text-decoration: underline; text-underline-offset: 3px; }
+.media-file-row.is-located { background: var(--accent-soft); transition: background-color 240ms ease; }
+
+/* Settings page: 2-line root items, fixed action buttons, and 3-tier typography */
+.settings-page .settings-root {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px 16px;
+  min-height: 0;
+  padding: 14px 0;
+  margin-bottom: 0;
+}
+.settings-page .settings-root:first-child { padding-top: 0; }
+.settings-page .settings-root > div { gap: 4px; }
+.settings-root-title-row { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; min-width: 0; }
+.settings-root-title-row > strong { flex: none; }
+.settings-root-title-row > p { flex: 1 1 180px; min-width: 0; margin: 0; }
+.settings-root-meta-row { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 14px; }
+.settings-page .root-policy-inline { margin: 0; font-size: 12px; font-weight: 400; color: var(--text-muted); }
+.settings-root-actions { display: flex; align-items: center; justify-content: flex-end; gap: 6px; flex-wrap: wrap; }
+.settings-root-actions > .button { min-height: 32px; padding-inline: 10px; font-size: 12px; }
+.settings-root-actions > button:not(.button) {
+  display: inline-grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  min-height: 32px;
+  padding: 0;
+  border: 1px solid var(--border-normal);
+  border-radius: var(--radius-control);
+  color: var(--text-muted);
+  background: var(--surface-muted);
+  cursor: pointer;
+}
+.settings-root-actions > button:not(.button) svg { width: 15px; height: 15px; }
+.settings-root-actions > button:not(.button):hover:not(:disabled) { color: var(--text-strong); background: var(--surface-card-hover); }
+.settings-root-actions > button.danger-icon:hover:not(:disabled) { color: var(--danger); border-color: var(--danger-soft); background: var(--danger-soft); }
+.settings-page .scan-changes { padding: 6px 0 2px; gap: 6px 14px; }
+.settings-page .scan-changes > .button { min-height: 28px; padding-inline: 10px; font-size: 12px; }
+
+.settings-page .settings-section-heading h2 { font-size: 15px; font-weight: 600; color: var(--text-strong); }
+.settings-page :is(
+  .settings-root strong,
+  .settings-hidden-entry strong,
+  .switch-field strong,
+  .service-settings legend,
+  .maintenance-grid strong,
+  .poster-cache-progress-heading strong,
+  .collection-backup-settings strong,
+  .about-brand strong
+) { font-size: 14px; font-weight: 600; color: var(--text-strong); letter-spacing: 0; }
+.settings-page :is(
+  .field-label > span,
+  .extension-editor > span,
+  .setting-form-row label > span,
+  .about-grid dd,
+  .about-grid button
+) { font-size: 14px; font-weight: 400; color: var(--text-normal); }
+.settings-page :is(
+  .settings-root p,
+  .settings-root small,
+  .settings-hidden-entry p,
+  .switch-field small,
+  .maintenance-grid p,
+  .maintenance-grid small,
+  .poster-cache-progress-heading span,
+  .poster-cache-progress-count,
+  .poster-cache-progress p,
+  .collection-backup-settings p,
+  .collection-backup-settings > small,
+  .about-brand span,
+  .about-grid dt,
+  .library-scan-health small,
+  .library-scan-health details p
+) { font-size: 12px; font-weight: 400; color: var(--text-muted); letter-spacing: 0; line-height: 1.5; }
+
 @media (max-width: 1100px) {
   .organize-issue { grid-template-columns: minmax(0, 1fr); gap: 0; }
   .organize-issue-actions { justify-content: flex-start; max-width: none; padding: 0 0 12px 71px; }
@@ -107,20 +198,107 @@
   .detail-actions > .detail-more { width: 40px; flex-basis: 40px; padding: 0; }
   .detail-actions .continue-reading-action { flex: 1 1 120px; min-width: 96px; max-width: 140px; }
   .detail-actions .continue-reading-action > .button.primary { min-width: 0; width: 100%; }
-  .detail-hero .metadata-binding .binding-copy { grid-template-columns: minmax(0, 1fr); gap: 4px; }
-  .detail-hero .metadata-binding:has(.binding-copy > small) .binding-copy { display: contents; }
-  .detail-hero .metadata-binding:has(.binding-copy > small) .binding-logo { grid-row: 1 / 3; }
-  .detail-hero .metadata-binding .binding-copy > small { grid-column: 2 / -1; grid-row: 1; }
-  .detail-hero .metadata-binding:has(.binding-copy > small) .binding-subject-link { grid-column: 2; grid-row: 2; }
-  .detail-hero .metadata-binding:has(.binding-copy > small) .binding-actions { grid-column: 3; grid-row: 2; }
-  .detail-hero .metadata-binding .binding-actions .button { padding-inline: 8px; }
+  .settings-page .settings-root { grid-template-columns: minmax(0, 1fr); }
 }
 @media (max-height: 720px) {
   .sidebar > .brand { flex: 0 0 80px; height: 80px; }
   .sidebar .sidebar-nav { padding-top: 0; padding-bottom: 4px; }
-  .sidebar-nav > .nav-item { flex-basis: 36px; height: 36px; }
+  .sidebar-nav > .nav-item { flex-basis: 36px; min-block-size: 36px; height: auto; }
   .sidebar .nav-library-heading { margin-top: 12px; padding-top: 10px; }
   .sidebar .root-item { min-height: 40px; padding-block: 7px; }
   .sidebar-project-count { padding-top: 8px; }
-  .sidebar > .sidebar-settings { height: 36px; min-height: 36px; margin-top: 4px; margin-bottom: 8px; }
+  .sidebar > .sidebar-settings { min-block-size: 36px; height: auto; margin-block: 10px 8px; }
+  .sidebar > .sidebar-settings::after { inset-block-start: -6px; }
+}
+
+/* Keep modal scrolling local without removing the page scrollbar or shifting it. */
+.modal-backdrop,
+.modal-backdrop > [aria-modal="true"],
+dialog:modal { overscroll-behavior: contain; }
+dialog:modal { overflow: hidden; }
+dialog::backdrop { overflow: hidden; overscroll-behavior: contain; }
+.confirm-dialog { max-height: calc(100dvh - 40px); overflow: auto; }
+.context-menu { max-width: calc(100vw - 16px); max-height: calc(100dvh - 16px); overflow: auto; overscroll-behavior: contain; }
+
+/* Do not defer the first screen, poster frames, image scheduling, or popup hosts.
+   Bounded desktop dimensions and conservative tail thresholds keep these items
+   below the initial fold. Very large windows retain normal layout. */
+.media-file-list .media-file-row.is-layout-contained { content-visibility: visible; contain-intrinsic-size: none; }
+@media (max-height: 1200px) and (max-width: 2560px) {
+  .organize-issues > .workbench-issue-row:nth-child(n + 25) { --deferred-height: 120px; }
+  .poster-grid > .media-card-grid:nth-child(n + 97) .media-card-copy { --deferred-height: 60px; }
+  .poster-grid > .media-card-grid:is(.has-watch-time, .has-modified-time):nth-child(n + 97) .media-card-copy { --deferred-height: 80px; }
+  .detail-content .other-resource-list > .resource-row:nth-child(n + 49) { --deferred-height: 54px; }
+  .media-file-list > .media-file-row.is-layout-contained:nth-child(n + 50) { --deferred-height: 36px; }
+  @supports (content-visibility: auto) {
+    .organize-issues > .workbench-issue-row:nth-child(n + 25),
+    .poster-grid > .media-card-grid:nth-child(n + 97) .media-card-copy,
+    .detail-content .other-resource-list > .resource-row:nth-child(n + 49),
+    .media-file-list > .media-file-row.is-layout-contained:nth-child(n + 50) {
+      content-visibility: auto;
+      contain-intrinsic-size: auto none auto var(--deferred-height);
+    }
+  }
+  @supports not (content-visibility: auto) {
+    .organize-issues > .workbench-issue-row:nth-child(n + 25),
+    .poster-grid > .media-card-grid:nth-child(n + 97) .media-card-copy,
+    .detail-content .other-resource-list > .resource-row:nth-child(n + 49),
+    .media-file-list > .media-file-row.is-layout-contained:nth-child(n + 50) { contain: layout style paint; }
+  }
+  .organize-issues > .workbench-issue-row:nth-child(n + 25):focus-within,
+  .poster-grid > .media-card-grid:nth-child(n + 97):focus-within .media-card-copy,
+  .detail-content .other-resource-list > .resource-row:nth-child(n + 49):focus-within,
+  .media-file-list > .media-file-row.is-layout-contained:nth-child(n + 50):focus-within {
+    content-visibility: visible;
+    contain: none;
+  }
+}
+
+/* Modern web typography wrapping, SVG geometric clarity, optical text alignment, and high-contrast support. */
+:is(h1, h2, h3, .generic-empty h2) {
+  text-wrap: balance;
+}
+:is(
+  .page-title-row > div:first-child > p:last-child,
+  .detail-path,
+  .generic-empty p,
+  .settings-section-heading p,
+  .studio-folder-strip span
+) {
+  text-wrap: pretty;
+}
+:is(.button, .nav-item, .binding-logo, .icon-button, .resource-icon) svg {
+  flex-shrink: 0;
+  shape-rendering: geometricPrecision;
+}
+.button,
+.back-button {
+  min-block-size: 34px;
+  height: auto;
+}
+@supports (text-box: trim-both cap alphabetic) {
+  :is(
+    .toolbar-actions .button,
+    .binding-actions .button,
+    .binding-subject-link .binding-title,
+    .media-kind-tabs > button,
+    .studio-switch > button,
+    .nav-item > span,
+    .eyebrow,
+    .user-tag-pill,
+    .type-pill
+  ) {
+    text-box: trim-both cap alphabetic;
+  }
+}
+@media (forced-colors: active) {
+  .nav-item.is-active,
+  .root-item.is-active,
+  .studio-note-row[aria-pressed="true"] {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+  }
+  .sidebar > .sidebar-settings::after {
+    background: CanvasText;
+  }
 }

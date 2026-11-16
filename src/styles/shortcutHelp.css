@@ -1,0 +1,20 @@
+.shortcut-help { color: var(--text-normal); background: var(--surface-raised); border: 1px solid var(--border-normal); border-radius: var(--radius-dialog, 10px); padding: 20px; width: min(680px, calc(100vw - 32px)); max-height: calc(100dvh - 64px); box-sizing: border-box; overflow: auto; }
+.shortcut-help:modal { overscroll-behavior: contain; }
+.shortcut-help::backdrop { background: rgb(0 0 0 / 42%); overflow: hidden; overscroll-behavior: contain; }
+.shortcut-help header { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+.shortcut-help h2 { margin: 0; font-size: 20px; }
+.shortcut-help-hint { color: var(--text-muted); line-height: 1.6; margin: 12px 0 18px; }
+.shortcut-help-groups { display: grid; gap: 16px; }
+.shortcut-help h3 { font-size: 13px; margin: 0 0 8px; color: var(--text-muted); }
+.shortcut-help dl { margin: 0; }
+.shortcut-help dl > div { display: flex; justify-content: space-between; align-items: center; gap: 20px; min-height: 30px; }
+.shortcut-help dt { overflow-wrap: anywhere; line-height: 1.5; }
+.shortcut-help dd { flex: 0 0 auto; margin: 0; }
+.shortcut-help kbd { display: inline-block; padding: 2px 6px; border: 1px solid var(--border-normal); border-radius: 4px; background: var(--surface-muted); font: inherit; font-size: 12px; }
+@media (forced-colors: active) { .shortcut-help, .shortcut-help kbd { border-color: CanvasText; } }
+@media (max-height: 740px) {
+  .shortcut-help { padding: 16px 20px; }
+  .shortcut-help-hint { margin: 8px 0 10px; }
+  .shortcut-help-groups { gap: 10px; }
+  .shortcut-help dl > div { min-height: 26px; }
+}

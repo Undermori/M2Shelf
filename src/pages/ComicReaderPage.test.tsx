@@ -14,6 +14,16 @@ beforeEach(()=>{vi.resetAllMocks();mocks.open.mockResolvedValue({book,pages:Arra
 afterEach(()=>{cleanup();vi.unstubAllGlobals();});
 const reader=(extra={})=>render(<I18nProvider><ComicReaderPage bookId={1} onBack={vi.fn()} onProgress={vi.fn()} {...extra}/></I18nProvider>);
 describe('comic library setup and reader',()=>{
+ it('leaves Space on reader buttons to native activation and ignores modal/IME page keys',async()=>{
+  reader();await screen.findByRole('img',{name:'第 1 / 8 页'});
+  const button=screen.getByRole('button',{name:'添加书签'});button.focus();
+  expect(fireEvent.keyDown(button,{key:' '})).toBe(true);
+  expect(screen.getByRole('img',{name:'第 1 / 8 页'})).toBeTruthy();
+  expect(fireEvent.keyDown(window,{key:'ArrowLeft',isComposing:true})).toBe(true);
+  const modal=document.createElement('dialog');modal.open=true;document.body.append(modal);
+  expect(fireEvent.keyDown(window,{key:'ArrowLeft'})).toBe(true);
+  expect(screen.getByRole('img',{name:'第 1 / 8 页'})).toBeTruthy();modal.remove();
+ });
  it('opens the next listed book when moving forward past the decoded last double-page spread',async()=>{
   const next={...book,id:2,revision:'next',displayName:'No volume marker',progress:{comicBookId:2,lastPageIndex:3,lastReadAt:'saved'}};mocks.open.mockImplementation(async(id:number)=>({book:id===1?book:next,pages:Array.from({length:8},(_,i)=>({pageIndex:i,pageName:`${i}.png`})),bookmarks:[]}));const switchBook=vi.fn();
   reader({readingList:[book,next],onNextBook:switchBook});await screen.findByRole('img',{name:'第 1 / 8 页'});fireEvent.keyDown(window,{key:'End'});await screen.findByRole('img',{name:'第 8 / 8 页'});

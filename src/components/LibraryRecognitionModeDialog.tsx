@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import {isBookKind, type LibraryRecognitionMode, type LibraryMediaKind } from "../types/media";
 import { useI18n } from "../lib/i18n";
-import { isolateModalSiblings } from "../lib/modalA11y";
+import { useModalFocus } from "../hooks/useModalFocus";
 import { Icon } from "./Icon";
 
 interface LibraryRecognitionModeDialogProps {
@@ -20,7 +20,6 @@ export function LibraryRecognitionModeDialog({ path, busy, onChoose, onClose,onE
   const [selection,setSelection]=useState<'SMART_MIXED'|'FOLDER'|'VIDEO_FILE'|null>(null);
   const [selectionRequired,setSelectionRequired]=useState(false);
   const modesRef=useRef<HTMLDivElement>(null);
-  const closeRef=useRef(onClose);closeRef.current=onClose;
   const changeKind=(value:LibraryMediaKind)=>{setKind(value);setSelection(null);setSelectionRequired(false);};
   const chooseMode=(mode:LibraryRecognitionMode,strategy:'LEGACY'|'SMART_MIXED'='LEGACY')=>{setSelection(strategy==='SMART_MIXED'?'SMART_MIXED':mode);setSelectionRequired(false);};
   const createLibrary=()=>{
@@ -32,38 +31,7 @@ export function LibraryRecognitionModeDialog({ path, busy, onChoose, onClose,onE
   useEffect(()=>{if(!path){setKind('ANIMATION');setNoAuto(true);setSelection(null);setSelectionRequired(false);}},[path]);
   const backdropRef = useRef<HTMLDivElement>(null);
   const dialogRef = useRef<HTMLElement>(null);
-  const busyRef = useRef(busy);
-  busyRef.current = busy;
-
-  useEffect(() => {
-    if (!path||suspended) return;
-    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    const dialog = dialogRef.current;
-    const restoreBackground = isolateModalSiblings(backdropRef.current);
-    const focusable = () => Array.from(dialog?.querySelectorAll<HTMLElement>("button:not([disabled]),input:not([disabled]), [tabindex]:not([tabindex='-1'])") ?? []);
-    const frame = window.requestAnimationFrame(() => focusable()[0]?.focus());
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !busyRef.current) {
-        event.preventDefault();
-        closeRef.current();
-        return;
-      }
-      if (event.key !== "Tab") return;
-      const items = focusable();
-      if (items.length === 0) { event.preventDefault(); dialog?.focus(); return; }
-      const first = items[0];
-      const last = items[items.length - 1];
-      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
-      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
-    };
-    document.addEventListener("keydown", onKeyDown);
-    return () => {
-      window.cancelAnimationFrame(frame);
-      document.removeEventListener("keydown", onKeyDown);
-      restoreBackground();
-      previous?.focus();
-    };
-  }, [path,suspended]);
+  useModalFocus(backdropRef, dialogRef, onClose, 'button:not(:disabled)', busy, Boolean(path) && !suspended);
 
   if (!path||suspended) return null;
   return (
@@ -83,7 +51,7 @@ export function LibraryRecognitionModeDialog({ path, busy, onChoose, onClose,onE
             <button className="button secondary" aria-pressed={kind==='DOUJIN'} disabled={busy} onClick={()=>changeKind('DOUJIN')} type="button">{t('doujin.name')}</button>
             <button className="button secondary" aria-pressed={kind==='ARTBOOK'} disabled={busy} onClick={()=>changeKind('ARTBOOK')} type="button">{t('artbook.name')}</button>
           </div>
-          {isBookKind(kind) && <div className="root-matching-policy"><label><input type="checkbox" checked={noAuto} disabled={busy} onChange={event=>setNoAuto(event.target.checked)} />{t('library.noAutoBangumi')}</label><p>{t('library.noAutoHelp')}</p>{kind==='DOUJIN' && <p>{t('library.doujinAdvice')}</p>}</div>}
+          {isBookKind(kind) && <div className="root-matching-policy"><label><input type="checkbox" checked={noAuto} disabled={busy} onChange={event=>setNoAuto(event.target.checked)} />{t('library.noAutoBangumi')}</label><p>{t('library.noAutoHelp')}</p></div>}
           <div ref={modesRef} className={`root-mode-options${isBookKind(kind)?" book-mode-options":""}`} role="group" aria-label={t('library.chooseMode')} aria-describedby={selectionRequired?'root-mode-validation':undefined}>
             {isBookKind(kind)&&<div className="smart-mode-row"><button className="smart-recommended" aria-pressed={selection==='SMART_MIXED'} disabled={busy} onClick={()=>chooseMode('FOLDER','SMART_MIXED')} type="button"><span><Icon name="work"/></span><strong>{t('smart.title')}</strong><small>{t('smart.help')}</small></button><p>{t('library.modeGuidance')}</p></div>}
             <button aria-pressed={selection==='FOLDER'} disabled={busy} onClick={() => chooseMode("FOLDER")} type="button">
@@ -94,7 +62,6 @@ export function LibraryRecognitionModeDialog({ path, busy, onChoose, onClose,onE
             </button>
           </div>
           <div className="root-mode-confirm">{selectionRequired&&<span className="root-mode-validation" role="alert" id="root-mode-validation">{t('library.chooseMode')}</span>}<button className="button primary" type="button" disabled={busy} onClick={createLibrary}>{t('library.create')}</button></div>
-          <p className="root-mode-safety"><Icon name="shield" />{t("rootMode.readOnly")}</p>
         </div>
       </section>
     </div>

@@ -8,14 +8,15 @@ M²Shelf is a Windows app for local anime, movies/TV, comics, ebooks, doujinshi 
 
 ## Features
 
-- Multiple libraries with recursive and incremental scans. Recognize folders or individual files; smart mixed recognition also organizes books into series, standalone books and categories. Drop folders to add libraries and update a library path after moving it.
-- Poster and list views, cross-library browsing, media and tag filters, and sorting. Search names, filenames, multilingual Bangumi titles and notes, with filters for library, media type, binding, watch/read status and file format.
+- Multiple libraries with recursive and incremental scans. Recognize folders or individual files; smart mixed recognition also organizes books into series, standalone books and categories. Drop folders on All Resources to add libraries, and update a library path after moving it.
+- Poster and list views, cross-library browsing, media, tag and unbound filters, and sorting. Search names, filenames, multilingual Bangumi titles, notes and screenshots, with filters for library, media type, binding, watch/read status and file format, plus a `?` shortcuts help dialog.
 - Automatic or manual Bangumi matching within each library's media type. TMDb supports movies and TV series with the default service or a personal token. It handles bilingual titles, years, season/episode information and common release filenames, with original-language posters. Correct bindings, display names and covers manually.
-- Custom tags, named favorites, watch/read status, local notes and batch editing. Hide or restore individual items, and choose which libraries appear in All Resources. Review matching and cover issues on the organization page.
-- Open videos in the system default or a custom player. Anime details separate main episodes, specials and other videos. Track episodes and sync episode changes and playback position with a configured mpv. Browse attachments and reveal files in Windows Explorer.
+- Custom tags, named favorites, watch/read status and batch editing. Hide or restore individual items, and choose which libraries appear in All Resources. Review matching and cover issues on the organization page.
+- Workbench with Notes, Screenshot Gallery and Project Files. Edit and export Markdown notes. Browse local screenshots in their original aspect ratio, star, tag, drag copies out, and auto-link shots from managed mpv sessions. Browse project folders read-only, sort with folders first and PSD first under Type, double-click or press Enter to open in the default app, or drag files out.
+- Open videos in the system default or a custom player. Anime details separate main episodes, specials, CDs and other videos, track episodes and jump to the first unwatched item. Sync episode changes and playback position with a configured mpv. Browse attachments and reveal files in Windows Explorer.
 - Built-in comic and text readers with progress, bookmarks and next-volume reading. Recently opened holds up to 30 entries and supports removing them.
 - Persistent local covers and background thumbnails, with progress and retry controls in Settings. PDFs can use the first page as a fallback. Choose covers from local files, available online candidates or book pages.
-- Light, dark and system themes; Chinese, English, Japanese and Korean; remembered window size, sorting and browsing position.
+- Light, dark and system themes; Chinese, English, Japanese and Korean; remembered window size, sorting, filters and browsing position.
 
 ## Reading
 
@@ -29,10 +30,10 @@ MOBI/AZW3 supports unencrypted MOBI6/KF8. DRM, ordinary ZIP, RAR and 7Z are not 
 
 ## Download
 
-**M²Shelf 0.5.17 · Windows x64**
+**M²Shelf 0.5.19 · Windows x64**
 
-- [Installer](https://github.com/Undermori/M2Shelf/releases/download/v0.5.17/M2Shelf-Setup-0.5.17-x64.exe)
-- [Portable ZIP](https://github.com/Undermori/M2Shelf/releases/download/v0.5.17/M2Shelf-Portable-0.5.17-x64.zip)
+- [Installer](https://github.com/Undermori/M2Shelf/releases/download/v0.5.19/M2Shelf-Setup-0.5.19-x64.exe)
+- [Portable ZIP](https://github.com/Undermori/M2Shelf/releases/download/v0.5.19/M2Shelf-Portable-0.5.19-x64.zip)
 - [Latest release](https://github.com/Undermori/M2Shelf/releases/latest) · [All releases](https://github.com/Undermori/M2Shelf/releases)
 
 Extract the complete Portable ZIP before running `M2Shelf.exe`. The database, settings and default cache use Windows application data. Replace the complete payload when upgrading an older five-file Portable build.

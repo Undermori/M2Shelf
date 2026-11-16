@@ -2189,7 +2189,7 @@ mod tests {
                 |r| r.get::<_, i64>(0)
             )
             .unwrap(),
-            36
+            38
         );
         assert_eq!(
             c.query_row(
@@ -2297,6 +2297,11 @@ mod tests {
     }
     #[test]
     fn manual_tv_series_scope_preserves_automatic_and_source_boundaries() {
+        // Even a rejected bind invalidates the process-wide mutation generation.
+        // Keep it isolated from automatic matching fixtures using separate databases.
+        let _serial = crate::tmdb::MOVIE_TEST_GATE
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
         use m2shelf_smart_mixed_lab::model::LibraryKind;
         use m2shelf_smart_mixed_shadow::fixture::Factory;
         let temp = tempfile::tempdir().unwrap();
@@ -2443,7 +2448,7 @@ mod tests {
                 |r| r.get::<_, i64>(0)
             )
             .unwrap(),
-            36
+            38
         );
         assert!(c
             .prepare("PRAGMA foreign_key_check")

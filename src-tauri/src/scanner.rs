@@ -1124,7 +1124,105 @@ fn scan_directory(
     extensions: &HashSet<String>,
     token: &str,
     visited: &mut HashSet<PathBuf>,
-) -> Result<i64, ScanAbort> {
+) -> Result<(), ScanAbort> {
+    let mut pending = vec![DirectoryScanTask::Enter {
+        entry: ScanEntryPath {
+            logical: path.to_path_buf(),
+            filesystem: filesystem_path.to_path_buf(),
+        },
+        parent: parent_node_id,
+    }];
+    // Completion belongs to a branch, not to the shared progress counter. A failure
+    // propagates only through that branch's parent IDs as the post-order walk unwinds.
+    let mut incomplete_children = HashSet::new();
+    while let Some(task) = pending.pop() {
+        check_cancel(control)?;
+        match task {
+            DirectoryScanTask::Enter { entry, parent } => {
+                match begin_directory(
+                    app,
+                    connection,
+                    root_id,
+                    &entry.logical,
+                    &entry.filesystem,
+                    canonical_root,
+                    parent,
+                    control,
+                    extensions,
+                    token,
+                    visited,
+                )? {
+                    DirectoryScanStart::Skipped => {}
+                    DirectoryScanStart::Failed => {
+                        if let Some(parent) = parent {
+                            incomplete_children.insert(parent);
+                        }
+                    }
+                    DirectoryScanStart::Entered(finish, children) => {
+                        let parent = Some(finish.node_id);
+                        pending.push(DirectoryScanTask::Finish(finish));
+                        // LIFO preserves the original natural-order depth-first traversal.
+                        pending.extend(
+                            children
+                                .into_iter()
+                                .rev()
+                                .map(|entry| DirectoryScanTask::Enter { entry, parent }),
+                        );
+                    }
+                }
+            }
+            DirectoryScanTask::Finish(finish) => {
+                let descendants_complete = !incomplete_children.remove(&finish.node_id);
+                let complete = finish.files_complete && descendants_complete;
+                if !complete {
+                    if let Some(parent) = finish.parent_node_id {
+                        incomplete_children.insert(parent);
+                    }
+                }
+                finish_directory(connection, control, token, finish, complete)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+enum DirectoryScanTask {
+    Enter {
+        entry: ScanEntryPath,
+        parent: Option<i64>,
+    },
+    Finish(DirectoryScanFinish),
+}
+
+enum DirectoryScanStart {
+    Skipped,
+    Failed,
+    Entered(DirectoryScanFinish, Vec<ScanEntryPath>),
+}
+
+struct DirectoryScanFinish {
+    node_id: i64,
+    parent_node_id: Option<i64>,
+    direct_count: i64,
+    previous_counts: (i64, i64, i64),
+    has_bdmv: bool,
+    files_complete: bool,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn begin_directory(
+    app: Option<&AppHandle>,
+    connection: &Connection,
+    root_id: i64,
+    path: &Path,
+    filesystem_path: &Path,
+    canonical_root: &Path,
+    parent_node_id: Option<i64>,
+    control: &ScanControl,
+    extensions: &HashSet<String>,
+    token: &str,
+    visited: &mut HashSet<PathBuf>,
+) -> Result<DirectoryScanStart, ScanAbort> {
     check_cancel(control)?;
     let canonical = match canonicalize_within_library_root(filesystem_path, canonical_root) {
         Ok(canonical) if canonical.is_dir() => canonical,
@@ -1133,18 +1231,18 @@ fn scan_directory(
                 progress.errors += 1;
                 progress.message = Some(format!("扫描路径不是目录，已跳过：{}", path.display()));
             });
-            return Ok(0);
+            return Ok(DirectoryScanStart::Failed);
         }
         Err(message) => {
             update_progress(app, control, path, |progress| {
                 progress.errors += 1;
                 progress.message = Some(message);
             });
-            return Ok(0);
+            return Ok(DirectoryScanStart::Failed);
         }
     };
     if !visited.insert(canonical.clone()) {
-        return Ok(0);
+        return Ok(DirectoryScanStart::Skipped);
     }
 
     if control
@@ -1153,12 +1251,15 @@ fn scan_directory(
         .unwrap_or_else(|e| e.into_inner())
         .contains(path)
     {
-        let existing = connection.query_row(
-            "SELECT id,node_type,total_video_count FROM nodes WHERE library_root_id=?1 AND absolute_path=?2",
-            params![root_id, path.to_string_lossy()],
-            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?, row.get::<_, i64>(2)?)),
-        ).optional().map_err(|e| e.to_string())?;
-        if let Some((id, node_type, count)) = existing {
+        let existing = connection
+            .query_row(
+                "SELECT id FROM nodes WHERE library_root_id=?1 AND absolute_path=?2",
+                params![root_id, path.to_string_lossy()],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
+        if let Some(id) = existing {
             // Retain only this branch marker for the parent's stale-row cleanup. Its children,
             // files, classification, timestamps and metadata are not reindexed.
             connection
@@ -1167,7 +1268,7 @@ fn scan_directory(
                     params![token, id],
                 )
                 .map_err(|e| e.to_string())?;
-            return Ok(if node_type == "IGNORED" { 0 } else { count });
+            return Ok(DirectoryScanStart::Skipped);
         }
     }
 
@@ -1206,10 +1307,9 @@ fn scan_directory(
     if existing.1 && existing.0 == "IGNORED" {
         // Keep the branch's index and user metadata so "restore automatic detection" remains
         // reversible. Ignored branches are excluded from their parent's media counts.
-        return Ok(0);
+        return Ok(DirectoryScanStart::Skipped);
     }
 
-    let errors_before_read = control.progress().errors;
     let read_dir = match fs::read_dir(&canonical) {
         Ok(entries) => entries,
         Err(error) => {
@@ -1217,18 +1317,20 @@ fn scan_directory(
                 progress.errors += 1;
                 progress.message = Some(format!("无法读取 {}：{error}", path.display()));
             });
-            return Ok(existing.2.max(0));
+            return Ok(DirectoryScanStart::Failed);
         }
     };
 
     let mut directories = Vec::new();
     let mut video_files = Vec::new();
     let mut resource_files = Vec::new();
+    let mut entries_complete = true;
     for entry_result in read_dir {
         check_cancel(control)?;
         let entry = match entry_result {
             Ok(entry) => entry,
             Err(error) => {
+                entries_complete = false;
                 update_progress(app, control, path, |progress| {
                     progress.errors += 1;
                     progress.message = Some(format!("读取目录项失败：{error}"));
@@ -1241,6 +1343,7 @@ fn scan_directory(
         let file_type = match entry.file_type() {
             Ok(value) => value,
             Err(error) => {
+                entries_complete = false;
                 update_progress(app, control, &logical_entry_path, |progress| {
                     progress.errors += 1;
                     progress.message = Some(format!("读取文件类型失败：{error}"));
@@ -1266,7 +1369,6 @@ fn scan_directory(
             }
         }
     }
-    let entries_complete = control.progress().errors == errors_before_read;
     let mut files_complete = entries_complete;
 
     let bdmv_directory = directories
@@ -1404,27 +1506,30 @@ fn scan_directory(
                 .unwrap_or_default(),
         )
     });
-    let mut children_complete = files_complete;
-    for child in directories {
-        let errors_before = control.progress().errors;
-        scan_directory(
-            app,
-            connection,
-            root_id,
-            &child.logical,
-            &child.filesystem,
-            canonical_root,
-            Some(node_id),
-            control,
-            extensions,
-            token,
-            visited,
-        )?;
-        if control.progress().errors > errors_before {
-            children_complete = false;
-        }
-    }
+    Ok(DirectoryScanStart::Entered(
+        DirectoryScanFinish {
+            node_id,
+            parent_node_id,
+            direct_count: video_files.len() as i64,
+            previous_counts: (existing.3, existing.4, existing.2),
+            has_bdmv,
+            files_complete,
+        },
+        directories,
+    ))
+}
+
+fn finish_directory(
+    connection: &Connection,
+    control: &ScanControl,
+    token: &str,
+    finish: DirectoryScanFinish,
+    children_complete: bool,
+) -> Result<(), ScanAbort> {
     check_cancel(control)?;
+    let node_id = finish.node_id;
+    // Deferred until every descendant finishes, just as with the recursive walk.
+    // Any descendant read failure prevents this ancestor's stale-row cleanup.
 
     // Stale records are index-only cleanup. Source files are never changed.
     if children_complete {
@@ -1450,7 +1555,7 @@ fn scan_directory(
 
     let child_summary = indexed_child_media_summary(connection, node_id)?;
     let (direct_video_count, child_media_branch_count, total_video_count) = if children_complete {
-        let direct = video_files.len() as i64;
+        let direct = finish.direct_count;
         (
             direct,
             child_summary.branch_count,
@@ -1459,13 +1564,13 @@ fn scan_directory(
     } else {
         // A permission/transient read failure must not turn a previously indexed work into an
         // empty container or prune data that could not be observed in this pass.
-        (existing.3, existing.4, existing.2)
+        finish.previous_counts
     };
     let automatic_type = classify_directory(
         direct_video_count,
         child_media_branch_count,
         child_summary.supplementary_branch_count,
-        has_bdmv,
+        finish.has_bdmv,
         false,
     );
     connection
@@ -1485,7 +1590,7 @@ fn scan_directory(
             ],
         )
         .map_err(|error| error.to_string())?;
-    Ok(total_video_count.max(0))
+    Ok(())
 }
 
 pub(crate) fn upsert_node(
@@ -1961,95 +2066,347 @@ pub(crate) fn indexed_child_media_summary(
     Ok(summary)
 }
 
-/// A deliberately small allow-list for folders that normally belong to the work whose
-/// main episodes are stored directly in the parent. It only influences automatic detection
-/// when the parent already has direct videos; it never turns an otherwise empty parent into a
-/// work, and an explicit child classification always wins over this hint.
-pub fn is_supplementary_directory_name(folder_name: &str) -> bool {
-    let compact = folder_name
+fn compact_alnum(value: &str) -> String {
+    value
         .trim()
         .to_lowercase()
         .chars()
         .filter(|character| character.is_alphanumeric())
-        .collect::<String>();
+        .collect()
+}
+
+fn unwrap_outer_brackets(value: &str) -> Option<&str> {
+    let trimmed = value.trim();
+    for (open, close) in [('[', ']'), ('(', ')'), ('【', '】'), ('（', '）')] {
+        if let Some(rest) = trimmed
+            .strip_prefix(open)
+            .and_then(|s| s.strip_suffix(close))
+        {
+            let inner = rest.trim();
+            if !inner.is_empty() && !inner.contains(open) && !inner.contains(close) {
+                return Some(inner);
+            }
+        }
+    }
+    None
+}
+
+fn is_technical_paren_qualifier(inner: &str) -> bool {
+    let lowered = inner.to_lowercase();
+    let normalized = lowered
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>();
+    if normalized.is_empty() {
+        return false;
+    }
+    normalized.iter().all(|token| {
+        matches!(
+            *token,
+            "bd" | "bdrip"
+                | "bdmv"
+                | "dvd"
+                | "dvdrip"
+                | "web"
+                | "webrip"
+                | "webdl"
+                | "tv"
+                | "tvrip"
+                | "480p"
+                | "720p"
+                | "1080p"
+                | "1080i"
+                | "2160p"
+                | "4k"
+                | "uhd"
+                | "hdr"
+                | "hevc"
+                | "x265"
+                | "x264"
+                | "h265"
+                | "h264"
+                | "avc"
+                | "av1"
+                | "10bit"
+                | "8bit"
+                | "ma10p"
+                | "hi10p"
+                | "flac"
+                | "alac"
+                | "aac"
+                | "ac3"
+                | "dts"
+                | "mp3"
+                | "wav"
+                | "ape"
+                | "dsd"
+                | "hires"
+                | "lossless"
+                | "raw"
+                | "raws"
+                | "rip"
+                | "sub"
+                | "subbed"
+                | "dub"
+                | "chs"
+                | "cht"
+                | "gb"
+                | "big5"
+                | "jp"
+                | "jpn"
+                | "ass"
+                | "srt"
+                | "mkv"
+                | "mp4"
+                | "无损"
+                | "無損"
+                | "简繁"
+                | "簡繁"
+                | "内封"
+                | "內封"
+                | "外挂"
+                | "外掛"
+                | "特典"
+                | "映像特典"
+                | "cd"
+                | "cds"
+                | "ost"
+                | "sp"
+                | "sps"
+                | "menu"
+                | "bdrip1080p"
+        ) || (*token).strip_prefix("hi").is_some_and(|r| r == "res")
+    })
+}
+
+fn strip_qualifier_brackets(folder_name: &str) -> Option<String> {
+    let mut output = String::with_capacity(folder_name.len());
+    let mut chars = folder_name.char_indices().peekable();
+    let mut removed = false;
+    while let Some((_idx, ch)) = chars.next() {
+        let close = match ch {
+            '[' => Some(']'),
+            '(' => Some(')'),
+            '【' => Some('】'),
+            '（' => Some('）'),
+            _ => None,
+        };
+        if let Some(close_ch) = close {
+            let mut inner = String::new();
+            let mut closed = false;
+            for (_inner_idx, inner_ch) in chars.by_ref() {
+                if inner_ch == close_ch {
+                    closed = true;
+                    break;
+                }
+                inner.push(inner_ch);
+            }
+            if !closed {
+                output.push(ch);
+                output.push_str(&inner);
+                continue;
+            }
+            // Square/corner brackets on folder names carry release-group or format tags;
+            // parentheses are only stripped when they contain known technical/media qualifiers.
+            if matches!(ch, '[' | '【') || is_technical_paren_qualifier(&inner) {
+                removed = true;
+                output.push(' ');
+            } else {
+                output.push(ch);
+                output.push_str(&inner);
+                output.push(close_ch);
+            }
+        } else {
+            output.push(ch);
+        }
+    }
+    if !removed {
+        return None;
+    }
+    let trimmed = output.split_whitespace().collect::<Vec<_>>().join(" ");
+    (!trimmed.is_empty()).then_some(trimmed)
+}
+
+fn directory_name_variants(folder_name: &str) -> Vec<String> {
+    let mut variants = Vec::with_capacity(3);
+    let trimmed = folder_name.trim().to_string();
+    if !trimmed.is_empty() {
+        variants.push(trimmed.clone());
+    }
+    if let Some(unwrapped) = unwrap_outer_brackets(&trimmed) {
+        if unwrapped != trimmed {
+            variants.push(unwrapped.to_string());
+        }
+    }
+    if let Some(stripped) = strip_qualifier_brackets(&trimmed) {
+        if !variants.contains(&stripped) {
+            variants.push(stripped);
+        }
+    }
+    variants
+}
+
+fn is_cds_exact_compact(compact: &str) -> bool {
+    matches!(
+        compact,
+        "cd" | "cds"
+            | "ost"
+            | "osts"
+            | "soundtrack"
+            | "soundtracks"
+            | "charasong"
+            | "charasongs"
+            | "dramacd"
+            | "dramacds"
+            | "特典cd"
+            | "音乐特典"
+            | "音樂特典"
+            | "原声集"
+            | "原聲集"
+    )
+}
+
+/// A deliberately small allow-list for folders that normally belong to the work whose
+/// main episodes are stored directly in the parent. It only influences automatic detection
+/// when the parent already has direct videos; it never turns an otherwise empty parent into a
+/// work, and an explicit child classification always wins over this hint.
+pub fn is_cds_directory_name(folder_name: &str) -> bool {
+    directory_name_variants(folder_name)
+        .into_iter()
+        .any(|variant| {
+            let compact = compact_alnum(&variant);
+            if is_cds_exact_compact(&compact) {
+                return true;
+            }
+            let parts = variant
+                .split(['&', '+', '/', ',', '、', '·', '|'])
+                .map(compact_alnum)
+                .filter(|part| !part.is_empty())
+                .collect::<Vec<_>>();
+            parts.len() >= 2 && parts.iter().all(|part| is_cds_exact_compact(part))
+        })
+}
+
+const SUPPLEMENTARY_EXACT_NAMES: &[&str] = &[
+    "sp",
+    "sps",
+    "special",
+    "specials",
+    "extra",
+    "extras",
+    "bonus",
+    "bonuses",
+    "bonusdisc",
+    "bonusdiscs",
+    "bonusfeature",
+    "bonusfeatures",
+    "ova",
+    "ovas",
+    "oad",
+    "oads",
+    "ona",
+    "onas",
+    "omake",
+    "ncop",
+    "nced",
+    "ncoped",
+    "ncedop",
+    "ncopnced",
+    "ncedncop",
+    "oped",
+    "pv",
+    "pvs",
+    "cm",
+    "cms",
+    "trailer",
+    "trailers",
+    "teaser",
+    "teasers",
+    "menu",
+    "menus",
+    "bdmenu",
+    "bdmenus",
+    "dvdmenu",
+    "dvdmenus",
+    "spmenu",
+    "spmenus",
+    "creditless",
+    "creditlessop",
+    "creditlessed",
+    "creditlessoped",
+    "creditlessedop",
+    "textless",
+    "textlessop",
+    "textlessed",
+    "promotionalvideo",
+    "promotionalvideos",
+    "preview",
+    "previews",
+    "webpreview",
+    "webpreviews",
+    "sponsor",
+    "sponsors",
+];
+
+const SUPPLEMENTARY_NUMBERABLE_NAMES: &[&str] = &[
+    "sp", "sps", "special", "specials", "extra", "extras", "ova", "ovas", "oad", "oads", "ona",
+    "onas", "ncop", "nced", "pv", "pvs", "cm", "cms",
+];
+
+const SUPPLEMENTARY_CJK_NAMES: &[&str] = &[
+    "特典",
+    "特典映像",
+    "特典影像",
+    "特典动画",
+    "特典動畫",
+    "映像特典",
+    "影像特典",
+    "特别篇",
+    "特別篇",
+    "番外篇",
+    "番外",
+    "附加内容",
+    "附加內容",
+    "花絮",
+    "幕后",
+    "幕後",
+    "幕后花絮",
+    "幕後花絮",
+    "无字幕op",
+    "无字幕ed",
+    "無字幕op",
+    "無字幕ed",
+    "预告",
+    "預告",
+    "预告片",
+    "預告片",
+];
+
+fn matches_supplementary_single(compact: &str) -> bool {
     if compact.is_empty() {
         return false;
     }
-
-    const EXACT_NAMES: &[&str] = &[
-        "sp",
-        "sps",
-        "special",
-        "specials",
-        "extra",
-        "extras",
-        "bonus",
-        "bonuses",
-        "bonusdisc",
-        "bonusdiscs",
-        "bonusfeature",
-        "bonusfeatures",
-        "ova",
-        "ovas",
-        "oad",
-        "oads",
-        "ona",
-        "onas",
-        "omake",
-        "ncop",
-        "nced",
-        "ncoped",
-        "ncedop",
-        "ncopnced",
-        "ncedncop",
-        "pv",
-        "pvs",
-        "cm",
-        "cms",
-        "trailer",
-        "trailers",
-        "menu",
-        "menus",
-        "creditless",
-        "creditlessop",
-        "creditlessed",
-        "promotionalvideo",
-        "promotionalvideos",
-        "preview",
-        "previews",
-        "sponsor",
-        "sponsors",
-    ];
-    if EXACT_NAMES.contains(&compact.as_str()) {
+    if SUPPLEMENTARY_EXACT_NAMES.contains(&compact) || is_cds_exact_compact(compact) {
         return true;
     }
-
-    const NUMBERABLE_NAMES: &[&str] = &[
-        "sp", "sps", "special", "specials", "extra", "extras", "ova", "ovas", "oad", "oads", "ona",
-        "onas", "ncop", "nced", "pv", "pvs", "cm", "cms",
-    ];
-    if NUMBERABLE_NAMES.iter().any(|prefix| {
+    let has_number_or_vol_suffix = |suffix: &str| {
+        !suffix.is_empty()
+            && (suffix.chars().all(|c| c.is_ascii_digit())
+                || suffix
+                    .strip_prefix("vol")
+                    .or_else(|| suffix.strip_prefix("part"))
+                    .is_some_and(|number| {
+                        !number.is_empty() && number.chars().all(|c| c.is_ascii_digit())
+                    }))
+    };
+    if SUPPLEMENTARY_NUMBERABLE_NAMES.iter().any(|prefix| {
         compact
             .strip_prefix(prefix)
-            .is_some_and(|suffix| !suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_digit()))
+            .is_some_and(has_number_or_vol_suffix)
     }) {
         return true;
     }
-
-    const CJK_NAMES: &[&str] = &[
-        "特典",
-        "特典映像",
-        "映像特典",
-        "影像特典",
-        "特别篇",
-        "特別篇",
-        "番外篇",
-        "番外",
-        "附加内容",
-        "附加內容",
-        "花絮",
-    ];
-    CJK_NAMES.iter().any(|name| {
+    SUPPLEMENTARY_CJK_NAMES.iter().any(|name| {
         compact == *name
             || compact.strip_prefix(name).is_some_and(|suffix| {
                 suffix.chars().all(|c| c.is_ascii_digit())
@@ -2058,6 +2415,73 @@ pub fn is_supplementary_directory_name(folder_name: &str) -> bool {
                     })
             })
     })
+}
+
+fn is_numberable_token(compact: &str) -> bool {
+    SUPPLEMENTARY_NUMBERABLE_NAMES.contains(&compact) || SUPPLEMENTARY_CJK_NAMES.contains(&compact)
+}
+
+fn is_companion_token(compact: &str) -> bool {
+    matches!(
+        compact,
+        "op" | "ed" | "scan" | "scans" | "bk" | "booklet" | "booklets"
+    )
+}
+
+fn matches_supplementary_variant(variant: &str) -> bool {
+    let compact = compact_alnum(variant);
+    if matches_supplementary_single(&compact) {
+        return true;
+    }
+    // Conservative multi-token compounds (e.g. "SP & Menu", "OP & ED", "SPs 01-06", "SPs Vol.1").
+    // Never accept trailing bare numbers unless following an explicit numberable supplementary stem
+    // so "CDs 2" or "OVA Collection 2024" never false-match.
+    let raw_parts = variant
+        .split(|c: char| {
+            matches!(c, '&' | '+' | '/' | ',' | '、' | '·' | '|' | '-' | '~') || c.is_whitespace()
+        })
+        .map(compact_alnum)
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>();
+    if raw_parts.len() < 2 || raw_parts.len() > 6 {
+        return false;
+    }
+    let mut strong_count = 0usize;
+    let mut op_ed_pair = 0usize;
+    for (idx, part) in raw_parts.iter().enumerate() {
+        if matches_supplementary_single(part) {
+            strong_count += 1;
+        } else if is_companion_token(part) {
+            if matches!(part.as_str(), "op" | "ed") {
+                op_ed_pair += 1;
+            }
+        } else if (part.chars().all(|c| c.is_ascii_digit())
+            || part
+                .strip_prefix("vol")
+                .or_else(|| part.strip_prefix("part"))
+                .is_some_and(|rest| rest.is_empty() || rest.chars().all(|c| c.is_ascii_digit())))
+            && idx > 0
+            && (is_numberable_token(&raw_parts[idx - 1])
+                || (raw_parts[idx - 1].chars().all(|c| c.is_ascii_digit())
+                    && idx >= 2
+                    && is_numberable_token(&raw_parts[idx - 2])))
+        {
+            // Range/vol token attached to a numberable supplementary stem.
+        } else {
+            return false;
+        }
+    }
+    strong_count > 0 || op_ed_pair >= 2
+}
+
+pub fn is_supplementary_directory_name(folder_name: &str) -> bool {
+    // Music extras are supplementary, but numbered CD1 / CD 01 remain main discs.
+    if is_cds_directory_name(folder_name) {
+        return true;
+    }
+    directory_name_variants(folder_name)
+        .iter()
+        .any(|variant| matches_supplementary_variant(variant))
 }
 
 /// Returns whether an automatically classified child is structural supplementary content of a
@@ -2102,6 +2526,248 @@ mod tests {
     use super::*;
     use std::sync::atomic::AtomicBool;
     use tempfile::TempDir;
+
+    #[test]
+    fn round7_directory_completion_isolated_from_unrelated_read_errors() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("Library");
+        let sps = path.join("SPs");
+        fs::create_dir_all(&sps).unwrap();
+        fs::write(sps.join("NCOP.MKV"), b"synthetic video").unwrap();
+        let db = Database::new(temp.path().join("index.sqlite"));
+        db.migrate().unwrap();
+        let root = db.add_root(&path, None).unwrap();
+        let c = db.connect().unwrap();
+        let control = scan_control("round7-local-errors", &root);
+        let canonical = fs::canonicalize(&path).unwrap();
+        let extensions = crate::db::default_video_extensions().into_iter().collect();
+        let mut visited = HashSet::new();
+        let DirectoryScanStart::Entered(finish, children) = begin_directory(
+            None,
+            &c,
+            root.id,
+            &sps,
+            &sps,
+            &canonical,
+            None,
+            &control,
+            &extensions,
+            "new",
+            &mut visited,
+        )
+        .unwrap() else {
+            panic!("healthy SP directory must enter")
+        };
+        assert!(children.is_empty());
+        assert!(finish.files_complete);
+        let id = finish.node_id;
+        let missing = path.join("unrelated missing directory");
+        assert!(matches!(
+            begin_directory(
+                None,
+                &c,
+                root.id,
+                &missing,
+                &missing,
+                &canonical,
+                None,
+                &control,
+                &extensions,
+                "new",
+                &mut visited,
+            )
+            .unwrap(),
+            DirectoryScanStart::Failed
+        ));
+        assert_eq!(control.progress().errors, 1);
+        finish_directory(&c, &control, "new", finish, true).unwrap();
+        let counts = || {
+            c.query_row(
+                "SELECT direct_video_count,total_video_count FROM nodes WHERE id=?1",
+                [id],
+                |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)),
+            )
+            .unwrap()
+        };
+        assert_eq!(counts(), (1, 1));
+
+        // A real failure inside this branch preserves old counts and unread rows.
+        let old_child = upsert_node(
+            &c,
+            root.id,
+            Some(id),
+            &sps.join("old child").to_string_lossy(),
+            "old child",
+            "old",
+        )
+        .unwrap();
+        finish_directory(
+            &c,
+            &control,
+            "partial",
+            DirectoryScanFinish {
+                node_id: id,
+                parent_node_id: None,
+                direct_count: 0,
+                previous_counts: (1, 0, 1),
+                has_bdmv: false,
+                files_complete: true,
+            },
+            false,
+        )
+        .unwrap();
+        assert_eq!(counts(), (1, 1));
+        assert!(c
+            .query_row("SELECT id FROM nodes WHERE id=?1", [old_child], |r| r
+                .get::<_, i64>(0))
+            .is_ok());
+        assert_eq!(fs::read(sps.join("NCOP.MKV")).unwrap(), b"synthetic video");
+    }
+
+    #[test]
+    fn round7_supplement_scan_covers_nested_bdmv_and_extension_case() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("Library");
+        let work = path.join("[Nekomoe kissaten&VCB-Studio] Synthetic Animation");
+        let names = [
+            "SPs",
+            "Specials",
+            "NCOP",
+            "NCED",
+            "Menu",
+            "PV",
+            "CM",
+            "映像特典",
+        ];
+        for name in names {
+            let folder = work.join(name).join("nested");
+            fs::create_dir_all(&folder).unwrap();
+            fs::write(folder.join("Extra.MkV"), b"synthetic extra").unwrap();
+        }
+        fs::write(work.join("Episode01.MP4"), b"synthetic episode").unwrap();
+        let stream = work.join("SPs/Disc/BDMV/STREAM");
+        fs::create_dir_all(&stream).unwrap();
+        fs::write(stream.join("00001.M2TS"), b"synthetic stream").unwrap();
+        fs::write(work.join("SPs/Commentary.mka"), b"synthetic audio").unwrap();
+        fs::write(work.join("SPs/Special.ass"), b"synthetic subtitle").unwrap();
+        let db = Database::new(temp.path().join("index.sqlite"));
+        db.migrate().unwrap();
+        let root = db.add_root(&path, None).unwrap();
+        let control = scan_control("round7-nested", &root);
+        db.start_scan_run(&control.scan_id, root.id).unwrap();
+        run_scan(
+            None,
+            &db,
+            vec![ScanTarget {
+                root: root.clone(),
+                path,
+                parent_node_id: None,
+            }],
+            &control,
+            &crate::db::default_video_extensions(),
+        );
+        assert_eq!(control.progress().status, ScanStatus::Completed);
+        assert_eq!(control.progress().errors, 0);
+        assert_eq!(control.progress().videos_found, 10);
+        let c = db.connect().unwrap();
+        let id: i64 = c
+            .query_row(
+                "SELECT id FROM nodes WHERE absolute_path=?1",
+                [work.to_string_lossy()],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let detail = crate::works::node_detail(&db, id).unwrap();
+        assert_eq!(detail.node.total_video_count, 10);
+        assert_eq!(detail.media_files.len(), 1);
+        assert_eq!(detail.nested_media_files.len(), 9);
+        assert_eq!(detail.sp_files.len(), 2);
+        assert_eq!(detail.sp_folders.len(), 9);
+        assert_eq!(detail.expanded_folder_ids.len(), names.len());
+        assert_eq!(
+            detail
+                .video_sections
+                .iter()
+                .filter(|r| r.section == crate::video_presentation::VideoSection::Sps)
+                .count(),
+            9
+        );
+        for name in names {
+            assert_eq!(
+                fs::read(work.join(name).join("nested/Extra.MkV")).unwrap(),
+                b"synthetic extra"
+            );
+        }
+    }
+
+    #[test]
+    fn round7_restoring_extensions_reindexes_unchanged_supplement_files() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("Library");
+        let work = path.join("Show");
+        fs::create_dir_all(work.join("SPs")).unwrap();
+        fs::write(work.join("01.MKV"), b"episode").unwrap();
+        fs::write(work.join("SPs/NCOP.MKV"), b"special").unwrap();
+        let db = Database::new(temp.path().join("index.sqlite"));
+        db.migrate().unwrap();
+        let root = db.add_root(&path, None).unwrap();
+        let cache = temp.path().join("cache");
+        let mut settings = db.get_settings(&cache).unwrap();
+        settings
+            .video_extensions
+            .retain(|extension| extension != "mkv");
+        db.update_settings(&settings, &cache).unwrap();
+        let scan = |name: &str, extensions: &[String]| {
+            db.start_scan_run(name, root.id).unwrap();
+            let control = scan_control(name, &root);
+            control.progress.lock().unwrap().background = true;
+            run_scan(
+                None,
+                &db,
+                vec![ScanTarget {
+                    root: root.clone(),
+                    path: path.clone(),
+                    parent_node_id: None,
+                }],
+                &control,
+                extensions,
+            );
+            assert_eq!(control.progress().errors, 0);
+            control.progress()
+        };
+        scan("round7-no-mkv", &settings.video_extensions);
+        assert_eq!(
+            scan("round7-unchanged", &settings.video_extensions).folders_scanned,
+            0
+        );
+        let c = db.connect().unwrap();
+        let id: i64 = c
+            .query_row(
+                "SELECT id FROM nodes WHERE absolute_path=?1",
+                [work.to_string_lossy()],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(db.get_node(id).unwrap().total_video_count, 0);
+        settings.video_extensions = crate::db::default_video_extensions();
+        db.update_settings(&settings, &cache).unwrap();
+        assert!(scan("round7-restored", &settings.video_extensions).folders_scanned > 0);
+        let detail = crate::works::node_detail(&db, id).unwrap();
+        assert_eq!(detail.node.total_video_count, 2);
+        assert_eq!(detail.nested_media_files.len(), 1);
+        assert_eq!(
+            detail
+                .video_sections
+                .iter()
+                .filter(|row| row.section == crate::video_presentation::VideoSection::Sps)
+                .count(),
+            1
+        );
+        assert!(detail.resource_files.is_empty());
+        assert!(detail.sp_files.is_empty());
+        assert_eq!(fs::read(work.join("01.MKV")).unwrap(), b"episode");
+        assert_eq!(fs::read(work.join("SPs/NCOP.MKV")).unwrap(), b"special");
+    }
 
     #[test]
     fn partial_comic_scans_can_match_readable_nodes_but_failed_scans_cannot() {
@@ -2214,10 +2880,57 @@ mod tests {
     }
 
     #[test]
+    fn cds_names_are_supplementary_but_never_numbered_main_discs() {
+        for name in [
+            "CD",
+            "CDs",
+            "CDs [FLAC]",
+            "[CDs]",
+            "OST",
+            "OST [Hi-Res]",
+            "OSTs",
+            "Soundtrack",
+            "Soundtrack (Lossless)",
+            "Soundtracks",
+            "CharaSong",
+            "Chara Songs",
+            "DramaCD",
+            "Drama CDs",
+            "特典CD",
+            "音乐特典",
+            "原声集",
+        ] {
+            assert!(is_cds_directory_name(name), "{name}");
+            assert!(is_supplementary_directory_name(name), "{name}");
+            assert!(is_automatic_supplementary_child(name, false, 12), "{name}");
+            assert!(!is_automatic_supplementary_child(name, true, 12), "{name}");
+            assert!(!is_automatic_supplementary_child(name, false, 0), "{name}");
+        }
+        for name in [
+            "CD1",
+            "CD 01",
+            "Disc 1",
+            "CDs 2",
+            "CDs 2 [FLAC]",
+            "Soundtrack Story",
+            "OSTrich",
+        ] {
+            assert!(!is_cds_directory_name(name), "{name}");
+            assert!(!is_supplementary_directory_name(name), "{name}");
+        }
+    }
+
+    #[test]
     fn supplementary_names_are_conservative_and_case_insensitive() {
         for name in [
             "SP",
             "sp 02",
+            "SPs [BD]",
+            "[VCB-Studio] SPs",
+            "Specials (BDRip 1080p)",
+            "[SPs]",
+            "SPs 01-06",
+            "SPs Vol.1",
             "Specials",
             "Specials 02",
             "EXTRAS",
@@ -2227,11 +2940,16 @@ mod tests {
             "NCOP",
             "NCED 02",
             "NCOP & NCED",
+            "OP & ED",
+            "SP & Menu",
+            "PV & CM",
             "Menu",
+            "BD Menu",
             "Creditless OP",
             "Promotional Videos",
             "Previews",
             "映像特典",
+            "映像特典 [BD]",
             "影像特典 Vol. 2",
             "番外篇",
             "花絮",
@@ -2243,6 +2961,7 @@ mod tests {
             "Disc 1",
             "作品 SPY×FAMILY",
             "OVA Collection 2024",
+            "Another Show [BD]",
             "特典作品全集",
             "Another Show",
             "Movie",

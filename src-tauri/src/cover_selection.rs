@@ -277,3 +277,151 @@ pub(crate) fn book_manual(db: &Database, id: i64) -> AppResult<Option<PathBuf>> 
     }
     Ok(path.map(PathBuf::from))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn isolated(name: &str) -> bool {
+        const MARKER: &str = "M2SHELF_CODEX_COVER_TICKET_TEST";
+        if std::env::var(MARKER).as_deref() == Ok(name) {
+            return true;
+        }
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", name, "--nocapture"])
+            .env(MARKER, name)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        false
+    }
+    fn fixture() -> (tempfile::TempDir, Database) {
+        let temp = tempfile::tempdir().unwrap();
+        let db = Database::new(temp.path().join("synthetic.sqlite"));
+        db.migrate().unwrap();
+        let c = db.connect().unwrap();
+        let root = temp.path().join("synthetic-media");
+        c.execute("INSERT INTO library_roots(id,path,display_name,media_kind) VALUES(1,?1,'Synthetic','COMIC')", [root.to_string_lossy()]).unwrap();
+        c.execute("INSERT INTO nodes(id,library_root_id,parent_node_id,absolute_path,folder_name,display_name,node_type) VALUES(1,1,NULL,?1,'Synthetic','Synthetic','CONTAINER'),(2,1,1,?2,'Work','Work','WORK')", params![root.to_string_lossy(),root.join("Work").to_string_lossy()]).unwrap();
+        c.execute("INSERT INTO comic_books(id,node_id,source_path,source_kind,display_name,modified_at,page_count,revision) VALUES(2,2,?1,'IMAGE_FOLDER','Book','synthetic-stamp',1,'revision-1')", [root.join("Work").to_string_lossy()]).unwrap();
+        drop(c);
+        (temp, db)
+    }
+    struct Tickets(Vec<String>);
+    impl Tickets {
+        fn add(&mut self, db: &Database, target: Target) -> String {
+            let token = begin(db, target).unwrap();
+            self.0.push(token.clone());
+            token
+        }
+    }
+    impl Drop for Tickets {
+        fn drop(&mut self) {
+            for token in &self.0 {
+                discard(token);
+            }
+        }
+    }
+
+    #[test]
+    fn codex_cover_tickets_enforce_capacity_expiry_and_release() {
+        if !isolated(
+            "cover_selection::tests::codex_cover_tickets_enforce_capacity_expiry_and_release",
+        ) {
+            return;
+        }
+        let (_temp, db) = fixture();
+        let mut tokens = Tickets(Vec::new());
+        for _ in 0..8 {
+            tokens.add(&db, Target::Node(2));
+        }
+        assert_eq!(
+            begin(&db, Target::Node(2)).unwrap_err(),
+            "COVER_SELECTION_BUSY"
+        );
+        let expired = tokens.0[0].clone();
+        TICKETS.lock().unwrap().get_mut(&expired).unwrap().at =
+            Instant::now() - Duration::from_secs(301);
+        assert_eq!(
+            ticket(&db, &expired).err().unwrap(),
+            "COVER_SELECTION_EXPIRED"
+        );
+        let replacement = tokens.add(&db, Target::Node(2));
+        assert!(ticket(&db, &replacement).is_ok());
+        assert!(!TICKETS.lock().unwrap().contains_key(&expired));
+        discard(&replacement);
+        assert_eq!(
+            ticket(&db, &replacement).err().unwrap(),
+            "COVER_SELECTION_EXPIRED"
+        );
+        tokens.add(&db, Target::Node(2));
+        drop(tokens);
+        assert!(TICKETS.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn codex_cover_ticket_rejects_other_database_binding_and_cover_changes() {
+        if !isolated("cover_selection::tests::codex_cover_ticket_rejects_other_database_binding_and_cover_changes") { return; }
+        let (_temp, db) = fixture();
+        let (_other_temp, other) = fixture();
+        let mut tokens = Tickets(Vec::new());
+        let token = tokens.add(&db, Target::Node(2));
+        assert_eq!(
+            ticket(&other, &token).err().unwrap(),
+            "COVER_SELECTION_EXPIRED"
+        );
+        assert!(ticket(&db, &token).is_ok());
+        db.connect().unwrap().execute("INSERT INTO metadata_bindings(node_id,provider,provider_subject_id,provider_subject_type,provider_title) VALUES(2,'BANGUMI',123,1,'Synthetic')", []).unwrap();
+        assert_eq!(
+            ticket(&db, &token).err().unwrap(),
+            "COVER_SELECTION_EXPIRED"
+        );
+        let token = tokens.add(&db, Target::Node(2));
+        db.connect().unwrap().execute("UPDATE nodes SET cover_source='MANUAL',cover_cache_path='synthetic-cover.png' WHERE id=2", []).unwrap();
+        assert_eq!(
+            ticket(&db, &token).err().unwrap(),
+            "COVER_SELECTION_EXPIRED"
+        );
+    }
+
+    #[test]
+    fn codex_cover_tickets_keep_node_and_book_targets_distinct() {
+        if !isolated(
+            "cover_selection::tests::codex_cover_tickets_keep_node_and_book_targets_distinct",
+        ) {
+            return;
+        }
+        let (_temp, db) = fixture();
+        let mut tokens = Tickets(Vec::new());
+        let node = tokens.add(&db, Target::Node(2));
+        let book = tokens.add(&db, Target::Book(2));
+        assert_eq!(ticket(&db, &node).unwrap().target, Target::Node(2));
+        assert_eq!(ticket(&db, &book).unwrap().target, Target::Book(2));
+        assert_ne!(
+            ticket(&db, &node).unwrap().fingerprint,
+            ticket(&db, &book).unwrap().fingerprint
+        );
+        assert_eq!(
+            embedded_preview(&db, &node).unwrap_err(),
+            "COVER_SELECTION_INVALID"
+        );
+        db.connect().unwrap().execute("INSERT INTO book_manual_covers(book_id,cover_cache_path) VALUES(2,'synthetic-book-cover.png')", []).unwrap();
+        assert_eq!(ticket(&db, &book).err().unwrap(), "COVER_SELECTION_EXPIRED");
+        assert!(ticket(&db, &node).is_ok());
+        let book = tokens.add(&db, Target::Book(2));
+        db.connect()
+            .unwrap()
+            .execute(
+                "UPDATE comic_books SET revision='revision-2' WHERE id=2",
+                [],
+            )
+            .unwrap();
+        assert_eq!(ticket(&db, &book).err().unwrap(), "COVER_SELECTION_EXPIRED");
+        assert!(ticket(&db, &node).is_ok());
+    }
+}

@@ -1,0 +1,27 @@
+/* Measured viewport coordinates override the original toolbar-relative disclosure. */
+.collection-filter-disclosure > .collection-filter-panel { position: fixed; right: auto; bottom: auto; overflow: auto; overscroll-behavior: contain; }
+.select-popup { overscroll-behavior: contain; }
+.select-option { flex-shrink: 0; overflow-wrap: anywhere; }
+.select-option > span:first-child { min-width: 0; }
+
+/* Conservative tail thresholds: first-screen notes/images keep ordinary layout.
+   Gallery cards retain their image DOM and URLs; poster frames are untouched. */
+@media (max-height: 1200px) and (max-width: 2560px) {
+  @supports (content-visibility: auto) {
+    .studio-note-list > .studio-note-row:nth-child(n + 25) {
+      content-visibility: auto;
+      contain-intrinsic-size: auto none auto 110px;
+    }
+    .studio-note-list > .studio-note-row:nth-child(n + 25):focus-within {
+      content-visibility: visible;
+    }
+  }
+}
+/* The gallery has a bounded 48-item page. At narrow/normal desktop sizes,
+   even the compact layout's final twelve cards are strictly below the fold. */
+@media (max-height: 900px) and (max-width: 1280px) {
+  @supports (content-visibility: auto) {
+    .studio-gallery-grid > .studio-image-card:nth-child(n + 37) { content-visibility: auto; contain-intrinsic-size: auto none auto 280px; }
+    .studio-gallery-grid > .studio-image-card:nth-child(n + 37):focus-within { content-visibility: visible; }
+  }
+}

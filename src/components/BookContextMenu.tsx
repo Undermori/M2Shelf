@@ -1,6 +1,7 @@
 import {CollectionStatusControl} from '../lib/collectionState';
 import type {ReactNode} from 'react';
-import {useEffect,useRef} from 'react';
+import {useRef} from 'react';
+import {useContextPanel} from '../hooks/useContextPanel';
 import type {ComicBook} from '../types/comic';
 import {useI18n} from '../lib/i18n';
 import {Icon} from './Icon';
@@ -10,7 +11,6 @@ export function BookContextMenu({book,x,y,onClose,onReveal,onRemoveRecent}:{book
  return <SourceContextMenu title={book.displayName} x={x} y={y} onClose={onClose} onReveal={()=>onReveal(book)} onRemoveRecent={onRemoveRecent}><CollectionStatusControl target={{kind:"BOOK",id:book.id}}/></SourceContextMenu>;
 }
 export function SourceContextMenu({title,x,y,onClose,onReveal,onOpen,onRemoveRecent,children}:{title:string;x:number;y:number;onClose:()=>void;onReveal?:()=>void;onOpen?:()=>void;onRemoveRecent?:()=>void;children?:ReactNode}) {
- const {t}=useI18n();const menu=useRef<HTMLDivElement>(null);const close=useRef(onClose);close.current=onClose;
- useEffect(()=>{const previous=document.activeElement as HTMLElement|null;menu.current?.querySelector('button')?.focus();const pointer=(event:PointerEvent)=>{if(!menu.current?.contains(event.target as Node))close.current();};const key=(event:KeyboardEvent)=>{if(event.key==='Escape'){event.preventDefault();close.current();}};window.addEventListener('pointerdown',pointer);window.addEventListener('keydown',key);return()=>{window.removeEventListener('pointerdown',pointer);window.removeEventListener('keydown',key);previous?.focus();};},[]);
- return <div ref={menu} className="context-menu" role="menu" onPointerDown={event=>event.stopPropagation()} style={{left:Math.max(8,Math.min(x,window.innerWidth-245)),top:Math.max(8,Math.min(y,window.innerHeight-(children?220:100)))}}><p>{title}</p>{children}{onRemoveRecent&&<button type="button" role="menuitem" onClick={()=>{onRemoveRecent();onClose();}}><Icon name="close"/>{t("recent.remove")}</button>}{onOpen&&<button type="button" role="menuitem" onClick={()=>{onOpen();onClose();}}><Icon name="folder-open"/>{t('common.open')}</button>}{onReveal&&<button type="button" role="menuitem" onClick={()=>{onReveal();onClose();}}><Icon name="external"/>{t('files.reveal')}</button>}</div>;
+ const {t}=useI18n();const menu=useRef<HTMLDivElement>(null);const position=useContextPanel(menu,x,y,onClose);
+ return <div ref={menu} className="context-menu" role="group" aria-label={title} onPointerDown={event=>event.stopPropagation()} style={position}><p>{title}</p>{children}{onRemoveRecent&&<button type="button" onClick={()=>{onRemoveRecent();onClose();}}><Icon name="close"/>{t("recent.remove")}</button>}{onOpen&&<button type="button" onClick={()=>{onOpen();onClose();}}><Icon name="folder-open"/>{t('common.open')}</button>}{onReveal&&<button type="button" onClick={()=>{onReveal();onClose();}}><Icon name="external"/>{t('files.reveal')}</button>}</div>;
 }

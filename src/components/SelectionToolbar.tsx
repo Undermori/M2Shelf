@@ -32,7 +32,7 @@ export function SelectionToolbar({ selectedCount, visibleCount, busy, onSelectAl
         {onFavorites && <button className="button secondary" disabled={busy || !hasSelection} onClick={onFavorites} type="button"><Icon name="bookmark" />{t("selection.addToFavorites")}</button>}
         {onRemoveFromFavorite && <button className="button secondary" disabled={busy || !hasSelection} onClick={onRemoveFromFavorite} type="button"><Icon name="close" />{t("selection.removeFromFavorite")}</button>}
         {onMore && <button className="button secondary" disabled={busy || !hasSelection} onClick={onMore} type="button"><Icon name="more" />{t("selection.moreActions")}</button>}
-        {onRematch && <button className="button primary" disabled={busy || !hasSelection} onClick={onRematch} type="button"><Icon name="bangumi" />{busy ? t("selection.matching") : t("selection.rematchSelected")}</button>}
+        {onRematch && <button className="button primary" disabled={busy || !hasSelection} onClick={onRematch} type="button"><Icon name="match" />{busy ? t("selection.matching") : t("selection.rematchSelected")}</button>}
         <button className="button ghost" disabled={busy} onClick={onExit} type="button"><Icon name="close" />{t("selection.exit")}</button>
       </div>
     </div>

@@ -311,7 +311,8 @@ fn active_cover_cache_directory(state: &AppState) -> AppResult<PathBuf> {
 
 fn active_cover_cache_directory_for(database: &Database, default: &Path) -> AppResult<PathBuf> {
     let configured = database.poster_cache_root(default)?;
-    let validated = cache::validate_cache_location(&configured, database.library_paths()?)?;
+    let validated =
+        cache::validate_cache_location(&configured, database.read_only_source_paths()?)?;
     if same_path(&validated, default) {
         cache::ensure_directories(&validated)?;
     } else {
@@ -325,7 +326,8 @@ fn prepare_cover_cache_directory(state: &AppState, path: &str) -> AppResult<Path
     if path.is_empty() {
         return Err("封面缓存目录不能为空。".into());
     }
-    let validated = cache::validate_cache_location(Path::new(path), library_root_paths(state)?)?;
+    let validated =
+        cache::validate_cache_location(Path::new(path), state.database.read_only_source_paths()?)?;
     if same_path(&validated, &state.default_cover_cache_dir) {
         cache::ensure_directories(&validated)?;
     } else {
@@ -755,9 +757,10 @@ pub async fn update_comic_progress(
     text_position: Option<crate::comics::TextPosition>,
     state: State<'_, AppState>,
 ) -> AppResult<()> {
+    crate::comic_reader::require_write_revision(expected_revision.as_deref())?;
     let database = state.database.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        crate::comic_reader::progress_with_position_at_revision(
+        comic_progress_command(
             &database,
             comic_book_id,
             page_index,
@@ -780,9 +783,10 @@ pub async fn add_comic_bookmark(
     text_position: Option<crate::comics::TextPosition>,
     state: State<'_, AppState>,
 ) -> AppResult<Vec<i64>> {
+    crate::comic_reader::require_write_revision(expected_revision.as_deref())?;
     let database = state.database.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        crate::comic_reader::bookmark_with_position_at_revision(
+        comic_bookmark_command(
             &database,
             comic_book_id,
             page_index,
@@ -801,18 +805,45 @@ pub async fn remove_comic_bookmark(
     expected_revision: Option<String>,
     state: State<'_, AppState>,
 ) -> AppResult<Vec<i64>> {
+    crate::comic_reader::require_write_revision(expected_revision.as_deref())?;
     let database = state.database.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        crate::comic_reader::bookmark_at_revision(
+        comic_bookmark_command(
             &database,
             comic_book_id,
             page_index,
             false,
             expected_revision.as_deref(),
+            None,
         )
     })
     .await
     .map_err(|_| "COMIC_BOOKMARK_FAILED".to_string())?
+}
+
+fn comic_progress_command(
+    database: &Database,
+    id: i64,
+    index: i64,
+    revision: Option<&str>,
+    position: Option<crate::comics::TextPosition>,
+) -> AppResult<()> {
+    crate::comic_reader::require_write_revision(revision)?;
+    crate::comic_reader::progress_with_position_at_revision(database, id, index, revision, position)
+}
+
+fn comic_bookmark_command(
+    database: &Database,
+    id: i64,
+    index: i64,
+    add: bool,
+    revision: Option<&str>,
+    position: Option<crate::comics::TextPosition>,
+) -> AppResult<Vec<i64>> {
+    crate::comic_reader::require_write_revision(revision)?;
+    crate::comic_reader::bookmark_with_position_at_revision(
+        database, id, index, add, revision, position,
+    )
 }
 
 #[tauri::command]
@@ -1392,12 +1423,12 @@ pub fn set_node_type(
     node_type: NodeType,
     state: State<'_, AppState>,
 ) -> AppResult<MediaNode> {
-    state.database.set_node_type(node_id, node_type)
+    crate::poster_resource::mutate_visibility(|| state.database.set_node_type(node_id, node_type))
 }
 
 #[tauri::command]
 pub fn reset_node_type(node_id: i64, state: State<'_, AppState>) -> AppResult<MediaNode> {
-    state.database.reset_node_type(node_id)
+    crate::poster_resource::mutate_visibility(|| state.database.reset_node_type(node_id))
 }
 
 #[tauri::command]
@@ -1406,7 +1437,9 @@ pub fn batch_set_node_type(
     node_type: NodeType,
     state: State<'_, AppState>,
 ) -> AppResult<BatchMutationResult> {
-    state.database.batch_set_node_type(&node_ids, node_type)
+    crate::poster_resource::mutate_visibility(|| {
+        state.database.batch_set_node_type(&node_ids, node_type)
+    })
 }
 
 #[tauri::command]
@@ -1414,7 +1447,7 @@ pub fn batch_reset_node_type(
     node_ids: Vec<i64>,
     state: State<'_, AppState>,
 ) -> AppResult<BatchMutationResult> {
-    state.database.batch_reset_node_type(&node_ids)
+    crate::poster_resource::mutate_visibility(|| state.database.batch_reset_node_type(&node_ids))
 }
 
 #[tauri::command]
@@ -2134,10 +2167,27 @@ pub fn update_collection_sort_preference(
 }
 
 #[tauri::command]
+pub fn get_workbench_sort_preferences(
+    state: State<'_, AppState>,
+) -> AppResult<crate::models::WorkbenchSortPreferences> {
+    state.database.get_workbench_sort_preferences()
+}
+
+#[tauri::command]
+pub fn update_workbench_sort_preference(
+    update: crate::models::WorkbenchSortUpdate,
+    state: State<'_, AppState>,
+) -> AppResult<crate::models::WorkbenchSortPreferences> {
+    state.database.update_workbench_sort_preference(update)
+}
+
+#[tauri::command]
 pub fn update_settings(
     settings: AppSettings,
     state: State<'_, AppState>,
 ) -> AppResult<AppSettings> {
+    // Serialize cache location changes with importing read-only studio sources.
+    let _lifecycle = lock_scan_lifecycle(&state);
     settings.validate_path_lengths()?;
     if !matches!(
         settings.language.as_str(),
@@ -2238,7 +2288,8 @@ fn launch_media_and_record_watch<F>(
 where
     F: FnOnce(&Path, &Path) -> AppResult<()>,
 {
-    // The process is launched first. A validation or spawn failure must never create history.
+    crate::mpv_ipc::validate_launch_media(database, media)?;
+    // Record history only after validation and a successful process launch.
     launch(executable, Path::new(&media.absolute_path))?;
     database.record_node_watched(media.node_id)
 }
@@ -2827,6 +2878,51 @@ mod tests {
     }
 
     #[test]
+    fn reader_write_commands_require_current_revision_without_mutating_on_rejection() {
+        let temp = tempfile::tempdir().unwrap();
+        let database = Database::new(temp.path().join("reader-command.sqlite"));
+        database.migrate().unwrap();
+        let c = database.connect().unwrap();
+        c.execute("INSERT INTO library_roots(id,path,display_name,media_kind) VALUES(1,?1,'Synthetic','COMIC')", [temp.path().join("synthetic-source").to_string_lossy()]).unwrap();
+        c.execute("INSERT INTO nodes(id,library_root_id,absolute_path,folder_name,display_name,node_type) VALUES(1,1,'synthetic-book','Synthetic','Synthetic','WORK')", []).unwrap();
+        c.execute("INSERT INTO comic_books(id,node_id,source_path,source_kind,display_name,file_size,modified_at,page_count,revision) VALUES(1,1,'synthetic-book','IMAGE_FOLDER','Synthetic',1,'2026-01-01T00:00:00Z',2,'old-session')", []).unwrap();
+        comic_progress_command(&database, 1, 1, Some("old-session"), None).unwrap();
+        comic_bookmark_command(&database, 1, 1, true, Some("old-session"), None).unwrap();
+        c.execute("UPDATE comic_books SET revision='rescanned' WHERE id=1", [])
+            .unwrap();
+        for revision in [None, Some(""), Some("  "), Some("old-session")] {
+            assert_eq!(
+                comic_progress_command(&database, 1, 0, revision, None).unwrap_err(),
+                "COMIC_PAGE_CHANGED"
+            );
+            assert_eq!(
+                comic_bookmark_command(&database, 1, 0, true, revision, None).unwrap_err(),
+                "COMIC_PAGE_CHANGED"
+            );
+            assert_eq!(
+                comic_bookmark_command(&database, 1, 1, false, revision, None).unwrap_err(),
+                "COMIC_PAGE_CHANGED"
+            );
+        }
+        assert_eq!(
+            c.query_row(
+                "SELECT last_page_index FROM comic_reading_progress WHERE comic_book_id=1",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+            1
+        );
+        assert_eq!(crate::comic_reader::bookmarks(&database, 1).unwrap(), [1]);
+        comic_progress_command(&database, 1, 0, Some("rescanned"), None).unwrap();
+        assert!(
+            comic_bookmark_command(&database, 1, 1, false, Some("rescanned"), None)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn failed_player_launch_never_creates_watch_history() {
         let temp = TempDir::new().unwrap();
         let root_path = temp.path().join("library");
@@ -2863,6 +2959,10 @@ mod tests {
             codec: None,
             last_seen_at: "2026-08-22T00:00:00Z".into(),
         };
+        database.connect().unwrap().execute(
+            "INSERT INTO media_files(id,node_id,absolute_path,file_name,extension,file_size,modified_at) VALUES(?1,?2,?3,?4,?5,?6,?7)",
+            params![media.id, media.node_id, media.absolute_path, media.file_name, media.extension, media.file_size, media.modified_at],
+        ).unwrap();
 
         let error =
             launch_media_and_record_watch(&database, &media, Path::new("player.exe"), |_, _| {
@@ -2878,6 +2978,63 @@ mod tests {
             database.list_recently_watched().unwrap()[0].node.id,
             node_id
         );
+    }
+
+    #[test]
+    fn player_commands_and_all_modes_reject_hidden_or_stale_media_before_launch() {
+        let temp = tempfile::tempdir().unwrap();
+        let root_path = temp.path().join("synthetic-library");
+        std::fs::create_dir(&root_path).unwrap();
+        let database = Database::new(temp.path().join("launch.sqlite"));
+        database.migrate().unwrap();
+        let root = database.add_root(&root_path, None).unwrap();
+        let c = database.connect().unwrap();
+        c.execute("INSERT INTO nodes(id,library_root_id,parent_node_id,absolute_path,folder_name,display_name,node_type) VALUES(1,?1,NULL,?2,'Root','Root','CONTAINER'),(2,?1,1,?3,'Film','Film','WORK')", params![root.id,root.path,root_path.join("Film").to_string_lossy()]).unwrap();
+        c.execute("INSERT INTO media_files(id,node_id,absolute_path,file_name,extension,file_size,modified_at) VALUES(1,2,?1,'synthetic.mkv','mkv',7,'2026-01-01T00:00:00Z')", [root_path.join("Film/synthetic.mkv").to_string_lossy()]).unwrap();
+        let media = database.get_media_file(1).unwrap();
+        for hidden in [1, 2] {
+            c.execute("UPDATE nodes SET node_type='IGNORED' WHERE id=?1", [hidden])
+                .unwrap();
+            let error = launch_media_and_record_watch(
+                &database,
+                &media,
+                Path::new("synthetic-player.exe"),
+                |_, _| panic!("hidden media reached launcher"),
+            )
+            .unwrap_err();
+            assert!(error.starts_with("NODE_NOT_VISIBLE"));
+            for executable in [
+                None,
+                Some(Path::new("synthetic-player.exe")),
+                Some(Path::new("mpv.exe")),
+            ] {
+                assert!(crate::mpv_ipc::Monitor::default()
+                    .launch(&database, executable, &media, |_| panic!(
+                        "hidden media emitted playback event"
+                    ))
+                    .unwrap_err()
+                    .starts_with("NODE_NOT_VISIBLE"));
+            }
+            c.execute("UPDATE nodes SET node_type=CASE id WHEN 1 THEN 'CONTAINER' ELSE 'WORK' END WHERE id=?1", [hidden]).unwrap();
+        }
+        c.execute("UPDATE media_files SET file_size=8 WHERE id=1", [])
+            .unwrap();
+        assert_eq!(
+            launch_media_and_record_watch(
+                &database,
+                &media,
+                Path::new("synthetic-player.exe"),
+                |_, _| panic!("stale media reached launcher")
+            )
+            .unwrap_err(),
+            "PLAYER_LAUNCH_FAILED"
+        );
+        c.execute("DELETE FROM media_files WHERE id=1", []).unwrap();
+        assert_eq!(
+            crate::mpv_ipc::validate_launch_media(&database, &media).unwrap_err(),
+            "PLAYER_LAUNCH_FAILED"
+        );
+        assert!(database.list_recently_watched().unwrap().is_empty());
     }
 }
 
@@ -3028,6 +3185,377 @@ pub async fn get_private_note(
     tauri::async_runtime::spawn_blocking(move || crate::notes::get(&db, target))
         .await
         .map_err(|e| e.to_string())?
+}
+
+#[allow(clippy::too_many_arguments)]
+#[tauri::command]
+pub async fn list_work_notes(
+    notes_only: bool,
+    root_id: Option<i64>,
+    media_kind: Option<String>,
+    query: String,
+    offset: i64,
+    limit: i64,
+    sort: Option<String>,
+    state: State<'_, AppState>,
+) -> AppResult<crate::notes::WorkNotesPage> {
+    let db = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::notes::list_sorted(
+            &db, notes_only, root_id, media_kind, query, offset, limit, sort,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+#[tauri::command]
+pub async fn export_work_note_entries(
+    state: State<'_, AppState>,
+) -> AppResult<Vec<crate::notes::WorkNoteEntry>> {
+    let db = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || crate::notes::export_entries(&db))
+        .await
+        .map_err(|_| "NOTE_LIMIT")?
+}
+#[tauri::command]
+pub async fn save_note_markdown(
+    app: AppHandle,
+    destination: String,
+    markdown: String,
+) -> AppResult<()> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let _lifecycle = lock_scan_lifecycle(&state);
+        if state.update_exit_in_progress.load(Ordering::SeqCst) {
+            return Err("BACKUP_BUSY".into());
+        }
+        let data = app.path().app_data_dir().map_err(|_| "BACKUP_IO")?;
+        crate::notes_export::save(&state.database, &data, Path::new(&destination), &markdown)
+    })
+    .await
+    .map_err(|_| "BACKUP_IO")?
+}
+#[tauri::command]
+pub async fn list_screenshot_folders(
+    state: State<'_, AppState>,
+) -> AppResult<Vec<crate::screenshot_gallery::ScreenshotFolder>> {
+    let db = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || crate::screenshot_gallery::folders(&db))
+        .await
+        .map_err(|e| e.to_string())?
+}
+#[tauri::command]
+pub async fn auto_match_screenshots(
+    folder_id: Option<i64>,
+    state: State<'_, AppState>,
+) -> AppResult<crate::screenshot_gallery::AutoMatchScreenshotsResult> {
+    let db = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::screenshot_gallery::auto_match(&db, folder_id)
+    })
+    .await
+    .map_err(|_| "SCREENSHOT_READ_FAILED")?
+}
+#[tauri::command]
+pub async fn list_workspace_folders(
+    state: State<'_, AppState>,
+) -> AppResult<Vec<crate::workspace_files::WorkspaceFolder>> {
+    let db = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || crate::workspace_files::folders(&db))
+        .await
+        .map_err(|_| "WORKSPACE_READ_FAILED")?
+}
+#[tauri::command]
+pub async fn import_workspace_folder(
+    path: String,
+    app: AppHandle,
+) -> AppResult<crate::workspace_files::WorkspaceFolder> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let _lifecycle = lock_scan_lifecycle(&state);
+        if state.update_exit_in_progress.load(Ordering::SeqCst) {
+            return Err("BACKUP_BUSY".into());
+        }
+        crate::workspace_files::import(&state.database, path)
+    })
+    .await
+    .map_err(|_| "WORKSPACE_READ_FAILED")?
+}
+#[tauri::command]
+pub async fn update_workspace_folder(
+    folder_id: i64,
+    alias: String,
+    note: String,
+    target: Option<crate::collection::Target>,
+    state: State<'_, AppState>,
+) -> AppResult<crate::workspace_files::WorkspaceFolder> {
+    let db = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::workspace_files::update(&db, folder_id, alias, note, target)
+    })
+    .await
+    .map_err(|_| "WORKSPACE_READ_FAILED")?
+}
+#[tauri::command]
+pub async fn remove_workspace_folder(folder_id: i64, state: State<'_, AppState>) -> AppResult<()> {
+    let db = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || crate::workspace_files::remove(&db, folder_id))
+        .await
+        .map_err(|_| "WORKSPACE_READ_FAILED")?
+}
+#[tauri::command]
+pub async fn list_workspace_entries(
+    folder_id: i64,
+    relative_dir: String,
+    sort_by: String,
+    descending: bool,
+    state: State<'_, AppState>,
+) -> AppResult<crate::workspace_files::WorkspaceListing> {
+    let db = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::workspace_files::list(&db, folder_id, relative_dir, sort_by, descending)
+    })
+    .await
+    .map_err(|_| "WORKSPACE_READ_FAILED")?
+}
+#[tauri::command]
+pub async fn read_workspace_thumbnail(
+    folder_id: i64,
+    relative_path: String,
+    revision: String,
+    state: State<'_, AppState>,
+) -> AppResult<tauri::ipc::Response> {
+    let db = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::workspace_files::thumbnail(&db, folder_id, relative_path, revision)
+            .map(tauri::ipc::Response::new)
+    })
+    .await
+    .map_err(|_| "WORKSPACE_READ_FAILED")?
+}
+#[tauri::command]
+pub async fn open_workspace_file(
+    folder_id: i64,
+    relative_path: String,
+    state: State<'_, AppState>,
+) -> AppResult<()> {
+    let db = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::workspace_files::open(&db, folder_id, relative_path)
+    })
+    .await
+    .map_err(|_| "WORKSPACE_READ_FAILED")?
+}
+#[tauri::command]
+pub async fn reveal_workspace_file(
+    folder_id: i64,
+    relative_path: String,
+    state: State<'_, AppState>,
+) -> AppResult<()> {
+    let db = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::workspace_files::reveal(&db, folder_id, relative_path)
+    })
+    .await
+    .map_err(|_| "WORKSPACE_READ_FAILED")?
+}
+#[tauri::command]
+pub async fn workspace_file_path(
+    folder_id: i64,
+    relative_path: String,
+    state: State<'_, AppState>,
+) -> AppResult<String> {
+    let db = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::workspace_files::copy_path(&db, folder_id, relative_path)
+    })
+    .await
+    .map_err(|_| "WORKSPACE_READ_FAILED")?
+}
+#[tauri::command]
+pub async fn drag_workspace_file(
+    folder_id: i64,
+    relative_path: String,
+    revision: String,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> AppResult<bool> {
+    let db = state.database.clone();
+    let source = tauri::async_runtime::spawn_blocking(move || {
+        crate::workspace_files::drag_source(&db, folder_id, &relative_path, &revision)
+    })
+    .await
+    .map_err(|_| "WORKSPACE_READ_FAILED")??;
+    crate::workspace_drag::start(app, vec![source]).await
+}
+#[tauri::command]
+pub async fn drag_screenshots(
+    selection: Vec<crate::screenshot_gallery::DragSelection>,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> AppResult<bool> {
+    let db = state.database.clone();
+    let sources = tauri::async_runtime::spawn_blocking(move || {
+        crate::screenshot_gallery::drag_sources(&db, selection)
+    })
+    .await
+    .map_err(|_| "SCREENSHOT_READ_FAILED")??;
+    crate::workspace_drag::start(app, sources).await
+}
+#[tauri::command]
+pub async fn import_screenshot_folder(
+    path: String,
+    app: AppHandle,
+) -> AppResult<crate::screenshot_gallery::ScreenshotFolder> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let _lifecycle = lock_scan_lifecycle(&state);
+        if state.update_exit_in_progress.load(Ordering::SeqCst) {
+            return Err("BACKUP_BUSY".into());
+        }
+        crate::screenshot_gallery::import(&state.database, path)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+#[tauri::command]
+pub async fn refresh_screenshot_folder(
+    folder_id: i64,
+    state: State<'_, AppState>,
+) -> AppResult<crate::screenshot_gallery::ScreenshotFolder> {
+    let db = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || crate::screenshot_gallery::refresh(&db, folder_id))
+        .await
+        .map_err(|e| e.to_string())?
+}
+#[tauri::command]
+pub async fn update_screenshot_folder(
+    folder_id: i64,
+    alias: String,
+    note: String,
+    target: Option<crate::collection::Target>,
+    state: State<'_, AppState>,
+) -> AppResult<crate::screenshot_gallery::ScreenshotFolder> {
+    let db = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::screenshot_gallery::update_folder(&db, folder_id, alias, note, target)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+#[tauri::command]
+pub async fn remove_screenshot_folder(folder_id: i64, state: State<'_, AppState>) -> AppResult<()> {
+    let db = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || crate::screenshot_gallery::remove(&db, folder_id))
+        .await
+        .map_err(|e| e.to_string())?
+}
+#[allow(clippy::too_many_arguments)]
+#[tauri::command]
+pub async fn list_screenshots(
+    folder_id: Option<i64>,
+    query: String,
+    target: Option<crate::collection::Target>,
+    starred_only: bool,
+    offset: i64,
+    limit: i64,
+    tag: Option<String>,
+    sort: Option<crate::screenshot_gallery::ScreenshotSort>,
+    descending: Option<bool>,
+    state: State<'_, AppState>,
+) -> AppResult<crate::screenshot_gallery::ScreenshotPage> {
+    let db = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::screenshot_gallery::list_filtered(
+            &db,
+            folder_id,
+            query,
+            target,
+            starred_only,
+            offset,
+            limit,
+            tag,
+            sort,
+            descending,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+#[tauri::command]
+pub async fn locate_screenshot(
+    image_id: i64,
+    sort: Option<crate::screenshot_gallery::ScreenshotSort>,
+    descending: Option<bool>,
+    state: State<'_, AppState>,
+) -> AppResult<crate::screenshot_gallery::ScreenshotLocation> {
+    let db = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::screenshot_gallery::locate(&db, image_id, sort, descending)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+#[tauri::command]
+pub async fn batch_update_screenshots(
+    selection: Vec<crate::screenshot_gallery::ScreenshotSelection>,
+    action: crate::screenshot_gallery::ScreenshotBatchAction,
+    state: State<'_, AppState>,
+) -> AppResult<Vec<crate::screenshot_gallery::ScreenshotImage>> {
+    let db = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::screenshot_gallery::batch_update(&db, selection, action)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+#[allow(clippy::too_many_arguments)]
+#[tauri::command]
+pub async fn update_screenshot(
+    image_id: i64,
+    revision: String,
+    note: String,
+    tags: Vec<String>,
+    starred: bool,
+    target: Option<crate::collection::Target>,
+    state: State<'_, AppState>,
+) -> AppResult<crate::screenshot_gallery::ScreenshotImage> {
+    let db = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::screenshot_gallery::update_image(
+            &db, image_id, revision, note, tags, starred, target,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+#[tauri::command]
+pub async fn read_screenshot_image(
+    image_id: i64,
+    revision: String,
+    thumbnail: bool,
+    state: State<'_, AppState>,
+) -> AppResult<tauri::ipc::Response> {
+    let db = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::screenshot_gallery::read(&db, image_id, revision, thumbnail)
+            .map(tauri::ipc::Response::new)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+#[tauri::command]
+pub async fn reveal_screenshot(
+    image_id: i64,
+    revision: String,
+    state: State<'_, AppState>,
+) -> AppResult<()> {
+    let db = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::screenshot_gallery::reveal(&db, image_id, revision)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 #[tauri::command]
 pub async fn save_private_note(

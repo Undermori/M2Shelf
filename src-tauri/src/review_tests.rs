@@ -259,10 +259,23 @@ fn numbered_volumes_are_one_work_with_flat_nested_videos_and_original_file_ids()
     let detail = crate::works::work_detail(&db, works[0].node.id).unwrap();
     assert!(detail.media_files.is_empty());
     assert_eq!(detail.nested_media_files.len(), 3);
-    assert_eq!(detail.expanded_folder_ids.len(), 3);
+    // CD1, CD2, SPs and CDs shells are absorbed above; Scans remains in Other resources.
+    assert_eq!(detail.expanded_folder_ids.len(), 4);
+    assert_eq!(detail.cds_files.len(), 1);
+    let scans_id = detail
+        .children
+        .iter()
+        .find(|child| child.folder_name == "Scans")
+        .unwrap()
+        .id;
+    assert!(!detail.expanded_folder_ids.contains(&scans_id));
     for entry in detail.nested_media_files {
         assert_ne!(entry.file.node_id, detail.node.id);
-        assert!(entry.file.absolute_path.contains(&entry.relative_directory));
+        assert!(entry
+            .file
+            .absolute_path
+            .replace('\\', "/")
+            .contains(&entry.relative_directory));
     }
     let candidates = db.list_bangumi_match_candidates(None, false).unwrap();
     assert_eq!(candidates.len(), 1);
@@ -741,6 +754,10 @@ fn ordinary_work_detail_uses_owned_count_and_activity_times() {
         nested_media_files: Vec::new(),
         expanded_folder_ids: Vec::new(),
         recognition_warnings: Vec::new(),
+        cds_folders: Vec::new(),
+        cds_files: Vec::new(),
+        sp_folders: Vec::new(),
+        sp_files: Vec::new(),
     };
     let sources = vec![detail.node.clone()];
     crate::works::populate_owned_content(&db, &mut detail, &sources).unwrap();

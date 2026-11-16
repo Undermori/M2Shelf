@@ -14,7 +14,7 @@ export function isolateModalSiblings(modalBackdrop: HTMLElement | null): () => v
 
   const isolated = new Map<HTMLElement, SiblingState>();
   const isolate = (element: Element) => {
-    if (!(element instanceof HTMLElement) || element === modalBackdrop || isolated.has(element)) return;
+    if (!(element instanceof HTMLElement) || element === modalBackdrop || element.matches('[data-toast-layer]') || isolated.has(element)) return;
     isolated.set(element, {
       element,
       inert: element.getAttribute("inert"),

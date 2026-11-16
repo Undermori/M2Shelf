@@ -201,3 +201,60 @@ pub(crate) fn commit(
     poster_cache::accept_pdf_raster(db, cache, &pending.key, &bytes, pending.epoch)?;
     Ok(true)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn codex_pdf_pending_tokens_bind_database_cache_epoch_and_deadline() {
+        let temp = tempfile::tempdir().unwrap();
+        let db = Database::new(temp.path().join("synthetic.sqlite"));
+        db.migrate().unwrap();
+        let cache = temp.path().join("synthetic-cache");
+        for mismatch in ["database", "cache", "epoch", "deadline"] {
+            let token = uuid::Uuid::new_v4().simple().to_string();
+            PENDING.lock().unwrap().insert(
+                token.clone(),
+                Pending {
+                    epoch: if mismatch == "epoch" {
+                        epoch().wrapping_add(1)
+                    } else {
+                        epoch()
+                    },
+                    database: if mismatch == "database" {
+                        temp.path().join("other.sqlite")
+                    } else {
+                        db.path().into()
+                    },
+                    cache: if mismatch == "cache" {
+                        temp.path().join("other-cache")
+                    } else {
+                        cache.clone()
+                    },
+                    book: 1,
+                    revision: "synthetic-revision".into(),
+                    node: None,
+                    key: "synthetic-key".into(),
+                    started: Instant::now()
+                        - Duration::from_secs(if mismatch == "deadline" { 26 } else { 0 }),
+                },
+            );
+            assert_eq!(
+                commit(&db, &cache, &token, "").unwrap_err(),
+                "PDF_COVER_EXPIRED",
+                "{mismatch}"
+            );
+            assert!(!PENDING.lock().unwrap().contains_key(&token));
+            assert_eq!(
+                commit(&db, &cache, &token, "").unwrap_err(),
+                "PDF_COVER_EXPIRED"
+            );
+        }
+        assert_eq!(
+            commit(&db, &cache, "absent", &"A".repeat(2 * 1024 * 1024 + 1)).unwrap_err(),
+            "PDF_COVER_LIMIT"
+        );
+        assert!(!cache.exists());
+    }
+}

@@ -231,7 +231,7 @@ impl ReadIndex {
         let result = (|| {
             let tx = self.connection.transaction().map_err(sql_error)?;
             let version: i64 = tx.query_row("SELECT CASE WHEN COUNT(*)=MAX(version) AND MIN(version)=1 THEN MAX(version) ELSE -1 END FROM mediashelf_schema_migrations",[],|r|r.get(0)).map_err(sql_error)?;
-            if version != 24 && !(cfg!(feature = "production") && (25..=36).contains(&version)) {
+            if version != 24 && !(cfg!(feature = "production") && (25..=38).contains(&version)) {
                 return Err("UNSUPPORTED_SCHEMA_VERSION".into());
             }
             let mut budget = Budget { rows: 0, bytes: 0 };
@@ -609,7 +609,8 @@ impl ReadIndex {
                 return Err("PHYSICAL_ENTRY_LIMIT".into());
             }
             let index_version = digest(&(
-                version, root_id, &root_path, media, &mode, policy, &scan, &nodes, &sources, &resources,
+                version, root_id, &root_path, media, &mode, policy, &scan, &nodes, &sources,
+                &resources,
             ))?;
             if options
                 .expected_version

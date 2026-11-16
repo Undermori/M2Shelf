@@ -143,7 +143,7 @@ pub(crate) fn populate_known_covers(
     cache_root: &Path,
 ) -> AppResult<()> {
     use rusqlite::params;
-    let roots = database.library_paths()?;
+    let roots = database.read_only_source_paths()?;
     let mut s=c.prepare("SELECT n.id,CASE WHEN n.cover_source='MANUAL' THEN n.cover_cache_path ELSE COALESCE(t.cover_cache_path,n.cover_cache_path) END FROM nodes n LEFT JOIN metadata_bindings b ON b.node_id=n.id LEFT JOIN tmdb_movie_bindings t ON t.node_id=n.id AND t.active=1 WHERE n.node_type<>'IGNORED'").map_err(|e|e.to_string())?;
     let rows = s
         .query_map([], |r| {
@@ -257,7 +257,7 @@ fn plain_directory(path: &Path) -> AppResult<()> {
 }
 
 fn directory(database: &Database, cache_root: &Path) -> AppResult<PathBuf> {
-    cache::validate_cache_location(cache_root, database.library_paths()?)?;
+    cache::validate_cache_location(cache_root, database.read_only_source_paths()?)?;
     plain_directory(cache_root)?;
     cache::ensure_existing_custom_cache(cache_root)?;
     let directory = cache_root.join("posters");

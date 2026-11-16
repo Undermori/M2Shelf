@@ -10,6 +10,9 @@ import "./styles/workspace.css";
 import './styles/comics.css';
 import './styles/collection-layout.css';
 import './styles/ui-polish.css';
+import './styles/tabs.css';
+import './styles/metadata-binding.css';
+import './styles/motion.css';
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

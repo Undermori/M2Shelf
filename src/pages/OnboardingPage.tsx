@@ -50,7 +50,6 @@ export function OnboardingPage({ onComplete, onError }: OnboardingPageProps) {
           </button>
         </div>
         <button className="button primary onboarding-submit" disabled={!directory || busy} onClick={() => void complete()} type="button">{busy ? t("onboarding.creating") : t("onboarding.start")}<Icon name="chevron" /></button>
-        <div className="onboarding-safety"><Icon name="shield" /><span><strong>{t("onboarding.readOnlyTitle")}</strong><small>{t("onboarding.readOnlyDescription")}</small></span></div>
       </section>
     </main>
   );
